@@ -1,0 +1,226 @@
+/* Trust School Amara Design Tokens */
+/* 5-Color Palette with WCAG AA Compliance */
+
+:root {
+  /* === PRIMARY COLORS === */
+  /* Deep Blue - Brand, headers, navbar, primary buttons */
+  --color-primary-50: #f0f6fa;
+  --color-primary-100: #dae9f3;
+  --color-primary-200: #b5d3e7;
+  --color-primary-300: #90bddb;
+  --color-primary-400: #6ba7cf;
+  --color-primary-500: #255472; /* Main brand color - Deep Blue */
+  --color-primary-600: #1e445b;
+  --color-primary-700: #173344;
+  --color-primary-800: #10222d;
+  --color-primary-900: #091116;
+
+  /* === SECONDARY COLORS === */
+  /* Sky Blue - Links, secondary buttons, info badges */
+  --color-secondary-50: #f0f7fd;
+  --color-secondary-100: #dbeefa;
+  --color-secondary-200: #b7ddf5;
+  --color-secondary-300: #93ccf0;
+  --color-secondary-400: #6fbbeb;
+  --color-secondary-500: #6399c8; /* Main secondary color - Sky Blue */
+  --color-secondary-600: #4f7aa0;
+  --color-secondary-700: #3b5c78;
+  --color-secondary-800: #273d50;
+  --color-secondary-900: #131f28;
+
+  /* === ACCENT COLORS === */
+  /* Coral Pink - Highlights, chips, friendly CTAs */
+  --color-accent-50: #fff5f5;
+  --color-accent-100: #ffebea;
+  --color-accent-200: #fed7d5;
+  --color-accent-300: #fec3c0;
+  --color-accent-400: #feafab;
+  --color-accent-500: #fe837c; /* Main accent color - Coral Pink */
+  --color-accent-600: #cb6963;
+  --color-accent-700: #984f4a;
+  --color-accent-800: #653431;
+  --color-accent-900: #321a18;
+
+  /* === DANGER COLORS === */
+  /* Brick Red - Danger/destructive, errors */
+  --color-danger-50: #fdf2f2;
+  --color-danger-100: #fce5e5;
+  --color-danger-200: #f9cbcb;
+  --color-danger-300: #f6b1b1;
+  --color-danger-400: #f39797;
+  --color-danger-500: #dc584b; /* Main danger color - Brick Red */
+  --color-danger-600: #b0463c;
+  --color-danger-700: #84352d;
+  --color-danger-800: #58231e;
+  --color-danger-900: #2c120f;
+
+  /* === WARNING COLORS === */
+  /* Sun Yellow - Warning, promo ribbons, subtle CTA backgrounds */
+  --color-warning-50: #fefcf7;
+  --color-warning-100: #fdf9ef;
+  --color-warning-200: #fbf3df;
+  --color-warning-300: #f9edcf;
+  --color-warning-400: #f7e7bf;
+  --color-warning-500: #f9b65f; /* Main warning color - Sun Yellow */
+  --color-warning-600: #c7924c;
+  --color-warning-700: #956e39;
+  --color-warning-800: #634926;
+  --color-warning-900: #312513;
+
+  /* === SEMANTIC COLORS === */
+  /* Success - Keep semantic green */
+  --color-success-50: #f0f9f4;
+  --color-success-100: #dcf4e6;
+  --color-success-200: #bae8cd;
+  --color-success-300: #98dcb4;
+  --color-success-400: #76d09b;
+  --color-success-500: #22c55e;
+  --color-success-600: #16a34a;
+  --color-success-700: #15803d;
+  --color-success-800: #166534;
+  --color-success-900: #14532d;
+
+  /* === NEUTRAL COLORS === */
+  --color-gray-50: #f9fafb;
+  --color-gray-100: #f3f4f6;
+  --color-gray-200: #e5e7eb;
+  --color-gray-300: #d1d5db;
+  --color-gray-400: #9ca3af;
+  --color-gray-500: #6b7280;
+  --color-gray-600: #4b5563;
+  --color-gray-700: #374151;
+  --color-gray-800: #1f2937;
+  --color-gray-900: #111827;
+
+  /* === GRADIENTS === */
+  --gradient-primary: linear-gradient(135deg, var(--color-primary-500), var(--color-secondary-500));
+  --gradient-accent: linear-gradient(135deg, var(--color-accent-500), var(--color-warning-500));
+  --gradient-hero: linear-gradient(135deg, var(--color-primary-600), var(--color-primary-800));
+  --gradient-card: linear-gradient(145deg, var(--color-gray-50), var(--color-gray-100));
+  --gradient-warm: linear-gradient(135deg, var(--color-warning-400), var(--color-accent-400));
+  --gradient-cool: linear-gradient(135deg, var(--color-secondary-400), var(--color-primary-400));
+
+  /* === SHADOWS === */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  --shadow-primary: 0 4px 14px 0 rgba(37, 84, 114, 0.25);
+  --shadow-secondary: 0 4px 14px 0 rgba(99, 153, 200, 0.25);
+  --shadow-accent: 0 4px 14px 0 rgba(254, 131, 124, 0.25);
+  --shadow-warning: 0 4px 14px 0 rgba(249, 182, 95, 0.25);
+  --shadow-danger: 0 4px 14px 0 rgba(220, 88, 75, 0.25);
+
+  /* === FOCUS RINGS === */
+  --ring-primary: 0 0 0 2px rgba(99, 153, 200, 0.4);
+  --ring-secondary: 0 0 0 2px rgba(37, 84, 114, 0.4);
+  --ring-accent: 0 0 0 2px rgba(254, 131, 124, 0.4);
+  --ring-danger: 0 0 0 2px rgba(220, 88, 75, 0.4);
+  --ring-warning: 0 0 0 2px rgba(249, 182, 95, 0.4);
+  --ring-success: 0 0 0 2px rgba(34, 197, 94, 0.4);
+
+  /* === SPACING === */
+  --space-px: 1px;
+  --space-0: 0px;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+  --space-20: 5rem;
+  --space-24: 6rem;
+  --space-32: 8rem;
+
+  /* === BORDER RADIUS === */
+  --radius-none: 0px;
+  --radius-sm: 0.125rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+  --radius-2xl: 1rem;
+  --radius-3xl: 1.5rem;
+  --radius-full: 9999px;
+
+  /* === TRANSITIONS === */
+  --transition-fast: all 0.15s ease;
+  --transition-normal: all 0.3s ease;
+  --transition-slow: all 0.5s ease;
+
+  /* === TYPOGRAPHY === */
+  --font-family-arabic: 'Tajawal', sans-serif;
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.875rem;
+  --font-size-base: 1rem;
+  --font-size-lg: 1.125rem;
+  --font-size-xl: 1.25rem;
+  --font-size-2xl: 1.5rem;
+  --font-size-3xl: 1.875rem;
+  --font-size-4xl: 2.25rem;
+  --font-size-5xl: 3rem;
+  --font-size-6xl: 3.75rem;
+
+  /* === LEGACY COMPATIBILITY === */
+  /* Map old variables to new ones for backward compatibility */
+  --primary-color: var(--color-primary-500);
+  --secondary-color: var(--color-warning-500); /* Old gold mapped to new sun */
+  --accent-color: var(--color-danger-500);
+  --light-color: var(--color-gray-50);
+  --dark-color: var(--color-primary-800);
+  --text-color: var(--color-gray-800);
+  --light-text: var(--color-gray-50);
+  --gray-color: var(--color-gray-500);
+  --success-color: var(--color-success-500);
+  --transition: var(--transition-normal);
+}
+
+/* === DARK MODE SUPPORT === */
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* Adjust colors for dark mode while maintaining contrast ratios */
+    --color-primary-500: #4a90c2; /* Lighter primary for dark backgrounds */
+    --color-secondary-500: #7bb3e0; /* Lighter secondary for dark backgrounds */
+    --color-accent-500: #ff9b94; /* Lighter coral for dark backgrounds */
+    --color-danger-500: #ef6b5d; /* Lighter brick for dark backgrounds */
+    --color-warning-500: #fcc97b; /* Lighter sun for dark backgrounds */
+    
+    /* Background adjustments */
+    --color-gray-50: #1f2937;
+    --color-gray-100: #374151;
+    --color-gray-900: #f9fafb;
+    --color-gray-800: #f3f4f6;
+    
+    /* Text color adjustments */
+    --text-color: var(--color-gray-100);
+    --light-text: var(--color-gray-900);
+  }
+}
+
+/* === RTL SUPPORT === */
+[dir="rtl"] {
+  /* RTL-specific adjustments */
+  --text-align-start: right;
+  --text-align-end: left;
+  --margin-start: margin-right;
+  --margin-end: margin-left;
+  --padding-start: padding-right;
+  --padding-end: padding-left;
+  --border-start: border-right;
+  --border-end: border-left;
+}
+
+[dir="ltr"] {
+  /* LTR fallback */
+  --text-align-start: left;
+  --text-align-end: right;
+  --margin-start: margin-left;
+  --margin-end: margin-right;
+  --padding-start: padding-left;
+  --padding-end: padding-right;
+  --border-start: border-left;
+  --border-end: border-right;
+}

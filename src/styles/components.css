@@ -1,0 +1,357 @@
+/* Trust School Amara Component Styles */
+/* Using new 5-color palette with WCAG AA compliance */
+
+
+/* === BUTTONS === */
+.btn {
+  @apply inline-flex items-center justify-center px-6 py-3 text-base font-medium rounded-lg transition-all duration-300 cursor-pointer border-0 min-w-[120px];
+  font-family: var(--font-family-arabic);
+}
+
+/* Primary Button - Deep Blue with Sky Blue ring */
+.btn-primary {
+  @apply bg-primary text-white shadow-primary;
+  @apply hover:bg-primary-600 hover:shadow-lg hover:-translate-y-0.5;
+  @apply focus:outline-none focus:ring-2 focus:ring-secondary/40 focus:ring-offset-2;
+  @apply active:bg-primary-700 active:translate-y-0;
+}
+
+/* Secondary Button - Sky Blue */
+.btn-secondary {
+  @apply bg-secondary text-white shadow-secondary;
+  @apply hover:bg-secondary-600 hover:shadow-lg hover:-translate-y-0.5;
+  @apply focus:outline-none focus:ring-2 focus:ring-primary/40 focus:ring-offset-2;
+  @apply active:bg-secondary-700 active:translate-y-0;
+}
+
+/* Accent Button - Coral */
+.btn-accent {
+  @apply bg-accent text-white shadow-accent;
+  @apply hover:bg-accent-600 hover:shadow-lg hover:-translate-y-0.5;
+  @apply focus:outline-none focus:ring-2 focus:ring-accent/40 focus:ring-offset-2;
+  @apply active:bg-accent-700 active:translate-y-0;
+}
+
+/* Warning Button - Sun */
+.btn-warning {
+  @apply bg-warning text-primary-800 shadow-lg;
+  @apply hover:bg-warning-600 hover:shadow-xl hover:-translate-y-0.5;
+  @apply focus:outline-none focus:ring-2 focus:ring-warning/40 focus:ring-offset-2;
+  @apply active:bg-warning-700 active:translate-y-0;
+}
+
+/* Danger Button - Brick */
+.btn-danger {
+  @apply bg-danger text-white shadow-lg;
+  @apply hover:bg-danger-600 hover:shadow-xl hover:-translate-y-0.5;
+  @apply focus:outline-none focus:ring-2 focus:ring-danger/40 focus:ring-offset-2;
+  @apply active:bg-danger-700 active:translate-y-0;
+}
+
+/* Success Button */
+.btn-success {
+  @apply bg-success text-white shadow-lg;
+  @apply hover:bg-success-600 hover:shadow-xl hover:-translate-y-0.5;
+  @apply focus:outline-none focus:ring-2 focus:ring-success/40 focus:ring-offset-2;
+  @apply active:bg-success-700 active:translate-y-0;
+}
+
+/* Outline Buttons */
+.btn-outline-primary {
+  @apply border-2 border-primary text-primary bg-transparent;
+  @apply hover:bg-primary hover:text-white;
+  @apply focus:outline-none focus:ring-2 focus:ring-primary/40 focus:ring-offset-2;
+}
+
+.btn-outline-secondary {
+  @apply border-2 border-secondary text-secondary bg-transparent;
+  @apply hover:bg-secondary hover:text-white;
+  @apply focus:outline-none focus:ring-2 focus:ring-secondary/40 focus:ring-offset-2;
+}
+
+/* Button Sizes */
+.btn-sm {
+  @apply px-4 py-2 text-sm min-w-[100px];
+}
+
+.btn-lg {
+  @apply px-8 py-4 text-lg min-w-[160px];
+}
+
+.btn-xl {
+  @apply px-10 py-5 text-xl min-w-[200px];
+}
+
+/* === LINKS === */
+.link {
+  @apply text-primary transition-colors duration-300;
+  @apply hover:text-secondary focus:text-secondary;
+  @apply focus:outline-none focus:ring-2 focus:ring-secondary/40 focus:ring-offset-1 focus:rounded-sm;
+}
+
+.link-secondary {
+  @apply text-secondary transition-colors duration-300;
+  @apply hover:text-primary focus:text-primary;
+}
+
+.link-accent {
+  @apply text-accent transition-colors duration-300;
+  @apply hover:text-accent-600 focus:text-accent-600;
+}
+
+/* === CARDS === */
+.card {
+  @apply bg-white rounded-xl shadow-md border border-gray-100 overflow-hidden transition-all duration-300;
+  @apply hover:shadow-lg hover:-translate-y-1;
+}
+
+.card-primary {
+  @apply border-primary-100 shadow-md;
+  @apply hover:shadow-lg;
+}
+
+.card-secondary {
+  @apply border-secondary-100 shadow-md;
+  @apply hover:shadow-lg;
+}
+
+.card-accent {
+  @apply border-accent-100 shadow-md;
+  @apply hover:shadow-lg;
+}
+
+.card-header {
+  @apply px-6 py-4 border-b border-gray-100;
+}
+
+.card-body {
+  @apply px-6 py-4;
+}
+
+.card-footer {
+  @apply px-6 py-4 border-t border-gray-100 bg-gray-50;
+}
+
+/* === BADGES === */
+.badge {
+  @apply inline-flex items-center px-3 py-1 text-sm font-medium rounded-full;
+}
+
+.badge-primary {
+  @apply bg-primary-100 text-primary-800;
+}
+
+.badge-secondary {
+  @apply bg-secondary-100 text-secondary-800;
+}
+
+.badge-accent {
+  @apply bg-accent-100 text-accent-800;
+}
+
+.badge-warning {
+  @apply bg-warning-100 text-warning-800;
+}
+
+.badge-danger {
+  @apply bg-danger-100 text-danger-800;
+}
+
+.badge-success {
+  @apply bg-success-100 text-success-800;
+}
+
+/* === ALERTS === */
+.alert {
+  @apply p-4 rounded-lg border-l-4 mb-4;
+}
+
+.alert-primary {
+  @apply bg-primary-50 border-primary text-primary-800;
+}
+
+.alert-secondary {
+  @apply bg-secondary-50 border-secondary text-secondary-800;
+}
+
+.alert-warning {
+  @apply bg-warning-50 border-warning text-warning-800;
+}
+
+.alert-danger {
+  @apply bg-danger-50 border-danger text-danger-800;
+}
+
+.alert-success {
+  @apply bg-success-50 border-success text-success-800;
+}
+
+/* === INPUTS === */
+.input {
+  @apply w-full px-4 py-3 text-base border border-gray-300 rounded-lg;
+  @apply focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary;
+  @apply transition-all duration-300;
+  font-family: var(--font-family-arabic);
+}
+
+.input-error {
+  @apply border-danger focus:ring-danger/40 focus:border-danger;
+}
+
+.input-success {
+  @apply border-success focus:ring-success/40 focus:border-success;
+}
+
+/* === NAVBAR === */
+.navbar {
+  @apply fixed top-0 left-0 right-0 z-50 bg-primary shadow-lg transition-all duration-300;
+}
+
+.navbar-brand {
+  @apply flex items-center text-white font-bold text-xl;
+  @apply hover:opacity-90 transition-opacity duration-300;
+  font-family: var(--font-family-arabic);
+}
+
+.navbar-nav {
+  @apply flex items-center space-x-6;
+}
+
+.navbar-link {
+  @apply text-white/90 font-medium px-3 py-2 rounded-md transition-all duration-300;
+  @apply hover:text-white hover:bg-white/10;
+  @apply focus:outline-none focus:ring-2 focus:ring-white/20;
+  font-family: var(--font-family-arabic);
+}
+
+.navbar-link.active {
+  @apply text-white bg-white/20;
+}
+
+/* === HERO SECTION === */
+.hero {
+  @apply relative min-h-screen flex items-center justify-center text-center text-white;
+  background: var(--gradient-hero);
+}
+
+.hero-overlay {
+  @apply absolute inset-0 bg-black/30;
+}
+
+.hero-content {
+  @apply relative z-10 max-w-4xl mx-auto px-6;
+}
+
+.hero-title {
+  @apply text-4xl md:text-5xl lg:text-6xl font-bold mb-6;
+  font-family: var(--font-family-arabic);
+}
+
+.hero-subtitle {
+  @apply text-lg md:text-xl lg:text-2xl mb-8 text-white/90;
+  font-family: var(--font-family-arabic);
+}
+
+.hero-buttons {
+  @apply flex flex-col sm:flex-row gap-4 justify-center items-center;
+}
+
+/* === SECTIONS === */
+.section {
+  @apply py-16 lg:py-24;
+}
+
+.section-title {
+  @apply text-3xl md:text-4xl font-bold text-center mb-4 text-primary;
+  font-family: var(--font-family-arabic);
+}
+
+.section-subtitle {
+  @apply text-lg text-center mb-12 text-gray-600 max-w-3xl mx-auto;
+  font-family: var(--font-family-arabic);
+}
+
+/* === GRADIENTS === */
+.bg-gradient-primary {
+  background: var(--gradient-primary);
+}
+
+.bg-gradient-accent {
+  background: var(--gradient-accent);
+}
+
+.bg-gradient-hero {
+  background: var(--gradient-hero);
+}
+
+.bg-gradient-card {
+  background: var(--gradient-card);
+}
+
+/* === RTL SUPPORT === */
+[dir="rtl"] .navbar-nav {
+  @apply space-x-reverse;
+}
+
+[dir="rtl"] .hero-buttons {
+  @apply flex-row-reverse;
+}
+
+[dir="rtl"] .btn {
+  @apply text-right;
+}
+
+/* === MOBILE RESPONSIVENESS === */
+@media (max-width: 768px) {
+  .hero-title {
+    @apply text-3xl;
+  }
+  
+  .hero-subtitle {
+    @apply text-base;
+  }
+  
+  .section-title {
+    @apply text-2xl;
+  }
+  
+  .btn {
+    @apply w-full sm:w-auto;
+  }
+  
+  .navbar-nav {
+    @apply flex-col space-x-0 space-y-2;
+  }
+}
+
+/* === ACCESSIBILITY IMPROVEMENTS === */
+.sr-only {
+  @apply absolute w-px h-px p-0 -m-px overflow-hidden whitespace-nowrap border-0;
+  clip: rect(0, 0, 0, 0);
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  .btn-primary {
+    @apply border-2 border-white;
+  }
+  
+  .btn-secondary {
+    @apply border-2 border-white;
+  }
+  
+  .card {
+    @apply border-2 border-gray-300;
+  }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+  .btn, .card, .link, .input, .navbar-link {
+    @apply transition-none;
+  }
+  
+  .hero {
+    @apply transform-none;
+  }
+}

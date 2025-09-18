@@ -1,0 +1,232 @@
+@import './styles/style.css';
+
+.App {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Additional styles specific to React components */
+.success-message {
+  background-color: #4CAF50;
+  color: white;
+  padding: 15px;
+  margin-top: 20px;
+  border-radius: 5px;
+  text-align: center;
+}
+
+/* Contact form specific styles */
+.contact-container {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 30px;
+  margin: 50px 0;
+}
+
+.contact-info, .contact-form {
+  background: white;
+  padding: 30px;
+  border-radius: 10px;
+  box-shadow: 0 5px 20px rgba(0,0,0,0.05);
+}
+
+.info-item {
+  display: flex;
+  margin-bottom: 20px;
+}
+
+.info-item i {
+  background: var(--light-color);
+  color: var(--primary-color);
+  width: 45px;
+  height: 45px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 15px;
+}
+
+.form-group {
+  margin-bottom: 20px;
+}
+
+.form-control {
+  width: 100%;
+  padding: 12px 15px;
+  border: 1px solid #ddd;
+  border-radius: 5px;
+  font-family: 'Tajawal', sans-serif;
+}
+
+.submit-btn {
+  background: var(--secondary-color);
+  color: white;
+  border: none;
+  padding: 12px 30px;
+  border-radius: 30px;
+  cursor: pointer;
+}
+
+.map-container {
+  height: 300px;
+  border-radius: 10px;
+  overflow: hidden;
+  margin-top: 50px;
+}
+
+/* Courses and languages specific styles */
+.courses-grid, .languages-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 30px;
+  margin-top: 50px;
+}
+
+.course-card, .language-card {
+  background: white;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 5px 20px rgba(0,0,0,0.05);
+  transition: all 0.3s ease;
+}
+
+.course-card:hover, .language-card:hover {
+  transform: translateY(-10px);
+  box-shadow: 0 15px 30px rgba(0,0,0,0.1);
+}
+
+.course-header, .language-header {
+  padding: 25px;
+  text-align: center;
+  color: white;
+}
+
+.course-icon, .language-icon {
+  font-size: 2.5rem;
+  margin-bottom: 15px;
+}
+
+.register-btn {
+  display: block;
+  background: var(--secondary-color);
+  color: white;
+  padding: 12px;
+  margin: 20px;
+  text-align: center;
+  border-radius: 5px;
+}
+
+.register-btn:hover {
+  background: var(--primary-color);
+}
+
+.course-features {
+  padding: 15px;
+}
+
+.feature-item {
+  margin: 10px 0;
+  display: flex;
+  align-items: center;
+}
+
+.feature-item i {
+  color: var(--secondary-color);
+  margin-left: 10px;
+}
+
+/* FAQ specific styles */
+.faq-item {
+  background: white;
+  border-radius: 8px;
+  margin-bottom: 15px;
+  overflow: hidden;
+}
+
+.faq-question {
+  width: 100%;
+  text-align: right;
+  padding: 15px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.faq-answer {
+  padding: 0 15px;
+  max-height: 0;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+.faq-answer.open {
+  max-height: 200px;
+  padding: 15px;
+}
+
+.faq-icon {
+  transition: all 0.3s ease;
+}
+
+.faq-icon.open {
+  transform: rotate(180deg);
+}
+
+/* Page header specific styles */
+.page-header {
+  background: linear-gradient(rgba(44, 62, 80, 0.9), rgba(44, 62, 80, 0.9));
+  color: white;
+  padding: 120px 0 60px;
+  text-align: center;
+}
+
+.breadcrumb {
+  margin-top: 15px;
+}
+
+.breadcrumb a {
+  color: var(--secondary-color);
+}
+
+.breadcrumb span {
+  color: #ccc;
+}
+
+/* Responsive styles */
+@media (max-width: 768px) {
+  .contact-container {
+    grid-template-columns: 1fr;
+  }
+  
+  .courses-grid, .languages-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .hero-content h1 {
+    font-size: 2.2rem;
+  }
+  
+  .section-title {
+    font-size: 1.8rem;
+  }
+}
+
+@media (max-width: 576px) {
+  .hero-content h1 {
+    font-size: 2rem;
+  }
+  
+  .section-title {
+    font-size: 1.6rem;
+  }
+  
+  .cta-button, .service-button {
+    padding: 10px 25px;
+    font-size: 1rem;
+  }
+}

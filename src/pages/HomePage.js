@@ -6,11 +6,6 @@ import { useNavigate } from 'react-router-dom';
 import { sendRegistrationEmail, sendAdminNotification, initiateAlgerianPayment } from '../services/emailService';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
-// Import video files
-import schoolIntroVideo from '../assets/videos/school-intro.mp4';
-import studentFeedback1Video from '../assets/videos/student-feedback.mp4';
-import studentFeedback2Video from '../assets/videos/student-feedback (2).mp4';
-import honoringBacVideo from '../assets/videos/bac-honoring.mp4';
 
 const HomePage = () => {
     const [showRegistrationForm, setShowRegistrationForm] = useState(false);
@@ -102,12 +97,12 @@ const HomePage = () => {
     ];
 
     const videoTestimonials = [
-        {
-            title: 'تجربة تلميذة',
-            description: 'تجربة ناجحة في دروس الدعم',
-            videoSrc: studentFeedback2Video,
-            studentName: 'طالبة',
-        }
+    {
+        title: 'تجربة تلميذة',
+        description: 'تجربة ناجحة في دروس الدعم',
+        videoSrc: '/videos/student-feedback2.mp4',
+        studentName: 'طالبة',
+    }
     ];
 
     const handleRegistration = (courseType) => {
@@ -189,11 +184,11 @@ const HomePage = () => {
 
                     <div className="relative rounded-xl overflow-hidden shadow-2xl mb-12 max-w-4xl mx-auto">
                         <video
-                            className="w-full h-auto rounded-2xl shadow-lg border-4 border-white"
-                            controls
+                        className="w-full h-auto rounded-2xl shadow-lg border-4 border-white"
+                        controls
                         >
-                            <source src={schoolIntroVideo} type="video/mp4" />
-                            متصفحك لا يدعم تشغيل الفيديو.
+                        <source src="/videos/school-intro.mp4" type="video/mp4" />
+                        متصفحك لا يدعم تشغيل الفيديو.
                         </video>
                         <p className="text-gray-200 mt-2 text-center">انقر لمشاهدة الفيديو التعريفي</p>
                     </div>

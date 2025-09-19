@@ -2,10 +2,10 @@ import React, { useState } from 'react';
 import useScrollToTop from '../hooks/useScrollToTop';
 
 // Import video files
-import schoolIntroVideo from '../assets/videos/school-intro.mp4';
+import schoolIntroVideo from '../../public/videos/school-intro.mp4';
 import studentFeedback1Video from '../assets/videos/student-feedback.mp4';
 import studentFeedback2Video from '../assets/videos/student-feedback (2).mp4';
-import honoringBacVideo from '../assets/videos/bac-honoring.mp4';
+import honoringBacVideo from '../../public/videos/bac-honoring.mp4';
 
 const VideoGallery = () => {
     const [selectedCategory, setSelectedCategory] = useState('all');

@@ -100,7 +100,7 @@ const HomePage = () => {
     {
         title: 'تجربة تلميذة',
         description: 'تجربة ناجحة في دروس الدعم',
-        videoSrc: '/videos/student-feedback2.mp4',
+        videoSrc: 'https://jzplbnzmsfbsmeaobamg.supabase.co/storage/v1/object/public/Videos/student-feedback2.mp4',
         studentName: 'طالبة',
     }
     ];
@@ -187,7 +187,7 @@ const HomePage = () => {
                         className="w-full h-auto rounded-2xl shadow-lg border-4 border-white"
                         controls
                         >
-                        <source src="/videos/school-intro.mp4" type="video/mp4" />
+                        <source src="https://jzplbnzmsfbsmeaobamg.supabase.co/storage/v1/object/public/Videos/school-intro.MP4" type="video/mp4" />
                         متصفحك لا يدعم تشغيل الفيديو.
                         </video>
                         <p className="text-gray-200 mt-2 text-center">انقر لمشاهدة الفيديو التعريفي</p>

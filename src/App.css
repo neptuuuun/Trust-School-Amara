@@ -197,6 +197,84 @@
   color: #ccc;
 }
 
+/* Admin Dashboard Responsive Styles */
+.admin-dashboard {
+  position: relative;
+}
+
+@media (max-width: 1024px) {
+  .admin-sidebar {
+    position: fixed !important;
+    top: 0;
+    right: 0;
+    min-height: 100vh;
+    min-height: 100dvh;
+    z-index: 50;
+  }
+  
+  .admin-sidebar.translate-x-full {
+    transform: translateX(100%);
+  }
+  
+  .admin-sidebar.translate-x-0 {
+    transform: translateX(0);
+  }
+  
+  .admin-main-content {
+    margin-right: 0 !important;
+    width: 100% !important;
+  }
+}
+
+/* Ensure proper mobile viewport handling */
+@media (max-width: 768px) {
+  .admin-main-content {
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+  
+  .admin-page-content {
+    padding: 1rem;
+  }
+  
+  /* Mobile sidebar scrolling */
+  .admin-sidebar {
+    min-height: 100vh !important;
+    min-height: 100dvh !important;
+    max-height: 100vh !important;
+    max-height: 100dvh !important;
+  }
+  
+  .admin-sidebar .flex-col {
+    min-height: 100vh !important;
+    min-height: 100dvh !important;
+  }
+  
+  .admin-sidebar .overflow-y-auto {
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    scrollbar-width: thin !important;
+  }
+  
+  /* Custom scrollbar for mobile */
+  .admin-sidebar .overflow-y-auto::-webkit-scrollbar {
+    width: 4px;
+  }
+  
+  .admin-sidebar .overflow-y-auto::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.1);
+  }
+  
+  .admin-sidebar .overflow-y-auto::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.3);
+    border-radius: 2px;
+  }
+  
+  .admin-sidebar .overflow-y-auto::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.5);
+  }
+}
+
 /* Responsive styles */
 @media (max-width: 768px) {
   .contact-container {

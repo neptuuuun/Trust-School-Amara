@@ -1,0 +1,38 @@
+{
+  "admin": {
+    "title": "Admin Dashboard",
+    "backToSite": "Back to site",
+    "logout": "Logout",
+    "nav": {
+      "overview": "Overview",
+      "verification": "Verification",
+      "trainingRequests": "Training Requests",
+      "languageRequests": "Language Requests",
+      "supportLessons": "Support Lessons",
+      "branches": "Branches",
+      "payments": "Payments"
+    },
+    "topbar": {
+      "branch": "Branch:",
+      "chooseBranch": "Choose branch"
+    }
+  },
+  "pages": {
+    "verificationPanel": {
+      "title": "Students Verification",
+      "subtitle": "View support students requests with photos",
+      "yearlyFee": "Yearly Fee",
+      "approved": "Approve",
+      "rejected": "Reject",
+      "verified": "Verified",
+      "noApplicants": "No verification requests currently."
+    },
+    "supportLessons": {
+      "title": "Support Lessons Students",
+      "subtitle": "Confirmed students enrolled in support lessons",
+      "monthlyPay": "Monthly Payment",
+      "recordThisMonth": "Record this month payment",
+      "empty": "No confirmed support students currently"
+    }
+  }
+}

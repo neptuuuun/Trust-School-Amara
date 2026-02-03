@@ -3,35 +3,48 @@ import { useForm } from 'react-hook-form';
 import { User, Phone, MessageSquare, X, Mail } from 'lucide-react';
 import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
+import { useBranch } from '../contexts/BranchContext';
 
 const TrainingRequestForm = ({ onClose, onSuccess }) => {
     const [loading, setLoading] = useState(false);
     const [submitted, setSubmitted] = useState(false);
+    const [submitStatus, setSubmitStatus] = useState('');
+    const { selectedBranchId } = useBranch();
 
     const { register, handleSubmit, formState: { errors } } = useForm();
 
     const onSubmit = async (formData) => {
+        if (loading || submitted) return;
+
         setLoading(true);
+        setSubmitStatus('');
         try {
+            if (!selectedBranchId) {
+                throw new Error('يرجى اختيار الفرع أولاً.');
+            }
             const requestData = {
                 name: formData.name,
                 phone: formData.phone,
                 email: formData.email,
                 course: formData.course,
                 message: formData.message || '',
+                branchId: selectedBranchId,
                 createdAt: serverTimestamp(),
-                status: 'pending'
+                status: 'جديد'
             };
 
-            await addDoc(collection(db, 'trainingRequests'), requestData);
+            // New path: branches/{branchId}/registrations with type='training_request'
+            requestData.type = 'training_request';
+            await addDoc(collection(db, 'branches', selectedBranchId, 'registrations'), requestData);
             setSubmitted(true);
+            setSubmitStatus('success');
             
             if (onSuccess) {
                 onSuccess(requestData);
             }
         } catch (error) {
             console.error('Error submitting training request:', error);
-            alert('حدث خطأ أثناء إرسال الطلب. يرجى المحاولة مرة أخرى.');
+            setSubmitStatus('error');
         } finally {
             setLoading(false);
         }
@@ -83,6 +96,14 @@ const TrainingRequestForm = ({ onClose, onSuccess }) => {
 
                     {/* Form */}
                     <form onSubmit={handleSubmit(onSubmit)} className="space-y-6" dir="rtl">
+                        {submitStatus === 'success' && (
+                            <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg">✅ تم إرسال طلب التدريب بنجاح</div>
+                        )}
+
+                        {submitStatus === 'error' && (
+                            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">❌ حدث خطأ أثناء إرسال الطلب، يرجى المحاولة مرة أخرى</div>
+                        )}
+
                         {/* Name */}
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -196,9 +217,9 @@ const TrainingRequestForm = ({ onClose, onSuccess }) => {
                             <button
                                 type="submit"
                                 className="flex-1 px-6 py-3 bg-primary text-white rounded-lg hover:bg-primary-600 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
-                                disabled={loading}
+                                disabled={loading || submitted}
                             >
-                                {loading ? 'جاري الإرسال...' : 'إرسال الطلب'}
+                                {submitted ? 'تم الإرسال' : loading ? 'جاري الإرسال...' : 'إرسال'}
                             </button>
                         </div>
                     </form>

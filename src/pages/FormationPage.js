@@ -8,51 +8,6 @@ const FormationPage = () => {
         { label: 'الدورات التكوينية', link: '/formation' }
     ];
 
-    const courses = [
-        {
-            title: 'تطوير الويب',
-            description: 'تعلم تطوير المواقع الإلكترونية من الصفر إلى الاحتراف',
-            fields: [
-                { label: 'الاسم الكامل', name: 'fullName', type: 'text', placeholder: 'الاسم الكامل' },
-                { label: 'رقم الهاتف', name: 'phone', type: 'tel', placeholder: 'رقم الهاتف' },
-                { label: 'الدورة المطلوبة', name: 'course', type: 'select', placeholder: 'اختر الدورة', options: [
-                    { value: 'web', label: 'تطوير الويب' },
-                    { value: 'marketing', label: 'التسويق الرقمي' },
-                    { value: 'design', label: 'التصميم الجرافيكي' }
-                ]}
-            ],
-            buttonText: 'سجل الآن'
-        },
-        {
-            title: 'التسويق الرقمي',
-            description: 'احترف التسويق الرقمي ووسائل التواصل الاجتماعي',
-            fields: [
-                { label: 'الاسم الكامل', name: 'fullName', type: 'text', placeholder: 'الاسم الكامل' },
-                { label: 'رقم الهاتف', name: 'phone', type: 'tel', placeholder: 'رقم الهاتف' },
-                { label: 'الدورة المطلوبة', name: 'course', type: 'select', placeholder: 'اختر الدورة', options: [
-                    { value: 'web', label: 'تطوير الويب' },
-                    { value: 'marketing', label: 'التسويق الرقمي' },
-                    { value: 'design', label: 'التصميم الجرافيكي' }
-                ]}
-            ],
-            buttonText: 'سجل الآن'
-        },
-        {
-            title: 'التصميم الجرافيكي',
-            description: 'تعلم أساسيات التصميم الجرافيكي وأدواته',
-            fields: [
-                { label: 'الاسم الكامل', name: 'fullName', type: 'text', placeholder: 'الاسم الكامل' },
-                { label: 'رقم الهاتف', name: 'phone', type: 'tel', placeholder: 'رقم الهاتف' },
-                { label: 'الدورة المطلوبة', name: 'course', type: 'select', placeholder: 'اختر الدورة', options: [
-                    { value: 'web', label: 'تطوير الويب' },
-                    { value: 'marketing', label: 'التسويق الرقمي' },
-                    { value: 'design', label: 'التصميم الجرافيكي' }
-                ]}
-            ],
-            buttonText: 'سجل الآن'
-        }
-    ];
-
     return (
         <div className="formation-page">
             <PageHeader title="الدورات التكوينية" breadcrumb={breadcrumb} />

@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { sendRegistrationEmail, sendAdminNotification, initiateAlgerianPayment } from '../services/emailService';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
+import { useBranch } from '../contexts/BranchContext';
 
 const HomePage = () => {
     const [showRegistrationForm, setShowRegistrationForm] = useState(false);
@@ -13,46 +14,82 @@ const HomePage = () => {
     const [activeTrainings, setActiveTrainings] = useState([]);
     const [supportLessons, setSupportLessons] = useState([]);
     const [languages, setLanguages] = useState([]);
+    const { selectedBranchId } = useBranch();
     const navigate = useNavigate();
 
     useEffect(() => {
-        // Listen to active trainings
-        const trainingsQuery = query(
-            collection(db, 'trainings'),
-            where('active', '==', true)
-        );
-        const trainingsUnsubscribe = onSnapshot(trainingsQuery, (snapshot) => {
-            const trainingsData = snapshot.docs.map(doc => ({
-                id: doc.id,
-                ...doc.data()
-            }));
-            setActiveTrainings(trainingsData);
-        });
+        // FIXED: Guard for required dependency
+        if (!selectedBranchId) {
+            setActiveTrainings([]);
+            setSupportLessons([]);
+            setLanguages([]);
+            return;
+        }
 
-        // Listen to support lessons
-        const supportLessonsUnsubscribe = onSnapshot(collection(db, 'supportCourses'), (snapshot) => {
-            const lessonsData = snapshot.docs.map(doc => ({
-                id: doc.id,
-                ...doc.data()
-            }));
-            setSupportLessons(lessonsData);
-        });
+        // FIXED: Track all unsubscribes to ensure proper cleanup
+        const unsubscribes = [];
 
-        // Listen to languages
-        const languagesUnsubscribe = onSnapshot(collection(db, 'languages'), (snapshot) => {
-            const languagesData = snapshot.docs.map(doc => ({
-                id: doc.id,
-                ...doc.data()
-            }));
-            setLanguages(languagesData);
-        });
+        // FIXED: Debounce branch switches to prevent rapid listener recreation
+        const timeoutId = setTimeout(() => {
+            try {
+                // Per-branch reads:
+                // trainings -> branches/{branchId}/trainings (active == true)
+                const trainingsQuery = query(
+                    collection(db, 'branches', selectedBranchId, 'trainings'),
+                    where('active', '==', true)
+                );
+                const trainingsUnsubscribe = onSnapshot(
+                    trainingsQuery,
+                    (snapshot) => {
+                        const trainingsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        setActiveTrainings(trainingsData);
+                    },
+                    (error) => {
+                        console.error('onSnapshot trainings error:', error);
+                    }
+                );
+                unsubscribes.push(trainingsUnsubscribe);
 
+                // support lessons -> branches/{branchId}/supportLessons
+                const supportUnsubscribe = onSnapshot(
+                    collection(db, 'branches', selectedBranchId, 'supportLessons'),
+                    (snapshot) => {
+                        const lessonsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        setSupportLessons(lessonsData);
+                    },
+                    (error) => {
+                        console.error('onSnapshot supportLessons error:', error);
+                    }
+                );
+                unsubscribes.push(supportUnsubscribe);
+
+                // languages -> branches/{branchId}/languages
+                const languagesUnsubscribe = onSnapshot(
+                    collection(db, 'branches', selectedBranchId, 'languages'),
+                    (snapshot) => {
+                        const languagesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        setLanguages(languagesData);
+                    },
+                    (error) => {
+                        console.error('onSnapshot languages error:', error);
+                    }
+                );
+                unsubscribes.push(languagesUnsubscribe);
+            } catch (error) {
+                console.error('Error setting up listeners:', error);
+            }
+        }, 100); // 100ms debounce
+
+        // FIXED: Proper cleanup that unsubscribes all listeners and clears timeout
         return () => {
-            trainingsUnsubscribe();
-            supportLessonsUnsubscribe();
-            languagesUnsubscribe();
+            clearTimeout(timeoutId);
+            unsubscribes.forEach(unsub => {
+                if (unsub && typeof unsub === 'function') {
+                    unsub();
+                }
+            });
         };
-    }, []);
+    }, [selectedBranchId]);
 
     const services = [
         {

@@ -204,7 +204,7 @@
 
 /* === NAVBAR === */
 .navbar {
-  @apply fixed top-0 left-0 right-0 z-50 bg-primary shadow-lg transition-all duration-300;
+  @apply sticky top-0 left-0 right-0 z-50 bg-primary shadow-lg transition-all duration-300;
 }
 
 .navbar-brand {

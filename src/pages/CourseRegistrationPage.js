@@ -1,12 +1,18 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { User, Mail, Phone, BookOpen, ArrowRight } from 'lucide-react';
+import { addDoc, collection, serverTimestamp, doc, getDoc } from 'firebase/firestore';
+import { db } from '../firebase';
+import { useBranch } from '../contexts/BranchContext';
+import { useAuth } from '../contexts/AuthContext';
 
 const CourseRegistrationPage = () => {
     const location = useLocation();
     const navigate = useNavigate();
     const { courseType, courseName, subject, level } = location.state || {};
+    const { selectedBranchId } = useBranch();
+    const { user, verified } = useAuth();
     
     const { register, handleSubmit, formState: { errors } } = useForm({
         defaultValues: {
@@ -15,7 +21,95 @@ const CourseRegistrationPage = () => {
         }
     });
 
-    const onSubmit = (data) => {
+    // Check verification status on mount and redirect if not verified
+    useEffect(() => {
+        if (!user?.uid || !selectedBranchId) return;
+
+        const checkVerification = async () => {
+            try {
+                // Fetch user profile from branches/{branchId}/users/{uid}
+                const userRef = doc(db, `branches/${selectedBranchId}/users/${user.uid}`);
+                const userSnap = await getDoc(userRef);
+                
+                if (!userSnap.exists()) {
+                    alert('حسابك غير موجود. يرجى إعادة التسجيل.');
+                    navigate('/profile');
+                    return;
+                }
+
+                const userData = userSnap.data();
+                if (!userData.verified) {
+                    alert('حسابك غير موثق بعد. يجب التحقق من حسابك من قبل الإدارة قبل التسجيل في الدورات.');
+                    navigate('/profile');
+                    return;
+                }
+            } catch (error) {
+                console.error('Error checking verification:', error);
+                alert('تعذر التحقق من حالة الحساب. حاول لاحقاً.');
+                navigate('/profile');
+            }
+        };
+
+        checkVerification();
+    }, [user, selectedBranchId, navigate]);
+
+    const onSubmit = async (data) => {
+        if (!selectedBranchId) {
+            alert('يرجى اختيار الفرع أولاً.');
+            return;
+        }
+        if (!user?.uid) {
+            alert('يرجى تسجيل الدخول أولاً.');
+            return;
+        }
+
+        // Double-check verification before submitting
+        try {
+            const userRef = doc(db, `branches/${selectedBranchId}/users/${user.uid}`);
+            const userSnap = await getDoc(userRef);
+            
+            if (!userSnap.exists()) {
+                alert('حسابك غير موجود. يرجى إعادة التسجيل.');
+                navigate('/profile');
+                return;
+            }
+
+            const userData = userSnap.data();
+            if (!userData.verified) {
+                alert('حسابك غير موثق بعد. يجب التحقق من حسابك من قبل الإدارة قبل التسجيل في الدورات.');
+                navigate('/profile');
+                return;
+            }
+        } catch (error) {
+            console.error('Verification check failed:', error);
+            alert('تعذر التحقق من حالة الحساب. حاول لاحقاً.');
+            return;
+        }
+        const registration = {
+            name: data.fullName,
+            email: data.email,
+            phone: data.phone,
+            type: courseType || 'training', // Use 'type' field for registrations
+            courseType: courseType || 'training', // Keep for compatibility
+            courseId: subject?.id || null,
+            courseName: subject?.name ? `${courseName} - ${subject.name}` : courseName,
+            level: level || null,
+            paymentMethod: null,
+            paymentConfirmed: false,
+            verified: false,
+            branchId: selectedBranchId,
+            userId: user.uid,
+            createdAt: serverTimestamp(),
+        };
+
+        try {
+            // Save to registrations collection
+            await addDoc(collection(db, 'branches', selectedBranchId, 'registrations'), registration);
+        } catch (e) {
+            console.error('Failed to create signup:', e);
+            // We still allow proceeding to payment page, but you could display an error here
+        }
+
         const registrationData = {
             ...data,
             courseType,
@@ -24,12 +118,17 @@ const CourseRegistrationPage = () => {
             level,
             registrationDate: new Date().toISOString()
         };
-        
+
         // Navigate to payment page
         navigate('/payment', {
             state: { registrationData }
         });
     };
+
+    // Don't render if user is not verified (will redirect)
+    if (!user?.uid || !selectedBranchId || verified === false) {
+        return null;
+    }
 
     return (
         <div className="min-h-screen bg-gray-50 py-12 px-6 md:px-12" dir="rtl">

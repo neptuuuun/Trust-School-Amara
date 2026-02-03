@@ -1,172 +1,301 @@
 import React, { useState, useEffect } from 'react';
-import { collection, onSnapshot, orderBy, query, limit } from 'firebase/firestore';
+import { collection, collectionGroup, query, where, getCountFromServer } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../../firebase';
-import { Users, BookOpen, GraduationCap, FileText, MessageSquare } from 'lucide-react';
+import { Users, BookOpen, GraduationCap, FileText, DollarSign, Languages, AlertCircle, Clock, CreditCard, ClipboardList } from 'lucide-react';
+import { useBranch } from '../../contexts/BranchContext';
 
 const Overview = () => {
   const navigate = useNavigate();
+  const { selectedBranchId } = useBranch();
+  
   const [stats, setStats] = useState({
-    signups: 0,
+    registrations: 0,
+    students: 0,
+    verifiedStudents: 0,
+    unverifiedStudents: 0,
+    supportLessons: 0,
+    languages: 0,
     trainings: 0,
     trainingRequests: 0,
-    languages: 0
+    trainingRequestsPending: 0,
+    trainingRequestsReviewed: 0,
+    trainingRequestsCompleted: 0,
+    pendingPayments: 0,
+    pendingPaymentsLanguage: 0,
+    pendingPaymentsYearly: 0,
+    pendingPaymentsSupport: 0,
+    pendingPaymentsTraining: 0,
+    pendingAnnualFees: 0,
+    approvedAnnualFees: 0,
+    rejectedAnnualFees: 0
   });
-  const [recentActivity, setRecentActivity] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [activityLoading, setActivityLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribes = [];
+    // Guard for required dependency
+    if (!selectedBranchId) {
+      setStats({
+        registrations: 0,
+        students: 0,
+        verifiedStudents: 0,
+        unverifiedStudents: 0,
+        supportLessons: 0,
+        languages: 0,
+        trainings: 0,
+        trainingRequests: 0,
+        trainingRequestsPending: 0,
+        trainingRequestsReviewed: 0,
+        trainingRequestsCompleted: 0,
+        pendingPayments: 0,
+        pendingPaymentsLanguage: 0,
+        pendingPaymentsYearly: 0,
+        pendingPaymentsSupport: 0,
+        pendingPaymentsTraining: 0,
+        pendingAnnualFees: 0,
+        approvedAnnualFees: 0,
+        rejectedAnnualFees: 0
+      });
+      setLoading(false);
+      return;
+    }
+ 
+    let isActive = true;
 
-    // Listen to signups collection
-    const signupsUnsubscribe = onSnapshot(
-      collection(db, 'signups'),
-      (snapshot) => {
-        setStats(prev => ({ ...prev, signups: snapshot.size }));
-      },
-      (error) => console.error('Error fetching signups:', error)
-    );
-    unsubscribes.push(signupsUnsubscribe);
-
-    // Listen to trainings collection
-    const trainingsUnsubscribe = onSnapshot(
-      collection(db, 'trainings'),
-      (snapshot) => {
-        setStats(prev => ({ ...prev, trainings: snapshot.size }));
-      },
-      (error) => console.error('Error fetching trainings:', error)
-    );
-    unsubscribes.push(trainingsUnsubscribe);
-
-    // Listen to training requests collection
-    const trainingRequestsUnsubscribe = onSnapshot(
-      collection(db, 'training_requests'),
-      (snapshot) => {
-        setStats(prev => ({ ...prev, trainingRequests: snapshot.size }));
-      },
-      (error) => console.error('Error fetching training requests:', error)
-    );
-    unsubscribes.push(trainingRequestsUnsubscribe);
-
-    // Listen to languages collection
-    const languagesUnsubscribe = onSnapshot(
-      collection(db, 'languages'),
-      (snapshot) => {
-        setStats(prev => ({ ...prev, languages: snapshot.size }));
-        setLoading(false);
-      },
-      (error) => console.error('Error fetching languages:', error)
-    );
-    unsubscribes.push(languagesUnsubscribe);
-
-    // Listen to recent activity collection
-    const recentActivityQuery = query(
-      collection(db, 'recent_activity'),
-      orderBy('timestamp', 'desc'),
-      limit(5)
-    );
-    
-    const activityUnsubscribe = onSnapshot(
-      recentActivityQuery,
-      (snapshot) => {
-        const activities = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        }));
-        setRecentActivity(activities);
-        setActivityLoading(false);
-      },
-      (error) => {
-        console.error('Error fetching recent activity:', error);
-        setActivityLoading(false);
-      }
-    );
-    unsubscribes.push(activityUnsubscribe);
-
-    // Cleanup subscriptions
-    return () => {
-      unsubscribes.forEach(unsubscribe => unsubscribe());
+    const countForQuery = async (q) => {
+      const snap = await getCountFromServer(q);
+      return snap.data().count || 0;
     };
-  }, []);
+
+    const loadStats = async () => {
+      try {
+        setLoading(true);
+
+        const usersRef = collection(db, 'branches', selectedBranchId, 'users');
+        const supportLessonsRef = collection(db, 'branches', selectedBranchId, 'supportLessons');
+        const languagesRef = collection(db, 'branches', selectedBranchId, 'languages');
+        const trainingsRef = collection(db, 'branches', selectedBranchId, 'trainings');
+        const branchRegistrationsRef = collection(db, 'branches', selectedBranchId, 'registrations');
+        const annualPaymentsRef = collection(db, 'branches', selectedBranchId, 'annualPayments');
+        const supportLessonRegistrationsRef = collection(db, 'supportLessonRegistrations');
+
+        const [
+          studentsTotal,
+          studentsVerified,
+          supportLessonsTotal,
+          languagesTotal,
+          trainingsTotal,
+          branchRegistrationsTotal,
+          languageRegistrationsTotal,
+          trainingRegistrationsTotal,
+          supportLessonRegistrationsTotal,
+          trainingRequestsTotal,
+          trainingRequestsPending,
+          trainingRequestsReviewed,
+          trainingRequestsCompleted,
+          pendingPaymentsLanguage,
+          pendingPaymentsYearly,
+          pendingPaymentsSupportMonthly,
+          pendingPaymentsSupportAnnualFee,
+          pendingPaymentsTraining,
+          pendingAnnualFees,
+          approvedAnnualFees,
+          rejectedAnnualFees
+        ] = await Promise.all([
+          countForQuery(query(usersRef)),
+          countForQuery(query(usersRef, where('verified', '==', true))),
+          countForQuery(query(supportLessonsRef)),
+          countForQuery(query(languagesRef)),
+          countForQuery(query(trainingsRef)),
+          countForQuery(query(branchRegistrationsRef)),
+          countForQuery(query(collectionGroup(db, 'languageFormEntries'), where('branchId', '==', selectedBranchId))),
+          countForQuery(query(collectionGroup(db, 'trainingFormEntries'), where('branchId', '==', selectedBranchId))),
+          countForQuery(query(supportLessonRegistrationsRef, where('branchId', '==', selectedBranchId))),
+          countForQuery(query(branchRegistrationsRef, where('type', '==', 'training_request'))),
+          countForQuery(query(branchRegistrationsRef, where('type', '==', 'training_request'), where('status', '==', 'pending'))),
+          countForQuery(query(branchRegistrationsRef, where('type', '==', 'training_request'), where('status', '==', 'reviewed'))),
+          countForQuery(query(branchRegistrationsRef, where('type', '==', 'training_request'), where('status', '==', 'completed'))),
+          countForQuery(
+            query(
+              collectionGroup(db, 'languageFormEntries'),
+              where('branchId', '==', selectedBranchId),
+              where('status', '==', 'pending')
+            )
+          ),
+          countForQuery(query(branchRegistrationsRef, where('type', '==', 'yearly_fee'), where('verified', '==', false))),
+          countForQuery(query(supportLessonRegistrationsRef, where('branchId', '==', selectedBranchId), where('status', '==', 'pending'))),
+          countForQuery(
+            query(
+              branchRegistrationsRef,
+              where('type', '==', 'supportLesson'),
+              where('source', '==', 'annualFee'),
+              where('status', '==', 'pending')
+            )
+          ),
+          countForQuery(
+            query(
+              collectionGroup(db, 'trainingFormEntries'),
+              where('branchId', '==', selectedBranchId),
+              where('status', '==', 'pending'),
+              where('verified', '==', false)
+            )
+          ),
+          countForQuery(query(annualPaymentsRef, where('status', '==', 'pending'))),
+          countForQuery(query(annualPaymentsRef, where('status', '==', 'verified'))),
+          countForQuery(query(annualPaymentsRef, where('status', '==', 'rejected')))
+        ]);
+
+        if (!isActive) return;
+
+        const unverifiedStudents = Math.max(0, (studentsTotal || 0) - (studentsVerified || 0));
+        const pendingPaymentsSupport = (pendingPaymentsSupportMonthly || 0) + (pendingPaymentsSupportAnnualFee || 0);
+        const totalPendingPayments =
+          (pendingPaymentsLanguage || 0)
+          + (pendingPaymentsYearly || 0)
+          + pendingPaymentsSupport
+          + (pendingPaymentsTraining || 0);
+
+        const registrationsTotal =
+          (branchRegistrationsTotal || 0)
+          + (languageRegistrationsTotal || 0)
+          + (trainingRegistrationsTotal || 0)
+          + (supportLessonRegistrationsTotal || 0);
+
+        setStats((prev) => ({
+          ...prev,
+          students: studentsTotal || 0,
+          verifiedStudents: studentsVerified || 0,
+          unverifiedStudents,
+          supportLessons: supportLessonsTotal || 0,
+          languages: languagesTotal || 0,
+          trainings: trainingsTotal || 0,
+          registrations: registrationsTotal,
+          trainingRequests: trainingRequestsTotal || 0,
+          trainingRequestsPending: trainingRequestsPending || 0,
+          trainingRequestsReviewed: trainingRequestsReviewed || 0,
+          trainingRequestsCompleted: trainingRequestsCompleted || 0,
+          pendingPayments: totalPendingPayments,
+          pendingPaymentsLanguage: pendingPaymentsLanguage || 0,
+          pendingPaymentsYearly: pendingPaymentsYearly || 0,
+          pendingPaymentsSupport,
+          pendingPaymentsTraining: pendingPaymentsTraining || 0,
+          pendingAnnualFees: pendingAnnualFees || 0,
+          approvedAnnualFees: approvedAnnualFees || 0,
+          rejectedAnnualFees: rejectedAnnualFees || 0
+        }));
+      } catch (error) {
+        console.error('Error loading overview stats:', error);
+      } finally {
+        if (isActive) setLoading(false);
+      }
+    };
+
+    loadStats();
+
+    return () => {
+      isActive = false;
+    };
+  }, [selectedBranchId]);
 
   // Handle quick action navigation
   const handleQuickAction = (action) => {
     switch (action) {
       case 'addLanguage':
-        navigate('/admin/languages');
+        navigate('/admin/add-language');
         break;
       case 'addTraining':
-        navigate('/admin/trainings');
+        navigate('/admin/add-training');
         break;
-      case 'viewSignups':
-        navigate('/admin/signups');
+      case 'addSupportLesson':
+        navigate('/admin/add-support-lesson');
+        break;
+      case 'viewUsers':
+        navigate('/admin/users');
+        break;
+      case 'viewPayments':
+        navigate('/admin/payments-verification');
+        break;
+      case 'viewAnnualFees':
+        navigate('/admin/annual-fees');
+        break;
+      case 'viewTrainingRequests':
+        navigate('/admin/training-requests');
+        break;
+      case 'adminGuide':
+        navigate('/admin/admin-guide');
         break;
       default:
         break;
     }
   };
 
-  // Get dot color based on activity type
-  const getDotColor = (type) => {
-    switch (type) {
-      case 'signup':
-        return 'bg-success';
-      case 'request':
-        return 'bg-primary';
-      case 'update':
-        return 'bg-warning';
-      default:
-        return 'bg-gray-400';
-    }
-  };
-
-  // Format timestamp to relative time
-  const formatRelativeTime = (timestamp) => {
-    if (!timestamp || !timestamp.toDate) return '';
-    
-    const now = new Date();
-    const activityTime = timestamp.toDate();
-    const diffInMinutes = Math.floor((now - activityTime) / (1000 * 60));
-    
-    if (diffInMinutes < 1) return 'منذ لحظات';
-    if (diffInMinutes < 60) return `منذ ${diffInMinutes} دقيقة`;
-    
-    const diffInHours = Math.floor(diffInMinutes / 60);
-    if (diffInHours < 24) return `منذ ${diffInHours} ساعة`;
-    
-    const diffInDays = Math.floor(diffInHours / 24);
-    return `منذ ${diffInDays} يوم`;
-  };
-
-  const statCards = [
+  // Main statistics cards
+  const mainStatCards = [
+    {
+      title: 'إجمالي الطلاب',
+      value: stats.students,
+      subtitle: `${stats.verifiedStudents} موثق | ${stats.unverifiedStudents} غير موثق`,
+      icon: Users,
+      color: 'bg-blue-500',
+      textColor: 'text-blue-600',
+      bgColor: 'bg-blue-50'
+    },
     {
       title: 'إجمالي التسجيلات',
-      value: stats.signups,
+      value: stats.registrations,
+      subtitle: 'جميع أنواع التسجيلات',
       icon: FileText,
       color: 'bg-primary',
-      textColor: 'text-primary-600'
+      textColor: 'text-primary-600',
+      bgColor: 'bg-primary-50'
+    },
+    {
+      title: 'المدفوعات المعلقة',
+      value: stats.pendingPayments,
+      subtitle: 'تتطلب مراجعة فورية',
+      icon: CreditCard,
+      color: 'bg-yellow-500',
+      textColor: 'text-yellow-600',
+      bgColor: 'bg-yellow-50',
+      alert: stats.pendingPayments > 0
+    },
+    {
+      title: 'طلبات الدورات التكوينية',
+      value: stats.trainingRequests,
+      subtitle: `${stats.trainingRequestsPending} قيد الانتظار`,
+      icon: GraduationCap,
+      color: 'bg-purple-500',
+      textColor: 'text-purple-600',
+      bgColor: 'bg-purple-50',
+      alert: stats.trainingRequestsPending > 0
+    }
+  ];
+
+  // Course statistics
+  const courseStatCards = [
+    {
+      title: 'اللغات',
+      value: stats.languages,
+      icon: Languages,
+      color: 'bg-green-500',
+      textColor: 'text-green-600',
+      bgColor: 'bg-green-50'
+    },
+    {
+      title: 'دروس الدعم',
+      value: stats.supportLessons,
+      icon: BookOpen,
+      color: 'bg-indigo-500',
+      textColor: 'text-indigo-600',
+      bgColor: 'bg-indigo-50'
     },
     {
       title: 'الدورات التكوينية',
       value: stats.trainings,
       icon: GraduationCap,
-      color: 'bg-secondary',
-      textColor: 'text-secondary-600'
-    },
-    {
-      title: 'طلبات التدريب',
-      value: stats.trainingRequests,
-      icon: MessageSquare,
-      color: 'bg-accent',
-      textColor: 'text-accent-600'
-    },
-    {
-      title: 'اللغات المتاحة',
-      value: stats.languages,
-      icon: BookOpen,
-      color: 'bg-warning',
-      textColor: 'text-warning-600'
+      color: 'bg-purple-500',
+      textColor: 'text-purple-600',
+      bgColor: 'bg-purple-50'
     }
   ];
 
@@ -179,87 +308,196 @@ const Overview = () => {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8" dir="rtl">
       {/* Page Header */}
-      <div>
-        <h1 className="text-4xl font-bold text-primary mb-2">نظرة عامة</h1>
-        <p className="text-xl text-gray-600">إحصائيات سريعة حول النظام</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-4xl font-bold text-primary mb-2">نظرة عامة</h1>
+          <p className="text-xl text-gray-600">إحصائيات شاملة حول النظام والحالة الحالية</p>
+        </div>
       </div>
 
-      {/* Stats Grid */}
+      {/* Main Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        {statCards.map((stat, index) => {
+        {mainStatCards.map((stat, index) => {
           const Icon = stat.icon;
           return (
-            <div key={index} className="bg-white rounded-xl shadow-md p-6 border border-gray-100">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-lg font-medium text-gray-600 mb-2">{stat.title}</p>
-                  <p className={`text-4xl font-bold ${stat.textColor}`}>
-                    {stat.value.toLocaleString('ar-EG')}
-                  </p>
+            <div 
+              key={index} 
+              className={`bg-white rounded-xl shadow-md p-6 border-2 transition-all hover:shadow-lg ${
+                stat.alert ? 'border-yellow-400' : 'border-gray-100'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-3">
+                <div className={`p-3 rounded-lg ${stat.bgColor}`}>
+                  <Icon className={`h-6 w-6 ${stat.textColor}`} />
                 </div>
-                <div className={`p-4 rounded-full ${stat.color} bg-opacity-10`}>
-                  <Icon className={`h-8 w-8 ${stat.textColor}`} />
-                </div>
+                {stat.alert && (
+                  <div className="flex items-center gap-1 text-yellow-600">
+                    <AlertCircle className="h-5 w-5" />
+                  </div>
+                )}
+              </div>
+              <div>
+                <p className="text-sm font-medium text-gray-600 mb-1">{stat.title}</p>
+                <p className={`text-3xl font-bold ${stat.textColor} mb-1`}>
+                  {stat.value.toLocaleString('ar-EG')}
+                </p>
+                {stat.subtitle && (
+                  <p className="text-xs text-gray-500 mt-1">{stat.subtitle}</p>
+                )}
               </div>
             </div>
           );
         })}
       </div>
 
-      {/* Quick Actions */}
-      <div className="bg-white rounded-xl shadow-md p-6 border border-gray-100">
-        <h2 className="text-2xl font-bold text-primary mb-6">إجراءات سريعة</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          <button 
-            onClick={() => handleQuickAction('addLanguage')}
-            className="btn btn-primary btn-lg text-right"
-          >
-            إضافة لغة جديدة
-          </button>
-          <button 
-            onClick={() => handleQuickAction('addTraining')}
-            className="btn btn-secondary btn-lg text-right"
-          >
-            إضافة دورة تكوينية
-          </button>
-          <button 
-            onClick={() => handleQuickAction('viewSignups')}
-            className="btn btn-accent btn-lg text-right"
-          >
-            عرض التسجيلات الجديدة
-          </button>
+      {/* Two Column Layout */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Course Statistics */}
+        <div className="bg-white rounded-xl shadow-md p-6 border border-gray-100">
+          <h2 className="text-2xl font-bold text-primary mb-6 flex items-center gap-2">
+            <BookOpen className="h-6 w-6" />
+            إحصائيات الدورات
+          </h2>
+          <div className="grid grid-cols-3 gap-4">
+            {courseStatCards.map((stat, index) => {
+              const Icon = stat.icon;
+              return (
+                <div 
+                  key={index} 
+                  className="text-center p-4 rounded-lg bg-gray-50 hover:bg-gray-100 transition-colors"
+                >
+                  <div className={`inline-flex p-3 rounded-full ${stat.bgColor} mb-2`}>
+                    <Icon className={`h-5 w-5 ${stat.textColor}`} />
+                  </div>
+                  <p className="text-xs text-gray-600 mb-1">{stat.title}</p>
+                  <p className={`text-2xl font-bold ${stat.textColor}`}>
+                    {stat.value.toLocaleString('ar-EG')}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
         </div>
-      </div>
 
-      {/* Recent Activity */}
-      <div className="bg-white rounded-xl shadow-md p-6 border border-gray-100">
-        <h2 className="text-2xl font-bold text-primary mb-6">النشاط الأخير</h2>
-        
-        {activityLoading ? (
-          <div className="flex items-center justify-center py-8">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-          </div>
-        ) : recentActivity.length === 0 ? (
-          <div className="text-center py-8">
-            <p className="text-gray-500 text-lg">لا توجد أنشطة حديثة</p>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {recentActivity.map((activity) => (
-              <div key={activity.id} className="flex items-center p-4 bg-gray-50 rounded-lg">
-                <div className="flex-shrink-0">
-                  <div className={`w-3 h-3 ${getDotColor(activity.type)} rounded-full`}></div>
+        {/* Pending Actions */}
+        <div className="bg-white rounded-xl shadow-md p-6 border border-gray-100">
+          <h2 className="text-2xl font-bold text-primary mb-6 flex items-center gap-2">
+            <Clock className="h-6 w-6" />
+            الإجراءات المعلقة
+          </h2>
+          <div className="space-y-3">
+            <button
+              onClick={() => handleQuickAction('adminGuide')}
+              className="w-full p-4 rounded-lg border-2 text-right transition-all hover:shadow-md border-gray-200 bg-gray-50 hover:bg-gray-100"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex-1">
+                  <p className="font-bold text-gray-900">Admin Guide</p>
+                  <p className="text-sm text-gray-600">
+                    Step-by-step help for languages, courses, verification, and enrolled users.
+                  </p>
                 </div>
-                <div className="mr-4">
-                  <p className="text-lg font-medium text-gray-900">{activity.message}</p>
-                  <p className="text-gray-600">{formatRelativeTime(activity.timestamp)}</p>
-                </div>
+                <ClipboardList className="h-6 w-6 text-gray-400" />
               </div>
-            ))}
+            </button>
+
+            <button
+              onClick={() => handleQuickAction('viewPayments')}
+              className={`w-full p-4 rounded-lg border-2 text-right transition-all hover:shadow-md ${
+                stats.pendingPayments > 0 
+                  ? 'border-yellow-400 bg-yellow-50 hover:bg-yellow-100' 
+                  : 'border-gray-200 bg-gray-50 hover:bg-gray-100'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex-1">
+                  <p className="font-bold text-gray-900">التحقق من المدفوعات</p>
+                  <p className="text-sm text-gray-600">
+                    {stats.pendingPayments > 0 
+                      ? `${stats.pendingPayments} مدفوعات تتطلب مراجعة`
+                      : 'لا توجد مدفوعات معلقة'
+                    }
+                  </p>
+                  {stats.pendingPayments > 0 && (
+                    <div className="flex gap-2 mt-2 text-xs">
+                      {stats.pendingPaymentsLanguage > 0 && (
+                        <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded">لغات: {stats.pendingPaymentsLanguage}</span>
+                      )}
+                      {stats.pendingPaymentsYearly > 0 && (
+                        <span className="px-2 py-1 bg-green-100 text-green-700 rounded">سنوية: {stats.pendingPaymentsYearly}</span>
+                      )}
+                      {stats.pendingPaymentsSupport > 0 && (
+                        <span className="px-2 py-1 bg-indigo-100 text-indigo-700 rounded">دعم: {stats.pendingPaymentsSupport}</span>
+                      )}
+                      {stats.pendingPaymentsTraining > 0 && (
+                        <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded">تكوين: {stats.pendingPaymentsTraining}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <CreditCard className={`h-6 w-6 ${stats.pendingPayments > 0 ? 'text-yellow-600' : 'text-gray-400'}`} />
+              </div>
+            </button>
+
+            <button
+              onClick={() => handleQuickAction('viewAnnualFees')}
+              className={`w-full p-4 rounded-lg border-2 text-right transition-all hover:shadow-md ${
+                stats.pendingAnnualFees > 0 
+                  ? 'border-yellow-400 bg-yellow-50 hover:bg-yellow-100' 
+                  : 'border-gray-200 bg-gray-50 hover:bg-gray-100'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex-1">
+                  <p className="font-bold text-gray-900">الرسوم السنوية</p>
+                  <p className="text-sm text-gray-600">
+                    {stats.pendingAnnualFees > 0 
+                      ? `${stats.pendingAnnualFees} طلب معلق`
+                      : 'لا توجد طلبات معلقة'
+                    }
+                  </p>
+                  {stats.approvedAnnualFees > 0 && (
+                    <p className="text-xs text-green-600 mt-1">
+                      {stats.approvedAnnualFees} موافق عليه
+                    </p>
+                  )}
+                </div>
+                <DollarSign className={`h-6 w-6 ${stats.pendingAnnualFees > 0 ? 'text-yellow-600' : 'text-gray-400'}`} />
+              </div>
+            </button>
+
+            <button
+              onClick={() => handleQuickAction('viewTrainingRequests')}
+              className={`w-full p-4 rounded-lg border-2 text-right transition-all hover:shadow-md ${
+                stats.trainingRequestsPending > 0 
+                  ? 'border-purple-400 bg-purple-50 hover:bg-purple-100' 
+                  : 'border-gray-200 bg-gray-50 hover:bg-gray-100'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex-1">
+                  <p className="font-bold text-gray-900">طلبات الدورات التكوينية</p>
+                  <p className="text-sm text-gray-600">
+                    {stats.trainingRequestsPending > 0 
+                      ? `${stats.trainingRequestsPending} طلب قيد الانتظار`
+                      : 'لا توجد طلبات معلقة'
+                    }
+                  </p>
+                  {stats.trainingRequests > 0 && (
+                    <div className="flex gap-2 mt-2 text-xs">
+                      <span className="px-2 py-1 bg-yellow-100 text-yellow-700 rounded">قيد الانتظار: {stats.trainingRequestsPending}</span>
+                      <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded">تمت المراجعة: {stats.trainingRequestsReviewed}</span>
+                      <span className="px-2 py-1 bg-green-100 text-green-700 rounded">مكتمل: {stats.trainingRequestsCompleted}</span>
+                    </div>
+                  )}
+                </div>
+                <FileText className={`h-6 w-6 ${stats.trainingRequestsPending > 0 ? 'text-purple-600' : 'text-gray-400'}`} />
+              </div>
+            </button>
           </div>
-        )}
+        </div>
       </div>
     </div>
   );

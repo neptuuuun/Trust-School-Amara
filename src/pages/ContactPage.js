@@ -1,8 +1,59 @@
-import React from 'react';
-import { MapPin, Phone, Mail, Clock } from 'lucide-react';
+import React, { useState } from 'react';
+import { MapPin, Phone, Mail, Clock, Send, CheckCircle, AlertCircle } from 'lucide-react';
 import FAQItem from '../components/FAQItem';
+import { useBranch } from '../contexts/BranchContext';
+import { createContactMessage } from '../services/firestoreService';
 
 const ContactPage = () => {
+    const { selectedBranchId } = useBranch();
+    const [formData, setFormData] = useState({
+        name: '',
+        email: '',
+        subject: '',
+        message: ''
+    });
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [submitStatus, setSubmitStatus] = useState(''); // 'success' | 'error' | ''
+
+    const handleInputChange = (e) => {
+        const { name, value } = e.target;
+        setFormData(prev => ({ ...prev, [name]: value }));
+    };
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        
+        if (!selectedBranchId) {
+            alert('يرجى اختيار الفرع أولاً.');
+            return;
+        }
+
+        setIsSubmitting(true);
+        setSubmitStatus('');
+
+        try {
+            await createContactMessage(selectedBranchId, {
+                name: formData.name,
+                email: formData.email,
+                subject: formData.subject,
+                message: formData.message,
+            });
+
+            setSubmitStatus('success');
+            setFormData({
+                name: '',
+                email: '',
+                subject: '',
+                message: ''
+            });
+        } catch (error) {
+            console.error('Error submitting contact form:', error);
+            setSubmitStatus('error');
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+
     const faqItems = [
         {
             question: 'ما هي مواعيد الدوام في المدرسة؟',
@@ -120,6 +171,7 @@ const ContactPage = () => {
                         </div>
                     </div>
                 </div>
+
 
                 {/* FAQ Section */}
                 <div className="bg-white rounded-xl shadow-lg p-8 md:p-12">

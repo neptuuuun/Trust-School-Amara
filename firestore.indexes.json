@@ -1,0 +1,22 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "languageFormEntries",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "branchId", "order": "ASCENDING" },
+        { "fieldPath": "submittedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "languageFormEntries",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "branchId", "order": "ASCENDING" },
+        { "fieldPath": "verified", "order": "ASCENDING" },
+        { "fieldPath": "submittedAt", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

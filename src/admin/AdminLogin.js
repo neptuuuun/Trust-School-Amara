@@ -18,12 +18,11 @@ const AdminLogin = () => {
   // Get the intended destination or default to /admin
   const from = location.state?.from?.pathname || '/admin';
 
-  // Admin email whitelist
+  // Admin email whitelist - must match AuthContext.js and firestore.rules
   const adminEmails = [
-    'admin@example.com',
-    'admin@trust-school.com',
     'marouabenzaoui48@gmail.com',
-    'trustschoolamara@gmail.com'
+    'trustschoolamara@gmail.com',
+    'admin@trust-school.com',
     // Add more admin emails here
   ];
 

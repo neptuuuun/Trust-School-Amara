@@ -1,70 +1,72 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  collection, 
-  deleteDoc, 
-  doc, 
-  onSnapshot,
-  query,
-  orderBy,
-  updateDoc 
-} from 'firebase/firestore';
+import React, { useEffect, useState } from 'react';
+import { collection, onSnapshot, orderBy, query, updateDoc, doc, where } from 'firebase/firestore';
 import { db } from '../../firebase';
-import { Trash2, Check, X, Phone, User, Calendar, MessageSquare } from 'lucide-react';
+import { useBranch } from '../../contexts/BranchContext';
+import { FileText, Calendar, CheckCircle, XCircle } from 'lucide-react';
 
 const TrainingRequests = () => {
+  const { selectedBranchId } = useBranch();
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [selectedRequest, setSelectedRequest] = useState(null);
 
   useEffect(() => {
-    // Listen to training requests collection
-    const requestsQuery = query(collection(db, 'trainingRequests'), orderBy('createdAt', 'desc'));
-    const requestsUnsubscribe = onSnapshot(requestsQuery, (snapshot) => {
-      const requestsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setRequests(requestsData);
+    if (!selectedBranchId) {
+      setRequests([]);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    // Use registrations with type='training_request'
+    const q = query(
+      collection(db, 'branches', selectedBranchId, 'registrations'),
+      where('type', '==', 'training_request'),
+      orderBy('createdAt', 'desc')
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      setRequests(list);
+      setLoading(false);
+    }, (e) => {
+      console.error('Failed to load training requests', e);
       setLoading(false);
     });
+    return () => unsub();
+  }, [selectedBranchId]);
 
-    return () => {
-      requestsUnsubscribe();
-    };
-  }, []);
-
-  const handleDeleteRequest = async (requestId) => {
-    if (window.confirm('هل أنت متأكد من حذف هذا الطلب؟')) {
-      try {
-        await deleteDoc(doc(db, 'trainingRequests', requestId));
-      } catch (error) {
-        console.error('Error deleting request:', error);
-      }
-    }
+  const formatDate = (ts) => {
+    const d = ts?.toDate ? ts.toDate() : (ts ? new Date(ts) : null);
+    return d ? d.toLocaleDateString('ar-DZ') : 'غير محدد';
   };
 
-  const markAsProcessed = async (requestId) => {
+  const approve = async (r) => {
     try {
-      await updateDoc(doc(db, 'trainingRequests', requestId), {
-        processed: true,
-        processedAt: new Date()
+      await updateDoc(doc(db, 'branches', selectedBranchId, 'registrations', r.id), {
+        status: 'approved',
+        reviewedAt: new Date(),
       });
-    } catch (error) {
-      console.error('Error marking as processed:', error);
+      alert('تمت الموافقة على الطلب');
+    } catch (e) {
+      console.error(e);
+      alert('تعذر الموافقة');
     }
   };
 
-  const formatDate = (timestamp) => {
-    if (!timestamp) return 'غير محدد';
-    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
-    return date.toLocaleDateString('ar-DZ', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
+  const reject = async (r) => {
+    try {
+      await updateDoc(doc(db, 'branches', selectedBranchId, 'registrations', r.id), {
+        status: 'rejected',
+        reviewedAt: new Date(),
+      });
+      alert('تم رفض الطلب');
+    } catch (e) {
+      console.error(e);
+      alert('تعذر الرفض');
+    }
   };
+
+  if (!selectedBranchId) {
+    return <div className="text-center py-12 text-gray-600">يرجى اختيار فرع.</div>;
+  }
 
   if (loading) {
     return (
@@ -75,203 +77,69 @@ const TrainingRequests = () => {
   }
 
   return (
-    <div className="space-y-8">
-      {/* Page Header */}
+    <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-4xl font-bold text-primary mb-2">طلبات التدريب</h1>
-          <p className="text-xl text-gray-600">إدارة طلبات الأشخاص الراغبين في الحصول على دورات تدريبية</p>
-        </div>
-        <div className="text-lg text-gray-600">
-          إجمالي الطلبات: <span className="font-bold text-primary">{requests.length}</span>
+          <h1 className="text-4xl font-bold text-primary mb-2">طلبات الدورات التكوينية</h1>
+          <p className="text-xl text-gray-600">مراجعة وقبول/رفض الطلبات</p>
         </div>
       </div>
 
-      {/* Requests Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-        {requests.map((request) => (
-          <div key={request.id} className={`bg-white rounded-xl shadow-md p-6 border ${
-            request.processed ? 'border-green-200 bg-green-50' : 'border-gray-200'
-          }`}>
-            <div className="flex items-start justify-between mb-4">
-              <div className="flex-1">
-                <div className="flex items-center gap-2 mb-2">
-                  <User className="h-5 w-5 text-primary" />
-                  <h3 className="text-xl font-bold text-primary">{request.name}</h3>
-                  {request.processed && (
-                    <span className="px-2 py-1 bg-green-100 text-green-800 text-xs rounded-full">
-                      تم المعالجة
-                    </span>
-                  )}
-                </div>
-                
-                <div className="space-y-2 mb-4">
-                  <div className="flex items-center">
-                    <Phone className="h-4 w-4 text-secondary ml-2" />
-                    <span className="text-base">{request.phone}</span>
-                  </div>
-                  
-                  <div className="flex items-center">
-                    <MessageSquare className="h-4 w-4 text-accent ml-2" />
-                    <span className="text-base font-medium">{request.requestedTopic}</span>
-                  </div>
-                  
-                  <div className="flex items-center">
-                    <Calendar className="h-4 w-4 text-gray-500 ml-2" />
-                    <span className="text-sm text-gray-600">{formatDate(request.createdAt)}</span>
-                  </div>
-                </div>
-
-                {request.message && (
-                  <div className="bg-gray-50 rounded-lg p-3 mb-4">
-                    <p className="text-sm text-gray-700">{request.message}</p>
-                  </div>
-                )}
-              </div>
-            </div>
-            
-            <div className="flex space-x-2 space-x-reverse">
-              {!request.processed && (
-                <button
-                  onClick={() => markAsProcessed(request.id)}
-                  className="btn btn-success btn-sm flex-1"
-                  title="تم التواصل مع الشخص"
-                >
-                  <Check className="h-4 w-4 ml-1" />
-                  تم المعالجة
-                </button>
-              )}
-              
-              <button
-                onClick={() => setSelectedRequest(request)}
-                className="btn btn-outline-primary btn-sm"
-                title="عرض التفاصيل"
-              >
-                عرض
-              </button>
-              
-              <button
-                onClick={() => handleDeleteRequest(request.id)}
-                className="btn btn-danger btn-sm"
-                title="حذف الطلب"
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-        ))}
+      <div className="bg-white rounded-xl shadow-md border border-gray-100">
+        <div className="p-6 overflow-x-auto">
+          {requests.length === 0 ? (
+            <div className="text-center py-12 text-gray-500">لا توجد طلبات</div>
+          ) : (
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-gray-200">
+                  <th className="text-right py-3 px-4 font-semibold text-gray-700">الاسم</th>
+                  <th className="text-right py-3 px-4 font-semibold text-gray-700">الهاتف</th>
+                  <th className="text-right py-3 px-4 font-semibold text-gray-700">الدورة</th>
+                  <th className="text-right py-3 px-4 font-semibold text-gray-700">الحالة</th>
+                  <th className="text-right py-3 px-4 font-semibold text-gray-700">التاريخ</th>
+                  <th className="text-right py-3 px-4 font-semibold text-gray-700">إجراءات</th>
+                </tr>
+              </thead>
+              <tbody>
+                {requests.map((r) => (
+                  <tr key={r.id} className="border-b border-gray-100 hover:bg-gray-50">
+                    <td className="py-4 px-4 flex items-center gap-2">
+                      <FileText className="w-5 h-5 text-gray-400" />
+                      <span className="font-semibold text-gray-800">{r.name || '—'}</span>
+                    </td>
+                    <td className="py-4 px-4">{r.phone || '—'}</td>
+                    <td className="py-4 px-4">{r.courseName || '—'}</td>
+                    <td className="py-4 px-4">
+                      {r.status === 'approved' ? (
+                        <span className="px-2 py-1 text-xs bg-green-100 text-green-800 rounded-full">مقبول</span>
+                      ) : r.status === 'rejected' ? (
+                        <span className="px-2 py-1 text-xs bg-red-100 text-red-800 rounded-full">مرفوض</span>
+                      ) : (
+                        <span className="px-2 py-1 text-xs bg-yellow-100 text-yellow-800 rounded-full">قيد المراجعة</span>
+                      )}
+                    </td>
+                    <td className="py-4 px-4 text-sm text-gray-600 flex items-center gap-1">
+                      <Calendar className="w-4 h-4" />
+                      {formatDate(r.createdAt)}
+                    </td>
+                    <td className="py-4 px-4">
+                      <div className="flex gap-2">
+                        <button onClick={() => approve(r)} className="btn btn-success btn-sm">
+                          <CheckCircle className="w-4 h-4 ml-1" /> موافقة
+                        </button>
+                        <button onClick={() => reject(r)} className="btn btn-danger btn-sm">
+                          <XCircle className="w-4 h-4 ml-1" /> رفض
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
       </div>
-
-      {/* Request Details Modal */}
-      {selectedRequest && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-6">
-              <h3 className="text-2xl font-bold text-primary">تفاصيل طلب التدريب</h3>
-              <button
-                onClick={() => setSelectedRequest(null)}
-                className="btn btn-outline-primary btn-sm"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            
-            <div className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-lg font-medium text-gray-700 mb-2">
-                    الاسم الكامل
-                  </label>
-                  <p className="text-xl text-gray-900 bg-gray-50 p-3 rounded-lg">
-                    {selectedRequest.name}
-                  </p>
-                </div>
-                
-                <div>
-                  <label className="block text-lg font-medium text-gray-700 mb-2">
-                    رقم الهاتف
-                  </label>
-                  <p className="text-xl text-gray-900 bg-gray-50 p-3 rounded-lg">
-                    {selectedRequest.phone}
-                  </p>
-                </div>
-              </div>
-              
-              <div>
-                <label className="block text-lg font-medium text-gray-700 mb-2">
-                  المجال المطلوب
-                </label>
-                <p className="text-xl text-gray-900 bg-gray-50 p-3 rounded-lg">
-                  {selectedRequest.requestedTopic}
-                </p>
-              </div>
-              
-              {selectedRequest.message && (
-                <div>
-                  <label className="block text-lg font-medium text-gray-700 mb-2">
-                    رسالة إضافية
-                  </label>
-                  <p className="text-base text-gray-900 bg-gray-50 p-3 rounded-lg">
-                    {selectedRequest.message}
-                  </p>
-                </div>
-              )}
-              
-              <div>
-                <label className="block text-lg font-medium text-gray-700 mb-2">
-                  تاريخ الطلب
-                </label>
-                <p className="text-base text-gray-900 bg-gray-50 p-3 rounded-lg">
-                  {formatDate(selectedRequest.createdAt)}
-                </p>
-              </div>
-              
-              {selectedRequest.processed && (
-                <div>
-                  <label className="block text-lg font-medium text-gray-700 mb-2">
-                    تاريخ المعالجة
-                  </label>
-                  <p className="text-base text-gray-900 bg-green-50 p-3 rounded-lg">
-                    {formatDate(selectedRequest.processedAt)}
-                  </p>
-                </div>
-              )}
-            </div>
-            
-            <div className="flex justify-end space-x-4 space-x-reverse mt-6">
-              {!selectedRequest.processed && (
-                <button
-                  onClick={() => {
-                    markAsProcessed(selectedRequest.id);
-                    setSelectedRequest(null);
-                  }}
-                  className="btn btn-success"
-                >
-                  <Check className="h-4 w-4 ml-1" />
-                  تم المعالجة
-                </button>
-              )}
-              
-              <button
-                onClick={() => setSelectedRequest(null)}
-                className="btn btn-outline-primary"
-              >
-                إغلاق
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {requests.length === 0 && (
-        <div className="text-center py-12">
-          <MessageSquare className="h-16 w-16 text-gray-400 mx-auto mb-4" />
-          <p className="text-xl text-gray-500">لا توجد طلبات تدريب حالياً</p>
-          <p className="text-base text-gray-400 mt-2">
-            ستظهر هنا طلبات الأشخاص الراغبين في الحصول على دورات تدريبية
-          </p>
-        </div>
-      )}
     </div>
   );
 };

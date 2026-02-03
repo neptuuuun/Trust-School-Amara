@@ -1,0 +1,29 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Students can upload to their own folders only
+    match /students/{uid}/{allPaths=**} {
+      allow read: if isSignedIn() && (request.auth.uid == uid ||
+        // Admins can read all (checked via Firestore users doc)
+        (exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
+         get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin'));
+      allow write: if isSignedIn() && request.auth.uid == uid;
+    }
+
+    // Payments screenshots: students can write their own, admins read all
+    match /payments/{paymentId}/{fileName} {
+      allow write: if isSignedIn();
+      allow read: if isSignedIn();
+    }
+
+    // Default deny
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

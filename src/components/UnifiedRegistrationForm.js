@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { User, Mail, Phone, BookOpen, GraduationCap, X, CreditCard, Copy, MessageCircle, CheckSquare } from 'lucide-react';
-import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
+import { addDoc, collection, serverTimestamp, doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
+import { useBranch } from '../contexts/BranchContext';
+import { useAuth } from '../contexts/AuthContext';
 
 const UnifiedRegistrationForm = ({ 
     courseType, // 'language' | 'support' | 'training'
@@ -12,6 +14,10 @@ const UnifiedRegistrationForm = ({
 }) => {
     const [loading, setLoading] = useState(false);
     const [submitted, setSubmitted] = useState(false);
+    const { selectedBranchId } = useBranch();
+    // FIX: Changed from { user } to { currentUser }
+    const { currentUser } = useAuth();
+    const [blocked, setBlocked] = useState(null); // { reason: string }
 
     const { register, handleSubmit, formState: { errors }, watch } = useForm();
     const watchPaymentMethod = watch('paymentMethod');
@@ -19,28 +25,115 @@ const UnifiedRegistrationForm = ({
     const onSubmit = async (formData) => {
         setLoading(true);
         try {
+            if (!selectedBranchId) {
+                throw new Error('يرجى اختيار الفرع أولاً.');
+            }
+            
+            // FIX: Changed from user?.uid to currentUser?.uid
+            if (!currentUser?.uid) {
+                throw new Error('يرجى تسجيل الدخول كطالب.');
+            }
+
+            // Verification gate: require verified=true under branch users
+            const userRef = doc(db, 'branches', selectedBranchId, 'users', currentUser.uid);
+            const userSnap = await getDoc(userRef);
+            
+            if (!userSnap.exists()) {
+                setBlocked({ reason: 'not_verified' });
+                setLoading(false);
+                return;
+            }
+            
+            const userDoc = userSnap.data();
+            
+            // Block if not verified
+            const isVerified = userDoc.isVerified === true || userDoc.verified === true;
+            if (!userDoc || !isVerified) {
+                setBlocked({ reason: 'not_verified' });
+                setLoading(false);
+                return;
+            }
+            
+            // For support lessons, also require yearly fee to be paid AND at least one subject paid
+            if (courseType === 'support') {
+                const yearlyFeePaid = userDoc.yearlyFeePaid === true || userDoc.paymentVerified === true;
+                const hasPaidSubjects = userDoc.paidSubjects && Array.isArray(userDoc.paidSubjects) && userDoc.paidSubjects.length > 0;
+                
+                if (!yearlyFeePaid || !hasPaidSubjects) {
+                    setBlocked({ reason: 'yearly_fee_not_paid' });
+                    setLoading(false);
+                    return;
+                }
+            }
+
+            // Build registration data - only include defined fields
             const registrationData = {
+                type: courseType, // 'language', 'support', or 'training'
                 name: formData.name,
                 email: formData.email,
                 phone: formData.phone,
                 courseType: courseType,
+                // FIX: Use courseData.id instead of courseData.trainingId
                 courseId: courseData.id,
                 courseName: getCourseName(formData),
-                level: formData.level || null,
                 paymentMethod: formData.paymentMethod,
                 paymentConfirmed: formData.paymentConfirmed || false,
-                createdAt: serverTimestamp()
+                branchId: selectedBranchId,
+                userId: currentUser.uid, // FIX: Changed from user.uid
+                createdAt: serverTimestamp(),
+                status: 'pending',
+                processed: false
             };
 
-            // Add training-specific data if available
-            if (courseType === 'training' && courseData.teacher) {
-                registrationData.teacher = courseData.teacher;
-            }
-            if (courseType === 'training' && courseData.timing) {
-                registrationData.timing = courseData.timing;
+            // Add optional level field only if it has a value
+            if (formData.level) {
+                registrationData.level = formData.level;
             }
 
-            await addDoc(collection(db, 'signups'), registrationData);
+            // Add training-specific data if available
+            if (courseType === 'training') {
+                // FIX: Use courseData.id as trainingId
+                registrationData.trainingId = courseData.id;
+                
+                // Add teacher/trainer name if available
+                if (courseData.teacherName || courseData.trainerName || courseData.teacher) {
+                    registrationData.teacherName = courseData.teacherName || courseData.trainerName || courseData.teacher;
+                }
+                
+                // Add timing info if available
+                if (courseData.timing) {
+                    const timingData = {};
+                    
+                    if (courseData.timing.day) {
+                        timingData.day = courseData.timing.day;
+                    }
+                    
+                    if (courseData.timing.start) {
+                        timingData.start = courseData.timing.start.toDate 
+                            ? courseData.timing.start.toDate().toISOString() 
+                            : courseData.timing.start;
+                    }
+                    
+                    if (courseData.timing.end) {
+                        timingData.end = courseData.timing.end.toDate 
+                            ? courseData.timing.end.toDate().toISOString() 
+                            : courseData.timing.end;
+                    }
+
+                    // Only add timing if it has at least one field
+                    if (Object.keys(timingData).length > 0) {
+                        registrationData.timing = timingData;
+                    }
+                }
+
+                // Add description if available
+                if (courseData.description) {
+                    registrationData.description = courseData.description;
+                }
+            }
+            
+            // Write to branch-scoped registrations
+            await addDoc(collection(db, 'branches', selectedBranchId, 'registrations'), registrationData);
             
             setSubmitted(true);
             
@@ -102,6 +195,53 @@ const UnifiedRegistrationForm = ({
         );
     }
 
+    // Blocked UI when verification not satisfied
+    if (blocked) {
+        const isYearlyFeeIssue = blocked.reason === 'yearly_fee_not_paid';
+        return (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+                <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-8 text-center">
+                    <div className={`w-16 h-16 ${isYearlyFeeIssue ? 'bg-red-100' : 'bg-yellow-100'} rounded-full flex items-center justify-center mx-auto mb-4`}>
+                        <svg className={`w-8 h-8 ${isYearlyFeeIssue ? 'text-red-600' : 'text-yellow-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M12 9v2m0 4h.01M12 2a10 10 0 100 20 10 10 0 000-20z"></path>
+                        </svg>
+                    </div>
+                    <h3 className={`text-2xl font-bold ${isYearlyFeeIssue ? 'text-red-700' : 'text-yellow-700'} mb-2`}>
+                        {isYearlyFeeIssue ? 'الرسوم السنوية غير مدفوعة' : 'الحساب غير موثق بعد'}
+                    </h3>
+                    <p className="text-gray-600 mb-6">
+                        {isYearlyFeeIssue 
+                            ? '⚠️ يجب دفع الرسوم السنوية والاشتراك في مادة واحدة على الأقل قبل التسجيل في الدروس. يرجى الذهاب إلى صفحة دفع الرسوم السنوية.'
+                            : 'حسابك غير موثق بعد. يرجى الانتظار حتى يقوم الإداري بمراجعة بطاقة الهوية والصورة الشخصية الخاصة بك.'}
+                    </p>
+                    <div className="flex gap-3">
+                        <button
+                            onClick={onClose}
+                            className="flex-1 border border-gray-300 text-gray-700 px-6 py-3 rounded-lg hover:bg-gray-50 transition-colors"
+                        >
+                            إغلاق
+                        </button>
+                        {isYearlyFeeIssue ? (
+                            <button
+                                onClick={() => { window.location.href = '/annual-fee'; }}
+                                className="flex-1 bg-primary text-white px-6 py-3 rounded-lg hover:bg-primary-600 transition-colors"
+                            >
+                                دفع الرسوم السنوية
+                            </button>
+                        ) : (
+                            <button
+                                onClick={() => { window.location.href = '/student-dashboard'; }}
+                                className="flex-1 bg-primary text-white px-6 py-3 rounded-lg hover:bg-primary-600 transition-colors"
+                            >
+                                الذهاب إلى صفحة الطالب
+                            </button>
+                        )}
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
@@ -131,9 +271,9 @@ const UnifiedRegistrationForm = ({
                         </p>
                         {courseType === 'training' && (
                             <div className="mt-2 space-y-1">
-                                {courseData.teacher && (
+                                {(courseData.teacherName || courseData.trainerName || courseData.teacher) && (
                                     <p className="text-sm text-gray-600">
-                                        <span className="font-medium">المدرب:</span> {courseData.teacher}
+                                        <span className="font-medium">المدرب:</span> {courseData.teacherName || courseData.trainerName || courseData.teacher}
                                     </p>
                                 )}
                             </div>
@@ -301,7 +441,7 @@ const UnifiedRegistrationForm = ({
                                         
                                         <div className="text-center">
                                             <span className="font-medium text-gray-700">الاسم: </span>
-                                            <span className="font-mono">M.AIT HAMOU YOUNES</span>
+                                            <span className="font-mono"></span>
                                         </div>
                                     </div>
                                 )}

@@ -6,6 +6,15 @@
 @import "./styles/design-tokens.css";
 @import "./styles/components.css";
 
+html,
+body {
+  width: 100%;
+  overflow-x: hidden;
+}
+
+#root {
+  min-height: 100vh;
+}
 
 body {
   margin: 0;

@@ -1,0 +1,101 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isMainAdmin() {
+      return request.auth != null &&
+             request.auth.token.email == "marouabenzaoui48@gmail.com";
+    }
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isSelf(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isBranchAdmin(branchId) {
+      return isAuthenticated() && (
+        isMainAdmin()
+        || (
+          exists(/databases/$(database)/documents/branches/$(branchId)/users/$(request.auth.uid))
+          && get(/databases/$(database)/documents/branches/$(branchId)/users/$(request.auth.uid)).data.role == 'admin'
+        )
+        || (
+          exists(/databases/$(database)/documents/branches/$(branchId)/meta/info)
+          && get(/databases/$(database)/documents/branches/$(branchId)/meta/info).data.adminEmails.hasAny([request.auth.token.email])
+        )
+      );
+    }
+
+    function isSafeUserSelfUpdate() {
+      // Students can update their own profile BUT cannot change access-control fields.
+      // These fields must only be changed by admins/backends.
+      return !(('role' in request.resource.data) && request.resource.data.role != resource.data.role)
+        && !(('studyYear' in request.resource.data) && request.resource.data.studyYear != resource.data.studyYear)
+        && !(('schoolLevel' in request.resource.data) && request.resource.data.schoolLevel != resource.data.schoolLevel)
+        && !(('yearlyFeePaid' in request.resource.data) && request.resource.data.yearlyFeePaid != resource.data.yearlyFeePaid)
+        && !(('paymentVerified' in request.resource.data) && request.resource.data.paymentVerified != resource.data.paymentVerified)
+        && !(('accountVerified' in request.resource.data) && request.resource.data.accountVerified != resource.data.accountVerified)
+        && !(('verified' in request.resource.data) && request.resource.data.verified != resource.data.verified)
+        && !(('verificationStatus' in request.resource.data) && request.resource.data.verificationStatus != resource.data.verificationStatus);
+    }
+
+    match /users/{userId} {
+      allow read: if true;
+      allow create: if true;
+      allow update: if isMainAdmin() || (isSelf(userId) && isSafeUserSelfUpdate());
+      allow delete: if isMainAdmin();
+    }
+
+    // Global monthly support lesson registrations must be server-created (via callable function)
+    match /supportLessonRegistrations/{registrationId} {
+      allow read: if isMainAdmin()
+        || (isAuthenticated() && resource.data.userId == request.auth.uid)
+        || isBranchAdmin(resource.data.branchId);
+      allow create, update, delete: if false;
+    }
+
+    match /branches/{branchId} {
+      allow read: if true;
+      allow create, update, delete: if isMainAdmin();
+
+      // Support lessons are public readable; only admins can write.
+      match /supportLessons/{lessonId} {
+        allow read: if true;
+        allow create, update, delete: if isBranchAdmin(branchId);
+      }
+
+      match /annualPayments/{paymentId} {
+        allow read: if true;
+        allow create: if true;
+        allow update, delete: if isBranchAdmin(branchId);
+      }
+
+      // Branch user profiles: allow create (signup), allow self update with restrictions.
+      match /users/{userId} {
+        allow read: if true;
+        allow create: if true;
+        allow update: if isBranchAdmin(branchId) || (isSelf(userId) && isSafeUserSelfUpdate());
+        allow delete: if isBranchAdmin(branchId);
+      }
+
+      // Keep legacy permissive behavior for other branch collections (existing app flows).
+      match /{collection}/{docId} {
+        allow read: if true;
+        allow create: if true;
+        allow update, delete: if isMainAdmin();
+
+        match /{subcollection}/{subDocId} {
+          allow read: if true;
+          allow create: if true;
+          allow update, delete: if isMainAdmin();
+        }
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "admin": {
+    "title": "لوحة الإدارة",
+    "backToSite": "العودة للموقع الرئيسي",
+    "logout": "تسجيل الخروج",
+    "nav": {
+      "overview": "لوحة التحكم",
+      "verification": "تحقق الطلاب",
+      "trainingRequests": "طلبات التدريب",
+      "languageRequests": "طلبات اللغات",
+      "supportLessons": "دروس الدعم",
+      "branches": "إدارة الفروع",
+      "payments": "المدفوعات"
+    },
+    "topbar": {
+      "branch": "الفرع:",
+      "chooseBranch": "اختر الفرع"
+    }
+  },
+  "pages": {
+    "verificationPanel": {
+      "title": "التحقق من الطلاب",
+      "subtitle": "عرض طلبات طلاب دروس الدعم مع الصور",
+      "yearlyFee": "الرسوم السنوية",
+      "approved": "موافقة",
+      "rejected": "رفض",
+      "verified": "موثق",
+      "noApplicants": "لا توجد طلبات تحقق لطلاب دروس الدعم حالياً."
+    },
+    "supportLessons": {
+      "title": "طلاب دروس الدعم",
+      "subtitle": "الطلاب المؤكدون والملتحقون بدروس الدعم",
+      "monthlyPay": "دفع شهري",
+      "recordThisMonth": "تسجيل دفعة هذا الشهر",
+      "empty": "لا يوجد طلاب مؤكدون في دروس الدعم حالياً"
+    }
+  }
+}

@@ -27,7 +27,7 @@ function SupportLessonsPage() {
   const [selectedLevel, setSelectedLevel] = useState(null);
 
   // Fetch all lessons to count how many are available per year (for display only)
-  const { lessons, loading: lessonsLoading, error: lessonsError } = useBranchSupportLessons(selectedBranchId);
+  const { lessons } = useBranchSupportLessons(selectedBranchId);
 
   // Count lessons per year for display (optional info)
   const getLessonCountForYear = (yearId) => {

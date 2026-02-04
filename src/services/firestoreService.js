@@ -912,7 +912,6 @@ export const verifyAnnualPayment = async (branchId, paymentId, adminInfo) => {
     try {
       const userSnap = await getDoc(userRef);
       const userData = userSnap.exists() ? (userSnap.data() || {}) : {};
-      const existingStudyYear = String(userData.studyYear || '').trim();
       const existingSchoolLevel = String(userData.schoolLevel || '').trim();
       
       // paymentData.academicYear contains the year ID (e.g., "mid1", "sec2")
@@ -1124,12 +1123,6 @@ const getSupportLessonSummaryRef = (branchId, studentId, subjectId, yearId = 'un
   const summaryId = buildSupportLessonRegistrationId(studentId, subjectId, yearId);
   return supportLessonRegistrationSummaryDoc(branchId, summaryId);
 };
-
-const getSupportEnrollmentDoc = (branchId, enrollmentId) =>
-  doc(db, `branches/${branchId}/${SUPPORT_LESSON_ENROLLMENTS_COLLECTION}/${enrollmentId}`);
-
-const supportEnrollmentCollection = (branchId) =>
-  getBranchCollection(branchId, SUPPORT_LESSON_ENROLLMENTS_COLLECTION);
 
 export const ensureSupportLessonRegistrationRecord = async ({
   branchId,

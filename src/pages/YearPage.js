@@ -45,6 +45,9 @@ const formatPriceText = (raw) => {
  * - Shows "لا توجد دروس مضافة بعد" if no lessons exist
  */
 function YearPage() {
+  // ============================================
+  // ALL HOOKS MUST BE CALLED UNCONDITIONALLY AT TOP LEVEL
+  // ============================================
   const { level: levelParam, year: yearParam } = useParams();
   const navigate = useNavigate();
   const { user, profileDoc } = useAuth();
@@ -52,6 +55,18 @@ function YearPage() {
   
   const [showLoginModal, setShowLoginModal] = useState(false);
   const { annualFeeStatus, loading: annualFeeLoading } = useAnnualFeeStatus(user?.uid, selectedBranchId);
+  
+  // Fetch lessons for this specific level and year from current branch
+  // Hook handles null/undefined branchId safely, so we can call it unconditionally
+  const { lessons, loading: lessonsLoading, error: lessonsError } = useBranchSupportLessons(
+    selectedBranchId,
+    levelParam,
+    yearParam
+  );
+
+  // ============================================
+  // CONDITIONAL LOGIC AND EARLY RETURNS AFTER HOOKS
+  // ============================================
   const canAccessSupportLessons = annualFeeStatus.status === 'pending' || annualFeeStatus.status === 'verified';
   const checkingFee = user && selectedBranchId ? annualFeeLoading : false;
 
@@ -86,13 +101,6 @@ function YearPage() {
       </div>
     );
   }
-
-  // Fetch lessons for this specific level and year from current branch
-  const { lessons, loading: lessonsLoading, error: lessonsError } = useBranchSupportLessons(
-    selectedBranchId,
-    levelParam,
-    yearParam
-  );
 
   // Format day name in Arabic
   const formatDay = (day) => {

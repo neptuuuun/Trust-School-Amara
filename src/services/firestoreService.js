@@ -1131,8 +1131,6 @@ const getSupportEnrollmentDoc = (branchId, enrollmentId) =>
 const supportEnrollmentCollection = (branchId) =>
   getBranchCollection(branchId, SUPPORT_LESSON_ENROLLMENTS_COLLECTION);
 
-const buildEnrollmentId = (studentId, subjectId) => `${studentId}_${subjectId}`;
-
 export const ensureSupportLessonRegistrationRecord = async ({
   branchId,
   studentId,
@@ -1268,7 +1266,6 @@ export const createSupportLessonRegistration = async (registrationData = {}) => 
     verifiedBy = null,
     verifiedAt = null,
     createdAt: createdAtOverride = null,
-    registrationId = null,
   } = registrationData;
 
   if (!branchId) throw new Error('branchId is required for support lesson registration');

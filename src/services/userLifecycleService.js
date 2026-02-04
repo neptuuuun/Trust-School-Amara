@@ -7,15 +7,11 @@ import { db } from '../firebase';
 import { 
   collection, 
   doc, 
-  getDoc, 
   getDocs, 
   updateDoc, 
-  deleteDoc, 
   query, 
   where, 
-  orderBy, 
   serverTimestamp,
-  writeBatch,
   setDoc
 } from 'firebase/firestore';
 import { supabase } from '../supabase';

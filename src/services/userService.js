@@ -55,7 +55,7 @@ export const uploadToSupabase = async (file, userId, fileType, paymentId = null)
 
     console.log(`🔵 Uploading ${fileType} to Supabase:`, filePath);
 
-    const { data, error: uploadError } = await supabase.storage
+    const { error: uploadError } = await supabase.storage
       .from('user-uploads')
       .upload(filePath, file, { 
         upsert: true,

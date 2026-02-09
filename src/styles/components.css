@@ -330,6 +330,44 @@
   clip: rect(0, 0, 0, 0);
 }
 
+/* === ADMIN DATA TABLES === */
+/* Reusable, responsive admin table layout without hard-coded pixel widths.
+ * - Horizontal scroll if content overflows
+ * - Action columns kept on a single line
+ * - Works across different admin pages for consistent behavior
+ */
+.admin-table-container {
+  @apply bg-white rounded-lg shadow-md border border-gray-200;
+}
+
+.admin-table-scroll {
+  @apply w-full overflow-x-auto;
+}
+
+.admin-table {
+  @apply min-w-full table-auto text-sm;
+}
+
+.admin-table thead {
+  @apply bg-gray-50 border-b border-gray-200;
+}
+
+.admin-table th {
+  @apply px-4 md:px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap;
+}
+
+.admin-table td {
+  @apply px-4 md:px-6 py-3 align-middle text-sm text-gray-700;
+}
+
+.admin-table-actions {
+  @apply whitespace-nowrap;
+}
+
+.admin-table-actions > * {
+  @apply inline-flex items-center justify-center gap-1;
+}
+
 /* High contrast mode support */
 @media (prefers-contrast: high) {
   .btn-primary {

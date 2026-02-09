@@ -60,7 +60,7 @@ firebase deploy --only firestore:rules
 ### Step 3: Test Admin Login
 
 1. Navigate to `/admin/login` or `/admin`
-2. Login with: `marouabenzaoui48@gmail.com`
+2. Login with: `trustschoolamara@gmail.com`
 3. You should be redirected to `/admin` (admin dashboard)
 4. Select a branch from the dropdown
 5. Verify you can see:

@@ -324,42 +324,28 @@ const TrainingRequestsPage = () => {
         </div>
       ) : viewMode === 'table' ? (
         /* Table View */
-        <div className="bg-white rounded-lg shadow-md overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-gray-50 border-b border-gray-200">
+        <div className="admin-table-container">
+          <div className="admin-table-scroll">
+            <table className="admin-table">
+              <thead>
                 <tr>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    الاسم
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    البريد الإلكتروني
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    نوع الدورة
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    التاريخ المفضل
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    تاريخ الإرسال
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    الحالة
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    الإجراءات
-                  </th>
+                  <th>الاسم</th>
+                  <th>البريد الإلكتروني</th>
+                  <th>نوع الدورة</th>
+                  <th>التاريخ المفضل</th>
+                  <th>تاريخ الإرسال</th>
+                  <th>الحالة</th>
+                  <th>الإجراءات</th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
+              <tbody>
                 {filteredRequests.map((request) => {
                   const showNotes = expandedNotes[request.id] || false;
                   const normalizedStatus = normalizeStatus(request.status);
                   return (
                     <React.Fragment key={request.id}>
                       <tr className="hover:bg-gray-50 transition-colors">
-                        <td className="px-6 py-4 whitespace-nowrap">
+                        <td className="whitespace-nowrap">
                           <div className="flex items-center">
                             <User className="w-4 h-4 text-gray-400 ml-2" />
                             <span className="text-sm font-medium text-gray-900">
@@ -367,23 +353,23 @@ const TrainingRequestsPage = () => {
                             </span>
                           </div>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
+                        <td className="whitespace-nowrap">
                           <div className="flex items-center">
                             <Mail className="w-4 h-4 text-gray-400 ml-2" />
                             <span className="text-sm text-gray-600">{request.email || 'غير محدد'}</span>
                           </div>
                         </td>
-                        <td className="px-6 py-4">
+                        <td>
                           <span className="text-sm text-gray-900">
                             {request.course || request.courseName || 'غير محدد'}
                           </span>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
+                        <td className="whitespace-nowrap">
                           <span className="text-sm text-gray-500">
                             {request.preferredDate || 'غير محدد'}
                           </span>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
+                        <td className="whitespace-nowrap">
                           <div className="flex items-center">
                             <Calendar className="w-4 h-4 text-gray-400 ml-2" />
                             <span className="text-sm text-gray-600">
@@ -391,11 +377,11 @@ const TrainingRequestsPage = () => {
                             </span>
                           </div>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
+                        <td className="whitespace-nowrap">
                           {getStatusBadge(request.status)}
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="flex items-center gap-2">
+                        <td className="admin-table-actions">
+                          <div className="flex flex-wrap items-center gap-2">
                             {request.message && (
                               <button
                                 onClick={() => setExpandedNotes(prev => ({ ...prev, [request.id]: !prev[request.id] }))}

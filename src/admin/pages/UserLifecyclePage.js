@@ -406,27 +406,27 @@ const UserLifecyclePage = () => {
           </p>
         </div>
       ) : (
-        <div className="bg-white rounded-lg shadow-md overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[1200px]">
-              <thead className="bg-gray-50 border-b border-gray-200">
+        <div className="admin-table-container">
+          <div className="admin-table-scroll">
+            <table className="admin-table">
+              <thead>
                 <tr>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">المستخدم</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">الحالة</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">آخر نشاط</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">الفرع</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">التحقق</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">الإجراءات</th>
+                  <th>المستخدم</th>
+                  <th>الحالة</th>
+                  <th>آخر نشاط</th>
+                  <th>الفرع</th>
+                  <th>التحقق</th>
+                  <th>الإجراءات</th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
+              <tbody>
                 {filteredUsers.map((user) => {
                   const StatusIcon = getStatusIcon(user.lifecycleStatus || USER_STATUS.ACTIVE);
                   const statusColor = getStatusColor(user.lifecycleStatus || USER_STATUS.ACTIVE);
                   
                   return (
                     <tr key={user.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-6 py-4 whitespace-nowrap">
+                      <td className="whitespace-nowrap">
                         <div className="flex items-center gap-3">
                           {user.photoUrl && (
                             <button 
@@ -447,13 +447,13 @@ const UserLifecyclePage = () => {
                           </div>
                         </div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
+                      <td className="whitespace-nowrap">
                         <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full bg-${statusColor}-100 text-${statusColor}-800 text-xs font-medium`}>
                           <StatusIcon className="w-3 h-3" />
                           {getStatusDisplayName(user.lifecycleStatus || USER_STATUS.ACTIVE)}
                         </span>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
+                      <td className="whitespace-nowrap">
                         <div className="text-sm text-gray-700">
                           {formatLastActivity(user.lastActivityAt || user.createdAt)}
                         </div>
@@ -461,14 +461,14 @@ const UserLifecyclePage = () => {
                           {user.lastActivityType || 'account_creation'}
                         </div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
+                      <td className="whitespace-nowrap">
                         <div className="text-sm text-gray-700">
                           {user.branchId === 'boumerdes' ? 'بومرداس' : 
                            user.branchId === 'bordj_menaiel' ? 'برج منايل' : 
                            user.branchName || user.branchId || '—'}
                         </div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
+                      <td className="whitespace-nowrap">
                         {user.verified ? (
                           <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-green-100 text-green-800 text-xs font-medium">
                             <CheckCircle className="w-3 h-3" />
@@ -481,8 +481,8 @@ const UserLifecyclePage = () => {
                           </span>
                         )}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center gap-2">
+                      <td className="admin-table-actions">
+                        <div className="flex flex-wrap items-center gap-2">
                           <button 
                             onClick={() => openDetailsModal(user)} 
                             className="flex items-center gap-1 px-3 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 transition-colors text-sm"

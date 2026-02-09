@@ -149,34 +149,34 @@ const AnnualFees = () => {
         </div>
       </div>
 
-      <div className="bg-white rounded-xl shadow-md border border-gray-100">
-        <div className="p-6 overflow-x-auto">
+      <div className="admin-table-container rounded-xl">
+        <div className="admin-table-scroll p-6">
           {annualFees.length === 0 ? (
             <div className="text-center py-12 text-gray-500">لا توجد طلبات رسوم سنوية</div>
           ) : (
-            <table className="w-full">
+            <table className="admin-table">
               <thead>
-                <tr className="border-b border-gray-200">
-                  <th className="text-right py-3 px-4 font-semibold text-gray-700">المستوى</th>
-                  <th className="text-right py-3 px-4 font-semibold text-gray-700">المدرسة</th>
-                  <th className="text-right py-3 px-4 font-semibold text-gray-700">المواد</th>
-                  <th className="text-right py-3 px-4 font-semibold text-gray-700">المبلغ</th>
-                  <th className="text-right py-3 px-4 font-semibold text-gray-700">طريقة الدفع</th>
-                  <th className="text-right py-3 px-4 font-semibold text-gray-700">الحالة</th>
-                  <th className="text-right py-3 px-4 font-semibold text-gray-700">التاريخ</th>
-                  <th className="text-right py-3 px-4 font-semibold text-gray-700">إجراءات</th>
+                <tr>
+                  <th>المستوى</th>
+                  <th>المدرسة</th>
+                  <th>المواد</th>
+                  <th>المبلغ</th>
+                  <th>طريقة الدفع</th>
+                  <th>الحالة</th>
+                  <th>التاريخ</th>
+                  <th>إجراءات</th>
                 </tr>
               </thead>
               <tbody>
                 {annualFees.map((fee) => (
                   <tr key={fee.id} className="border-b border-gray-100 hover:bg-gray-50">
-                    <td className="py-4 px-4">
+                    <td>
                       <div className="font-semibold text-gray-800">{fee.level || '—'}</div>
                       {fee.year && <div className="text-sm text-gray-600">السنة: {fee.year}</div>}
                       {fee.stream && <div className="text-sm text-gray-600">الشعبة: {fee.stream}</div>}
                     </td>
-                    <td className="py-4 px-4 text-sm">{fee.school || '—'}</td>
-                    <td className="py-4 px-4">
+                    <td className="text-sm">{fee.school || '—'}</td>
+                    <td>
                       <div className="flex flex-wrap gap-1">
                         {fee.subjects?.slice(0, 2).map((subject, i) => (
                           <span key={i} className="px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded-full">
@@ -190,11 +190,11 @@ const AnnualFees = () => {
                         )}
                       </div>
                     </td>
-                    <td className="py-4 px-4">
+                    <td>
                       <span className="font-semibold text-green-600">{fee.totalAmount || fee.amount || 0} دج</span>
                     </td>
-                    <td className="py-4 px-4 text-sm">{fee.paymentMethod || '—'}</td>
-                    <td className="py-4 px-4">
+                    <td className="text-sm">{fee.paymentMethod || '—'}</td>
+                    <td>
                       {fee.status === 'verified' ? (
                         <span className="px-2 py-1 text-xs bg-green-100 text-green-800 rounded-full">تم التحقق</span>
                       ) : fee.status === 'rejected' ? (
@@ -203,12 +203,12 @@ const AnnualFees = () => {
                         <span className="px-2 py-1 text-xs bg-yellow-100 text-yellow-800 rounded-full">قيد المراجعة</span>
                       )}
                     </td>
-                    <td className="py-4 px-4 text-sm text-gray-600 flex items-center gap-1">
+                    <td className="text-sm text-gray-600 flex items-center gap-1 whitespace-nowrap">
                       <Calendar className="w-4 h-4" />
                       {formatDate(fee.createdAt)}
                     </td>
-                    <td className="py-4 px-4">
-                      <div className="flex gap-2">
+                    <td className="admin-table-actions">
+                      <div className="flex flex-wrap gap-2">
                         <button 
                           onClick={() => handleOpenModal(fee)} 
                           className="btn btn-outline-primary btn-sm"

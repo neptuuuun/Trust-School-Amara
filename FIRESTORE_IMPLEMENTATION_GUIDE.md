@@ -157,7 +157,7 @@ branches/
 ```javascript
 {
   branchName: "Bordj Menaiel",
-  adminEmails: ["marouabenzaoui48@gmail.com"]
+  adminEmails: ["trustschoolamara@gmail.com"]
 }
 ```
 

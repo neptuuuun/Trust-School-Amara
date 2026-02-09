@@ -85,32 +85,32 @@ const TrainingRequests = () => {
         </div>
       </div>
 
-      <div className="bg-white rounded-xl shadow-md border border-gray-100">
-        <div className="p-6 overflow-x-auto">
+      <div className="admin-table-container rounded-xl">
+        <div className="admin-table-scroll p-6">
           {requests.length === 0 ? (
             <div className="text-center py-12 text-gray-500">لا توجد طلبات</div>
           ) : (
-            <table className="w-full">
+            <table className="admin-table">
               <thead>
-                <tr className="border-b border-gray-200">
-                  <th className="text-right py-3 px-4 font-semibold text-gray-700">الاسم</th>
-                  <th className="text-right py-3 px-4 font-semibold text-gray-700">الهاتف</th>
-                  <th className="text-right py-3 px-4 font-semibold text-gray-700">الدورة</th>
-                  <th className="text-right py-3 px-4 font-semibold text-gray-700">الحالة</th>
-                  <th className="text-right py-3 px-4 font-semibold text-gray-700">التاريخ</th>
-                  <th className="text-right py-3 px-4 font-semibold text-gray-700">إجراءات</th>
+                <tr>
+                  <th>الاسم</th>
+                  <th>الهاتف</th>
+                  <th>الدورة</th>
+                  <th>الحالة</th>
+                  <th>التاريخ</th>
+                  <th>إجراءات</th>
                 </tr>
               </thead>
               <tbody>
                 {requests.map((r) => (
                   <tr key={r.id} className="border-b border-gray-100 hover:bg-gray-50">
-                    <td className="py-4 px-4 flex items-center gap-2">
+                    <td className="flex items-center gap-2">
                       <FileText className="w-5 h-5 text-gray-400" />
                       <span className="font-semibold text-gray-800">{r.name || '—'}</span>
                     </td>
-                    <td className="py-4 px-4">{r.phone || '—'}</td>
-                    <td className="py-4 px-4">{r.courseName || '—'}</td>
-                    <td className="py-4 px-4">
+                    <td>{r.phone || '—'}</td>
+                    <td>{r.courseName || '—'}</td>
+                    <td>
                       {r.status === 'approved' ? (
                         <span className="px-2 py-1 text-xs bg-green-100 text-green-800 rounded-full">مقبول</span>
                       ) : r.status === 'rejected' ? (
@@ -119,12 +119,12 @@ const TrainingRequests = () => {
                         <span className="px-2 py-1 text-xs bg-yellow-100 text-yellow-800 rounded-full">قيد المراجعة</span>
                       )}
                     </td>
-                    <td className="py-4 px-4 text-sm text-gray-600 flex items-center gap-1">
+                    <td className="text-sm text-gray-600 flex items-center gap-1 whitespace-nowrap">
                       <Calendar className="w-4 h-4" />
                       {formatDate(r.createdAt)}
                     </td>
-                    <td className="py-4 px-4">
-                      <div className="flex gap-2">
+                    <td className="admin-table-actions">
+                      <div className="flex flex-wrap gap-2">
                         <button onClick={() => approve(r)} className="btn btn-success btn-sm">
                           <CheckCircle className="w-4 h-4 ml-1" /> موافقة
                         </button>

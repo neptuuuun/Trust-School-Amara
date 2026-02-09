@@ -289,21 +289,21 @@ const UsersPage = () => {
           </p>
         </div>
       ) : viewMode === 'table' ? (
-        <div className="bg-white rounded-lg shadow-md overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[1000px]">
-              <thead className="bg-gray-50 border-b border-gray-200">
+        <div className="admin-table-container">
+          <div className="admin-table-scroll">
+            <table className="admin-table">
+              <thead>
                 <tr>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">الاسم الكامل</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">رقم التسجيل</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">البريد الإلكتروني</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">الفرع</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">الصور</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">الحالة</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">الإجراءات</th>
+                  <th>الاسم الكامل</th>
+                  <th>رقم التسجيل</th>
+                  <th>البريد الإلكتروني</th>
+                  <th>الفرع</th>
+                  <th>الصور</th>
+                  <th>الحالة</th>
+                  <th>الإجراءات</th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
+              <tbody>
                 {filteredUsers.map((user) => (
                   (console.log('[Admin UsersPage] Pending user row', {
                     path: `branches/${selectedBranchId}/users/${user.id}`,
@@ -312,21 +312,21 @@ const UsersPage = () => {
                     doc: user,
                   }),
                   <tr key={user.id} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="whitespace-nowrap">
                       <div className="text-sm font-medium text-gray-900">{user.fullName || 'غير محدد'}</div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="whitespace-nowrap">
                       <div className="text-sm text-gray-700">{user.registrationNumber || '—'}</div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="whitespace-nowrap">
                       <div className="text-sm text-gray-600">{user.email || '—'}</div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="whitespace-nowrap">
                       <div className="text-sm text-gray-700">
                         {user.branchId === 'boumerdes' ? 'بومرداس' : user.branchId === 'bordj_menaiel' ? 'برج منايل' : user.branchName || user.branchId || '—'}
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="whitespace-nowrap">
                       <div className="flex items-center gap-2">
                         {user.photoUrl && (
                           <button onClick={() => openImageModal(user.photoUrl, 'الصورة الشخصية')} className="relative group" title="الصورة الشخصية">
@@ -344,17 +344,21 @@ const UsersPage = () => {
                             </div>
                           </button>
                         )}
-                        {!user.photoUrl && !user.idCardUrl && <span className="text-gray-400 text-xs">لا توجد صور</span>}
+                        {!user.photoUrl && !user.idCardUrl && <span className="text-gray-400 text-xs whitespace-normal">لا توجد صور</span>}
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="whitespace-nowrap">
                       <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-yellow-100 text-yellow-800 text-xs font-medium">
                         <Clock className="w-3 h-3" />قيد المراجعة
                       </span>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <button onClick={() => openDetailsModal(user)} className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-700 transition-colors text-sm font-medium">
-                        <Eye className="w-4 h-4" />عرض التفاصيل
+                    <td className="admin-table-actions">
+                      <button
+                        onClick={() => openDetailsModal(user)}
+                        className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-700 transition-colors text-sm font-medium"
+                      >
+                        <Eye className="w-4 h-4" />
+                        عرض التفاصيل
                       </button>
                     </td>
                   </tr>

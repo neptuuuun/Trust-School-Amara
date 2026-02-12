@@ -289,28 +289,42 @@ const SupportLessonRegistrationForm = () => {
         user.uid
       );
 
-      await createSupportLessonRegistration({
-        branchId: selectedBranchId,
-        userId: user.uid,
-        userName: user.displayName || userData?.fullName || '',
-        userEmail: user.email || '',
-        lessonId: lesson?.id || selectedLesson,
-        lessonName: lesson?.name || lesson?.subject || 'درس دعم',
-        subjectName: lesson?.subject || lesson?.subjects?.[0] || lesson?.name || '',
-        studyYearId,
-        studyYearLabel,
-        studyLevelId,
-        source: 'manual',
-        durationInMonths: durationMonths,
-        monthlyPrice: pricePerMonth ?? null,
-        totalPrice: pricePerMonth != null ? pricePerMonth * durationMonths : null,
-        startDate: submissionStartDate,
-        endDate: subscriptionWindow.endDate,
-        academicYear: subscriptionWindow.academicYear,
-        paymentProofUrl,
-        status: 'pending'
+      // Get Firebase ID token for authentication
+      const authToken = await user.getIdToken();
+
+      // Call local Express API instead of Firebase Cloud Function
+      const response = await fetch('http://localhost:5000/api/createSupportLessonRegistration', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          branchId: selectedBranchId,
+          lessonId: lesson?.id || selectedLesson,
+          durationInMonths: durationMonths,
+          startDate: submissionStartDate,
+          endDate: subscriptionWindow.endDate,
+          academicYear: subscriptionWindow.academicYear,
+          paymentProofUrl,
+          monthlyPrice: pricePerMonth ?? null,
+          totalPrice: pricePerMonth != null ? pricePerMonth * durationMonths : null,
+          source: 'manual'
+        })
       });
 
+      const result = await response.json();
+
+      if (!response.ok) {
+        console.error('API Error:', result);
+        // Map API error codes to form error messages
+        const errorCode = result?.code || 'unknown';
+        const mappedError = new Error(result?.message || 'فشل في إرسال الطلب');
+        mappedError.code = errorCode;
+        throw mappedError;
+      }
+
+      console.log('Registration successful:', result);
       setSuccess('تم إرسال طلب الاشتراك بنجاح! سيتم مراجعته من قبل الإدارة.');
       setPaymentProof(null);
       setDurationMonths(1);
@@ -340,6 +354,12 @@ const SupportLessonRegistrationForm = () => {
           break;
         case 'summer-registration-forbidden':
           setError('لا يمكن إنشاء اشتراك جديد خلال أشهر العطلة الصيفية (يونيو، يوليو، أغسطس).');
+          break;
+        case 'unauthenticated':
+          setError('يجب تسجيل الدخول أولاً.');
+          break;
+        case 'permission-denied':
+          setError('ليس لديك الإذن لإجراء هذه العملية.');
           break;
         default:
           setError('حدث خطأ أثناء إرسال الطلب');

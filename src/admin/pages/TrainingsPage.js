@@ -138,7 +138,7 @@ const TrainingsPage = () => {
         alert('تم تحديث بيانات الدورة بنجاح');
       } else {
         await createTraining(selectedBranchId, trainingData, buildAdminInfo());
-        alert('تم حفظ الدورة. ستظهر للطلاب بعد التحقق.');
+        alert('تم حفظ الدورة.');
       }
       resetForm();
     } catch (error) {

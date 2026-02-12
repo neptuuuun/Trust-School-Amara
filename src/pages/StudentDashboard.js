@@ -46,6 +46,8 @@ const StudentDashboard = () => {
   const [enrolledSubjects, setEnrolledSubjects] = useState([]);
   const [payments, setPayments] = useState([]);
   const [supportRegistrations, setSupportRegistrations] = useState([]);
+  const [pendingLanguageForms, setPendingLanguageForms] = useState([]);
+  const [pendingTrainingForms, setPendingTrainingForms] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [showPaymentForm, setShowPaymentForm] = useState(false);
   const [selectedPayment, setSelectedPayment] = useState(null);
@@ -211,6 +213,66 @@ const StudentDashboard = () => {
           }
         );
         unsubscribes.push(unsubSupportRegs);
+
+        // 4. Pending language registrations (student-scoped forms)
+        const languageFormsRef = collection(
+          db,
+          'branches',
+          selectedBranchId,
+          'languagesForms',
+          user.uid,
+          'languageFormEntries'
+        );
+        const unsubPendingLanguages = onSnapshot(
+          languageFormsRef,
+          (snapshot) => {
+            if (!isActiveRef.current) return;
+            const pending = snapshot.docs
+              .map((d) => ({ id: d.id, ...d.data() }))
+              .filter((entry) => String(entry.status || '').toLowerCase() === 'pending')
+              .sort((a, b) => {
+                const aDate = a.submittedAt?.toDate ? a.submittedAt.toDate() : new Date(a.submittedAt || 0);
+                const bDate = b.submittedAt?.toDate ? b.submittedAt.toDate() : new Date(b.submittedAt || 0);
+                return bDate - aDate;
+              });
+            setPendingLanguageForms(pending);
+          },
+          (error) => {
+            console.error('Pending language forms error:', error);
+            if (isActiveRef.current) setPendingLanguageForms([]);
+          }
+        );
+        unsubscribes.push(unsubPendingLanguages);
+
+        // 5. Pending training registrations (student-scoped forms)
+        const trainingFormsRef = collection(
+          db,
+          'branches',
+          selectedBranchId,
+          'trainingsForms',
+          user.uid,
+          'trainingFormEntries'
+        );
+        const unsubPendingTrainings = onSnapshot(
+          trainingFormsRef,
+          (snapshot) => {
+            if (!isActiveRef.current) return;
+            const pending = snapshot.docs
+              .map((d) => ({ id: d.id, ...d.data() }))
+              .filter((entry) => String(entry.status || '').toLowerCase() === 'pending')
+              .sort((a, b) => {
+                const aDate = a.submittedAt?.toDate ? a.submittedAt.toDate() : new Date(a.submittedAt || 0);
+                const bDate = b.submittedAt?.toDate ? b.submittedAt.toDate() : new Date(b.submittedAt || 0);
+                return bDate - aDate;
+              });
+            setPendingTrainingForms(pending);
+          },
+          (error) => {
+            console.error('Pending training forms error:', error);
+            if (isActiveRef.current) setPendingTrainingForms([]);
+          }
+        );
+        unsubscribes.push(unsubPendingTrainings);
 
       } catch (error) {
         console.error('Setup error:', error);
@@ -667,6 +729,46 @@ const StudentDashboard = () => {
                       <li>التسجيل في الدورات التكوينية</li>
                       <li>دفع الرسوم السنوية للوصول إلى دروس الدعم</li>
                     </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Course Registration Pending Banner */}
+          {(pendingLanguageForms.length > 0 || pendingTrainingForms.length > 0) && (
+            <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-6">
+              <div className="flex items-start gap-4">
+                <Clock className="w-8 h-8 text-blue-600 flex-shrink-0 mt-1" />
+                <div className="flex-1">
+                  <h3 className="text-xl font-bold text-blue-900 mb-2">
+                    طلبات التسجيل في الدورات قيد المراجعة
+                  </h3>
+                  <p className="text-blue-800 mb-3">
+                    تم استلام طلباتك وسيتم تفعيل الوصول فور موافقة الإدارة.
+                  </p>
+                  <div className="bg-white rounded-lg border border-blue-200 p-4 space-y-2">
+                    {pendingLanguageForms.slice(0, 5).map((entry) => (
+                      <div key={entry.formId || entry.id} className="flex items-center justify-between text-sm">
+                        <span className="font-semibold text-gray-900">
+                          {entry.languageName || 'لغة'} {entry.levelLabel ? `- ${entry.levelLabel}` : ''}
+                        </span>
+                        <span className="text-amber-700 font-semibold">قيد المراجعة ⏳</span>
+                      </div>
+                    ))}
+                    {pendingTrainingForms.slice(0, 5).map((entry) => (
+                      <div key={entry.formId || entry.id} className="flex items-center justify-between text-sm">
+                        <span className="font-semibold text-gray-900">
+                          {entry.trainingTitle || entry.trainingName || 'دورة تكوينية'}
+                        </span>
+                        <span className="text-amber-700 font-semibold">قيد المراجعة ⏳</span>
+                      </div>
+                    ))}
+                    {(pendingLanguageForms.length + pendingTrainingForms.length) > 10 && (
+                      <p className="text-xs text-gray-600 mt-2">
+                        يوجد المزيد من الطلبات قيد المراجعة.
+                      </p>
+                    )}
                   </div>
                 </div>
               </div>

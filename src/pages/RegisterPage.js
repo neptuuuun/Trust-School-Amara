@@ -330,14 +330,14 @@ const RegisterPage = () => {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-3 py-3 pr-10 pl-12 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                className="w-full px-3 py-3 pr-10 pl-10 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
                 placeholder="••••••••"
               />
               <button
                 type="button"
                 aria-label={showPassword ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور'}
                 onClick={() => setShowPassword((v) => !v)}
-                className="absolute inset-y-0 left-0 pl-3 pr-3 flex items-center text-gray-500 hover:text-gray-700"
+                className="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-500 hover:text-gray-700"
               >
                 {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
               </button>

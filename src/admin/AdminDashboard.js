@@ -189,7 +189,7 @@ const AdminDashboard = () => {
       isSection: true
     },
     {
-      name: 'Admin Guide',
+      name: 'دليل المسؤول',
       href: '/admin/admin-guide',
       icon: ClipboardList,
       current: location.pathname === '/admin/admin-guide'

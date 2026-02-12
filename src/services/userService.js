@@ -200,7 +200,9 @@ export const saveUser = async (userData) => {
       studyYear: userData.studyYear || existingData?.studyYear || null,
       accountVerified: userData.accountVerified !== undefined ? userData.accountVerified : false,
       paymentVerified: userData.paymentVerified !== undefined ? userData.paymentVerified : false,
-      verificationStatus: userData.verificationStatus || existingData?.verificationStatus || 'unverified',
+      // Registration approval flow: new users start as pending until admin approves
+      verificationStatus: userData.verificationStatus || existingData?.verificationStatus || 'pending',
+      status: userData.status || existingData?.status || 'pending',
       verificationRequest: userData.verificationRequest || existingData?.verificationRequest || null,
       registrationNumber: userData.registrationNumber || null,
       photoUrl: userData.photoUrl || null,

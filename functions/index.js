@@ -1,12 +1,178 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const cors = require('cors')({ origin: true, methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Authorization', 'Content-Type'] });
+const nodemailer = require('nodemailer');
 
 try {
   admin.initializeApp();
 } catch (e) {}
 
 const db = admin.firestore();
+
+// Email configuration - Update these with your email service credentials
+// For Gmail, you can use App Password: https://support.google.com/accounts/answer/185833
+const EMAIL_CONFIG = {
+  service: 'gmail', // or 'smtp', 'outlook', etc.
+  auth: {
+    user: functions.config().email?.user || process.env.EMAIL_USER || 'your-email@gmail.com',
+    pass: functions.config().email?.password || process.env.EMAIL_PASSWORD || 'your-app-password'
+  }
+};
+
+// Initialize email transporter
+const transporter = nodemailer.createTransport(EMAIL_CONFIG);
+
+// Email templates
+const emailTemplates = {
+  // Admin notification: New user registration
+  newUserRegistration: (studentName, studentEmail) => ({
+    subject: 'طلب تسجيل جديد - طالب جديد ينتظر التحقق',
+    html: `
+      <div dir="rtl" style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #2563eb;">طلب تسجيل جديد</h2>
+        <p>تم استلام طلب تسجيل جديد من طالب:</p>
+        <div style="background-color: #f3f4f6; padding: 15px; border-radius: 8px; margin: 20px 0;">
+          <p><strong>اسم الطالب:</strong> ${studentName}</p>
+          <p><strong>البريد الإلكتروني:</strong> ${studentEmail}</p>
+        </div>
+        <p style="color: #dc2626; font-weight: bold;">طالب جديد ينتظر التحقق</p>
+        <p>يرجى مراجعة الطلب والموافقة عليه من لوحة التحكم.</p>
+      </div>
+    `
+  }),
+
+  // Student notification: Account approved
+  accountApproved: (studentName) => ({
+    subject: 'تم التحقق من حسابك - Trust School',
+    html: `
+      <div dir="rtl" style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #16a34a;">تهانينا! تم التحقق من حسابك</h2>
+        <p>عزيزي/عزيزتي ${studentName},</p>
+        <p>نود إعلامك بأن حسابك قد تم التحقق منه بنجاح.</p>
+        <p style="font-weight: bold; color: #16a34a;">يمكنك الآن تسجيل الدخول والتسجيل في الدورات.</p>
+        <div style="background-color: #dcfce7; padding: 15px; border-radius: 8px; margin: 20px 0;">
+          <p>بعد التحقق، يمكنك:</p>
+          <ul>
+            <li>تسجيل الدخول إلى حسابك</li>
+            <li>التسجيل في دورات اللغات</li>
+            <li>التسجيل في الدورات التكوينية</li>
+            <li>دفع الرسوم السنوية للوصول إلى دروس الدعم</li>
+          </ul>
+        </div>
+        <p>شكراً لانضمامك إلى Trust School!</p>
+      </div>
+    `
+  }),
+
+  // Admin notification: New course registration
+  newCourseRegistration: (studentName, courseName, courseType) => ({
+    subject: `طلب تسجيل جديد في دورة - ${courseName}`,
+    html: `
+      <div dir="rtl" style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #2563eb;">طلب تسجيل جديد في دورة</h2>
+        <p>تم استلام طلب تسجيل جديد في دورة:</p>
+        <div style="background-color: #f3f4f6; padding: 15px; border-radius: 8px; margin: 20px 0;">
+          <p><strong>اسم الطالب:</strong> ${studentName}</p>
+          <p><strong>اسم الدورة:</strong> ${courseName}</p>
+          <p><strong>نوع الدورة:</strong> ${courseType}</p>
+        </div>
+        <p style="color: #dc2626; font-weight: bold;">تسجيل دورة جديد ينتظر الموافقة</p>
+        <p>يرجى مراجعة الطلب والموافقة عليه من لوحة التحكم.</p>
+      </div>
+    `
+  }),
+
+  // Student notification: Course registration approved
+  courseApproved: (studentName, courseName) => ({
+    subject: 'تمت الموافقة على تسجيلك في الدورة - Trust School',
+    html: `
+      <div dir="rtl" style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #16a34a;">تمت الموافقة على تسجيلك</h2>
+        <p>عزيزي/عزيزتي ${studentName},</p>
+        <p>نود إعلامك بأن تسجيلك في الدورة التالية قد تمت الموافقة عليه:</p>
+        <div style="background-color: #dcfce7; padding: 15px; border-radius: 8px; margin: 20px 0;">
+          <p style="font-size: 18px; font-weight: bold; color: #16a34a;">${courseName}</p>
+        </div>
+        <p style="font-weight: bold; color: #16a34a;">لديك الآن إمكانية الوصول إلى الدورة.</p>
+        <p>يمكنك تسجيل الدخول إلى حسابك لعرض تفاصيل الدورة.</p>
+        <p>شكراً لانضمامك إلى Trust School!</p>
+      </div>
+    `
+  })
+};
+
+// Helper function to send email
+async function sendEmail(to, subject, html) {
+  try {
+    const mailOptions = {
+      from: EMAIL_CONFIG.auth.user,
+      to: to,
+      subject: subject,
+      html: html
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+    console.log('Email sent successfully:', info.messageId);
+    return { success: true, messageId: info.messageId };
+  } catch (error) {
+    console.error('Error sending email:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// Idempotency helper to prevent duplicate emails on retries.
+// Firestore triggers can be retried; we "claim" the eventId once.
+async function claimEmailEvent(eventId, kind = 'unknown') {
+  if (!eventId) return true;
+  const ref = db.collection('_emailEvents').doc(String(eventId));
+  try {
+    await ref.create({
+      kind,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    return true;
+  } catch (e) {
+    const code = e?.code || e?.errorInfo?.code;
+    if (
+      code === 6 || // ALREADY_EXISTS
+      code === 'already-exists' ||
+      String(e?.message || '').toLowerCase().includes('already exists')
+    ) {
+      return false;
+    }
+    throw e;
+  }
+}
+
+// Helper function to get admin emails for a branch
+async function getAdminEmails(branchId) {
+  const adminEmails = [...STATIC_ADMIN_EMAILS];
+  
+  try {
+    // Get branch-specific admin emails
+    const metaSnap = await db.collection('branches').doc(branchId).collection('meta').doc('info').get();
+    if (metaSnap.exists) {
+      const branchAdmins = metaSnap.data()?.adminEmails || [];
+      adminEmails.push(...branchAdmins);
+    }
+
+    // Get admin users from the branch
+    const adminUsersSnap = await db.collection('branches').doc(branchId).collection('users')
+      .where('role', '==', 'admin').get();
+    
+    adminUsersSnap.docs.forEach(doc => {
+      const userData = doc.data();
+      if (userData.email) {
+        adminEmails.push(userData.email);
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching admin emails:', error);
+  }
+
+  // Remove duplicates and return
+  return [...new Set(adminEmails.filter(Boolean))];
+}
 
 const STATIC_ADMIN_EMAILS = [
   'admin@example.com',
@@ -221,6 +387,18 @@ exports.createSupportLessonRegistration = functions.https.onCall(async (data, co
     throw new functions.https.HttpsError('failed-precondition', 'User profile not found.', { code: 'user-not-found' });
   }
   const userProfile = userSnap.data() || {};
+
+  // Block course access until account verification is completed
+  const verificationStatus = normalizeString(userProfile.verificationStatus || '');
+  const isAccountVerified =
+    userProfile.verified === true ||
+    userProfile.accountVerified === true ||
+    verificationStatus === 'verified';
+  if (!isAccountVerified) {
+    throw new functions.https.HttpsError('permission-denied', 'Account must be verified before registering.', {
+      code: 'account-not-verified',
+    });
+  }
 
   const yearlyFeePaid = Boolean(userProfile.yearlyFeePaid === true || userProfile.paymentVerified === true);
   if (!yearlyFeePaid) {
@@ -1043,4 +1221,409 @@ exports.exportRegistrationsCsvHttp = functions
       return null;
     }
     });
+  });
+
+// ==================== EMAIL NOTIFICATION TRIGGERS ====================
+
+// FLOW 1: User Account Registration Approval
+// Trigger 1: On user registration - send email to admin
+exports.onUserCreated = functions.firestore
+  .document('branches/{branchId}/users/{userId}')
+  .onCreate(async (snap, context) => {
+    const userData = snap.data();
+    const branchId = context.params.branchId;
+    const userId = context.params.userId;
+
+    // Prevent duplicate emails on retries
+    if (!(await claimEmailEvent(context.eventId, 'user-created-admin'))) {
+      return null;
+    }
+
+    // Only send email if user is pending (new registration)
+    const status = String(userData.status || '').toLowerCase();
+    const verificationStatus = String(userData.verificationStatus || '').toLowerCase();
+    const accountVerified = Boolean(userData.accountVerified);
+
+    // Check if this is a new pending registration
+    if (status === 'pending' || verificationStatus === 'pending' || !accountVerified) {
+      try {
+        const studentName = userData.fullName || userData.name || 'طالب';
+        const studentEmail = userData.email || '';
+
+        if (!studentEmail) {
+          console.log('Skipping email: No student email found');
+          return null;
+        }
+
+        // Get admin emails
+        const adminEmails = await getAdminEmails(branchId);
+        
+        if (adminEmails.length === 0) {
+          console.log('No admin emails found for branch:', branchId);
+          return null;
+        }
+
+        // Send email to all admins
+        const emailTemplate = emailTemplates.newUserRegistration(studentName, studentEmail);
+        const emailPromises = adminEmails.map(email => 
+          sendEmail(email, emailTemplate.subject, emailTemplate.html)
+        );
+
+        await Promise.all(emailPromises);
+        console.log('New user registration emails sent to admins:', adminEmails);
+      } catch (error) {
+        console.error('Error sending new user registration email:', error);
+      }
+    }
+
+    return null;
+  });
+
+// Trigger 2: On user approval - send email to student
+exports.onUserUpdated = functions.firestore
+  .document('branches/{branchId}/users/{userId}')
+  .onUpdate(async (change, context) => {
+    const before = change.before.data();
+    const after = change.after.data();
+    const branchId = context.params.branchId;
+
+    // Check if user was just approved
+    const beforeVerified = Boolean(before.accountVerified) || String(before.verificationStatus || '').toLowerCase() === 'verified';
+    const afterVerified = Boolean(after.accountVerified) || String(after.verificationStatus || '').toLowerCase() === 'verified';
+
+    // Only send email on transition from NOT verified -> verified
+    if (!beforeVerified && afterVerified) {
+      try {
+        // Check if email was already sent (prevent duplicates)
+        const emailSentFlag = after.accountApprovalEmailSent;
+        if (emailSentFlag) {
+          console.log('Account approval email already sent for user:', context.params.userId);
+          return null;
+        }
+
+        // Only notify students (avoid emailing admins)
+        const role = String(after.role || '').toLowerCase();
+        if (role && role !== 'student') {
+          return null;
+        }
+
+        const studentName = after.fullName || after.name || 'طالب';
+        const studentEmail = after.email || '';
+
+        if (!studentEmail) {
+          console.log('Skipping email: No student email found');
+          return null;
+        }
+
+        // Send email to student
+        const emailTemplate = emailTemplates.accountApproved(studentName);
+        await sendEmail(studentEmail, emailTemplate.subject, emailTemplate.html);
+
+        // Mark email as sent to prevent duplicates
+        await change.after.ref.update({
+          accountApprovalEmailSent: true,
+          accountApprovalEmailSentAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        console.log('Account approval email sent to student:', studentEmail);
+      } catch (error) {
+        console.error('Error sending account approval email:', error);
+      }
+    }
+
+    return null;
+  });
+
+// FLOW 2b: Course Registration (legacy/branch registrations collection)
+// Some parts of the app use: branches/{branchId}/registrations/{registrationId}
+// We send emails only for language/training registrations, not for training_request/yearly_fee/etc.
+exports.onBranchRegistrationCreated = functions.firestore
+  .document('branches/{branchId}/registrations/{registrationId}')
+  .onCreate(async (snap, context) => {
+    const reg = snap.data() || {};
+    const branchId = context.params.branchId;
+
+    if (!(await claimEmailEvent(context.eventId, 'branch-registration-created-admin'))) {
+      return null;
+    }
+
+    const type = normalizeString(reg.type || reg.courseType || '');
+    const status = normalizeString(reg.status || 'pending');
+
+    if (!['language', 'languages', 'training', 'trainings'].includes(type)) return null;
+    if (status !== 'pending') return null;
+    if (reg.adminNotificationEmailSent) return null;
+
+    try {
+      const studentName = String(reg.name || reg.studentName || '').trim() || 'طالب';
+      const courseName = String(reg.courseName || reg.course || '').trim() || 'دورة';
+      const courseTypeLabel = type.startsWith('lang') ? 'دورة لغة' : 'دورة تكوينية';
+
+      const adminEmails = await getAdminEmails(branchId);
+      if (adminEmails.length === 0) return null;
+
+      const emailTemplate = emailTemplates.newCourseRegistration(studentName, courseName, courseTypeLabel);
+      await Promise.all(adminEmails.map((email) => sendEmail(email, emailTemplate.subject, emailTemplate.html)));
+
+      await snap.ref.update({
+        adminNotificationEmailSent: true,
+        adminNotificationEmailSentAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (error) {
+      console.error('Error sending branch registration admin email:', error);
+    }
+
+    return null;
+  });
+
+exports.onBranchRegistrationUpdated = functions.firestore
+  .document('branches/{branchId}/registrations/{registrationId}')
+  .onUpdate(async (change, context) => {
+    const before = change.before.data() || {};
+    const after = change.after.data() || {};
+    const branchId = context.params.branchId;
+
+    const type = normalizeString(after.type || after.courseType || '');
+    if (!['language', 'languages', 'training', 'trainings'].includes(type)) return null;
+
+    const beforeStatus = normalizeString(before.status || '');
+    const afterStatus = normalizeString(after.status || '');
+
+    if (!(beforeStatus === 'pending' && afterStatus === 'approved')) return null;
+    if (after.studentApprovalEmailSent) return null;
+
+    try {
+      const studentEmail = String(after.email || after.studentEmail || after.userEmail || '').trim();
+      if (!studentEmail) return null;
+
+      const studentName = String(after.name || after.studentName || '').trim() || 'طالب';
+      const courseName = String(after.courseName || after.course || '').trim() || 'دورة';
+
+      const emailTemplate = emailTemplates.courseApproved(studentName, courseName);
+      await sendEmail(studentEmail, emailTemplate.subject, emailTemplate.html);
+
+      await change.after.ref.update({
+        studentApprovalEmailSent: true,
+        studentApprovalEmailSentAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (error) {
+      console.error('Error sending branch registration student approval email:', error);
+    }
+
+    return null;
+  });
+
+// FLOW 2: Course Registration Approval
+// Trigger 3: On language course registration - send email to admin
+exports.onLanguageRegistrationCreated = functions.firestore
+  .document('branches/{branchId}/languagesForms/{userId}/languageFormEntries/{entryId}')
+  .onCreate(async (snap, context) => {
+    const entryData = snap.data();
+    const branchId = context.params.branchId;
+    const userId = context.params.userId;
+
+    if (!(await claimEmailEvent(context.eventId, 'language-created-admin'))) {
+      return null;
+    }
+
+    // Only send email if status is pending
+    const status = String(entryData.status || '').toLowerCase();
+    if (status === 'pending') {
+      try {
+        // Get user data
+        const userRef = db.collection('branches').doc(branchId).collection('users').doc(userId);
+        const userSnap = await userRef.get();
+        const userData = userSnap.exists ? userSnap.data() : {};
+
+        const studentName = entryData.studentName || userData.fullName || userData.name || 'طالب';
+        const courseName = entryData.languageName || 'دورة لغة';
+
+        // Get admin emails
+        const adminEmails = await getAdminEmails(branchId);
+        
+        if (adminEmails.length === 0) {
+          console.log('No admin emails found for branch:', branchId);
+          return null;
+        }
+
+        // Send email to all admins
+        const emailTemplate = emailTemplates.newCourseRegistration(studentName, courseName, 'دورة لغة');
+        const emailPromises = adminEmails.map(email => 
+          sendEmail(email, emailTemplate.subject, emailTemplate.html)
+        );
+
+        await Promise.all(emailPromises);
+        console.log('New language course registration emails sent to admins:', adminEmails);
+      } catch (error) {
+        console.error('Error sending language course registration email:', error);
+      }
+    }
+
+    return null;
+  });
+
+// Trigger 4: On language course approval - send email to student
+exports.onLanguageRegistrationUpdated = functions.firestore
+  .document('branches/{branchId}/languagesForms/{userId}/languageFormEntries/{entryId}')
+  .onUpdate(async (change, context) => {
+    const before = change.before.data();
+    const after = change.after.data();
+    const branchId = context.params.branchId;
+    const userId = context.params.userId;
+
+    // Check if status changed from pending to approved
+    const beforeStatus = String(before.status || '').toLowerCase();
+    const afterStatus = String(after.status || '').toLowerCase();
+    const beforeVerified = Boolean(before.verified);
+    const afterVerified = Boolean(after.verified);
+
+    if ((beforeStatus === 'pending' && afterStatus === 'approved') || 
+        (!beforeVerified && afterVerified && afterStatus === 'approved')) {
+      try {
+        // Get user data
+        const userRef = db.collection('branches').doc(branchId).collection('users').doc(userId);
+        const userSnap = await userRef.get();
+        const userData = userSnap.exists ? userSnap.data() : {};
+
+        const studentName = after.studentName || userData.fullName || userData.name || 'طالب';
+        const studentEmail = after.studentEmail || userData.email || after.userEmail || '';
+
+        if (!studentEmail) {
+          console.log('Skipping email: No student email found');
+          return null;
+        }
+
+        // Check if email was already sent (prevent duplicates)
+        const emailSentFlag = after.courseApprovalEmailSent;
+        if (emailSentFlag) {
+          console.log('Course approval email already sent for entry:', context.params.entryId);
+          return null;
+        }
+
+        const courseName = after.languageName || 'دورة لغة';
+
+        // Send email to student
+        const emailTemplate = emailTemplates.courseApproved(studentName, courseName);
+        await sendEmail(studentEmail, emailTemplate.subject, emailTemplate.html);
+
+        // Mark email as sent to prevent duplicates
+        await change.after.ref.update({
+          courseApprovalEmailSent: true,
+          courseApprovalEmailSentAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        console.log('Language course approval email sent to student:', studentEmail);
+      } catch (error) {
+        console.error('Error sending language course approval email:', error);
+      }
+    }
+
+    return null;
+  });
+
+// Trigger 5: On training course registration - send email to admin
+exports.onTrainingRegistrationCreated = functions.firestore
+  .document('branches/{branchId}/trainingsForms/{userId}/trainingFormEntries/{entryId}')
+  .onCreate(async (snap, context) => {
+    const entryData = snap.data();
+    const branchId = context.params.branchId;
+    const userId = context.params.userId;
+
+    if (!(await claimEmailEvent(context.eventId, 'training-created-admin'))) {
+      return null;
+    }
+
+    // Only send email if status is pending
+    const status = String(entryData.status || '').toLowerCase();
+    if (status === 'pending') {
+      try {
+        // Get user data
+        const userRef = db.collection('branches').doc(branchId).collection('users').doc(userId);
+        const userSnap = await userRef.get();
+        const userData = userSnap.exists ? userSnap.data() : {};
+
+        const studentName = entryData.studentName || userData.fullName || userData.name || 'طالب';
+        const courseName = entryData.trainingTitle || entryData.trainingName || 'دورة تكوينية';
+
+        // Get admin emails
+        const adminEmails = await getAdminEmails(branchId);
+        
+        if (adminEmails.length === 0) {
+          console.log('No admin emails found for branch:', branchId);
+          return null;
+        }
+
+        // Send email to all admins
+        const emailTemplate = emailTemplates.newCourseRegistration(studentName, courseName, 'دورة تكوينية');
+        const emailPromises = adminEmails.map(email => 
+          sendEmail(email, emailTemplate.subject, emailTemplate.html)
+        );
+
+        await Promise.all(emailPromises);
+        console.log('New training course registration emails sent to admins:', adminEmails);
+      } catch (error) {
+        console.error('Error sending training course registration email:', error);
+      }
+    }
+
+    return null;
+  });
+
+// Trigger 6: On training course approval - send email to student
+exports.onTrainingRegistrationUpdated = functions.firestore
+  .document('branches/{branchId}/trainingsForms/{userId}/trainingFormEntries/{entryId}')
+  .onUpdate(async (change, context) => {
+    const before = change.before.data();
+    const after = change.after.data();
+    const branchId = context.params.branchId;
+    const userId = context.params.userId;
+
+    // Check if status changed from pending to approved
+    const beforeStatus = String(before.status || '').toLowerCase();
+    const afterStatus = String(after.status || '').toLowerCase();
+    const beforeVerified = Boolean(before.verified);
+    const afterVerified = Boolean(after.verified);
+
+    if ((beforeStatus === 'pending' && afterStatus === 'approved') || 
+        (!beforeVerified && afterVerified && afterStatus === 'approved')) {
+      try {
+        // Get user data
+        const userRef = db.collection('branches').doc(branchId).collection('users').doc(userId);
+        const userSnap = await userRef.get();
+        const userData = userSnap.exists ? userSnap.data() : {};
+
+        const studentName = after.studentName || userData.fullName || userData.name || 'طالب';
+        const studentEmail = after.userEmail || after.studentEmail || userData.email || '';
+
+        if (!studentEmail) {
+          console.log('Skipping email: No student email found');
+          return null;
+        }
+
+        // Check if email was already sent (prevent duplicates)
+        const emailSentFlag = after.courseApprovalEmailSent;
+        if (emailSentFlag) {
+          console.log('Course approval email already sent for entry:', context.params.entryId);
+          return null;
+        }
+
+        const courseName = after.trainingTitle || after.trainingName || 'دورة تكوينية';
+
+        // Send email to student
+        const emailTemplate = emailTemplates.courseApproved(studentName, courseName);
+        await sendEmail(studentEmail, emailTemplate.subject, emailTemplate.html);
+
+        // Mark email as sent to prevent duplicates
+        await change.after.ref.update({
+          courseApprovalEmailSent: true,
+          courseApprovalEmailSentAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        console.log('Training course approval email sent to student:', studentEmail);
+      } catch (error) {
+        console.error('Error sending training course approval email:', error);
+      }
+    }
+
+    return null;
   });

@@ -394,9 +394,9 @@ const Overview = () => {
             >
               <div className="flex items-center justify-between">
                 <div className="flex-1">
-                  <p className="font-bold text-gray-900">Admin Guide</p>
+                  <p className="font-bold text-gray-900">دليل المسؤول</p>
                   <p className="text-sm text-gray-600">
-                    Step-by-step help for languages, courses, verification, and enrolled users.
+                    مساعدة خطوة بخطوة للغات، والدورات، والتحقق، والمستخدمين المسجّلين
                   </p>
                 </div>
                 <ClipboardList className="h-6 w-6 text-gray-400" />

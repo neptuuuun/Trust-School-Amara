@@ -130,10 +130,12 @@ export const createUser = async (branchId, userId, userData) => {
   const baseData = {
     ...userData,
     verified: false,
+    accountVerified: false,
     yearlyFeePaid: false,
     enrolledLessons: [],
     uploadedDocs: [],
-    verificationStatus: userData?.verificationStatus || 'unverified',
+    verificationStatus: userData?.verificationStatus || 'pending',
+    status: userData?.status || 'pending',
     verificationRequest: userData?.verificationRequest || null,
     role: 'student',
     createdAt: serverTimestamp(),

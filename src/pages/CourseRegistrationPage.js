@@ -97,6 +97,7 @@ const CourseRegistrationPage = () => {
             paymentMethod: null,
             paymentConfirmed: false,
             verified: false,
+            status: 'pending',
             branchId: selectedBranchId,
             userId: user.uid,
             createdAt: serverTimestamp(),

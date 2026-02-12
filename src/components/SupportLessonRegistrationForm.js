@@ -292,8 +292,8 @@ const SupportLessonRegistrationForm = () => {
       // Get Firebase ID token for authentication
       const authToken = await user.getIdToken();
 
-      // Call local Express API instead of Firebase Cloud Function
-      const response = await fetch('http://localhost:5000/api/createSupportLessonRegistration', {
+      // Call Vercel Serverless Function (same domain in dev & prod)
+      const response = await fetch('/api/createSupportLessonRegistration', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

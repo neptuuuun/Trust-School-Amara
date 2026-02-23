@@ -4,12 +4,13 @@ import { useAuth } from '../contexts/AuthContext';
 import { useBranch } from '../contexts/BranchContext';
 import {
   getSupportLessons,
-  createSupportLessonRegistration,
   canAccessSupportLessons,
   getUser
 } from '../services/firestoreService';
-import { uploadSupportLessonPaymentProof } from '../services/userService';
 import useSupportLessonRegistrationStatus from '../hooks/useSupportLessonRegistrationStatus';
+import { supabase } from '../supabase';
+import { db } from '../firebase';
+import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
 import { BookOpen, Upload, DollarSign, AlertCircle, CheckCircle, Calendar, Clock } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -284,86 +285,58 @@ const SupportLessonRegistrationForm = () => {
     try {
       setSubmitting(true);
 
-      const { publicUrl: paymentProofUrl } = await uploadSupportLessonPaymentProof(
-        paymentProof,
-        user.uid
-      );
+      // Upload payment proof to Supabase Storage
+      let paymentProofURL = '';
+      if (paymentProof) {
+        if (!supabase) {
+          throw new Error('خدمة رفع الملفات غير متاحة حالياً. يرجى إبلاغ الإدارة.');
+        }
 
-      // Get Firebase ID token for authentication
-      const authToken = await user.getIdToken();
+        const filePath = `support-lessons/${Date.now()}-${paymentProof.name}`;
 
-      // Call Vercel Serverless Function (same domain in dev & prod)
-      const response = await fetch('/api/createSupportLessonRegistration', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${authToken}`
-        },
-        body: JSON.stringify({
-          branchId: selectedBranchId,
-          lessonId: lesson?.id || selectedLesson,
-          durationInMonths: durationMonths,
-          startDate: submissionStartDate,
-          endDate: subscriptionWindow.endDate,
-          academicYear: subscriptionWindow.academicYear,
-          paymentProofUrl,
-          monthlyPrice: pricePerMonth ?? null,
-          totalPrice: pricePerMonth != null ? pricePerMonth * durationMonths : null,
-          source: 'manual'
-        })
-      });
+        const { data, error: uploadError } = await supabase
+          .storage
+          .from('support-lesson-payments')
+          .upload(filePath, paymentProof);
 
-      const result = await response.json();
+        if (uploadError) {
+          console.error('Supabase upload error:', uploadError);
+          throw new Error('تعذر رفع صورة الإيصال. يرجى المحاولة مرة أخرى.');
+        }
 
-      if (!response.ok) {
-        console.error('API Error:', result);
-        // Map API error codes to form error messages
-        const errorCode = result?.code || 'unknown';
-        const mappedError = new Error(result?.message || 'فشل في إرسال الطلب');
-        mappedError.code = errorCode;
-        throw mappedError;
+        const { data: publicUrlData } = supabase
+          .storage
+          .from('support-lesson-payments')
+          .getPublicUrl(filePath);
+
+        if (!publicUrlData?.publicUrl) {
+          throw new Error('تعذر الحصول على رابط لصورة الإيصال.');
+        }
+
+        paymentProofURL = publicUrlData.publicUrl;
       }
 
-      console.log('Registration successful:', result);
+      // Save registration to Firebase Firestore
+      await addDoc(collection(db, 'supportLessonRegistrations'), {
+        userId: user.uid,
+        lessonId: lesson?.id || selectedLesson,
+        durationInMonths: durationMonths,
+        branchId: selectedBranchId,
+        paymentProofURL,
+        status: 'pending',
+        createdAt: serverTimestamp(),
+      });
+
       setSuccess('تم إرسال طلب الاشتراك بنجاح! سيتم مراجعته من قبل الإدارة.');
       setPaymentProof(null);
       setDurationMonths(1);
+      setError('');
 
       const fileInput = document.getElementById('payment-proof');
       if (fileInput) fileInput.value = '';
     } catch (err) {
       console.error('Error submitting registration:', err);
-      switch (err?.code) {
-        case 'user-already-registered-support-lesson':
-          setError('لديك اشتراك نشط أو قيد المراجعة لهذا الدرس.');
-          break;
-        case 'study-year-mismatch':
-          setError('غير متاح لهذا المستوى (سنتك الدراسية لا تطابق سنة الدرس).');
-          break;
-        case 'yearly-fee-required':
-          setError('يجب دفع الرسوم السنوية أولاً قبل التسجيل في دروس الدعم.');
-          break;
-        case 'missing-study-year':
-          setError('يجب تحديد السنة الدراسية لهذا الدرس قبل التسجيل. يرجى التواصل مع الإدارة.');
-          break;
-        case 'missing-user-study-year':
-          setError('سنتك الدراسية غير محددة في حسابك. يرجى التواصل مع الإدارة.');
-          break;
-        case 'duration-exceeds-academic-year':
-          setError('لا يمكن تمديد الاشتراك بعد نهاية السنة الدراسية (31 ماي). يرجى تقليل المدة.');
-          break;
-        case 'summer-registration-forbidden':
-          setError('لا يمكن إنشاء اشتراك جديد خلال أشهر العطلة الصيفية (يونيو، يوليو، أغسطس).');
-          break;
-        case 'unauthenticated':
-          setError('يجب تسجيل الدخول أولاً.');
-          break;
-        case 'permission-denied':
-          setError('ليس لديك الإذن لإجراء هذه العملية.');
-          break;
-        default:
-          setError('حدث خطأ أثناء إرسال الطلب');
-      }
+      setError(err.message || 'حدث خطأ أثناء إرسال الطلب. حاول مرة أخرى.');
     } finally {
       setSubmitting(false);
     }

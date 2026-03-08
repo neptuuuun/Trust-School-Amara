@@ -16,7 +16,8 @@ import {
   rejectAnnualPayment,
   rejectTrainingRegistration,
   getUser,
-  getAnnualPayment
+  getAnnualPayment,
+  getSupportLessons
 } from '../../services/firestoreService';
 import { CreditCard, Check, X, Image, AlertCircle, Filter, RefreshCw } from 'lucide-react';
 import FileViewerModal from '../components/FileViewerModal';
@@ -55,20 +56,49 @@ const PaymentsVerification = () => {
     }
   }, [filter, payments]);
 
+  const normalizeToDate = (value) => {
+    if (!value) return null;
+    if (value instanceof Date) return value;
+    if (value?.toDate) {
+      try {
+        return value.toDate();
+      } catch {
+        // fall through to parsing below
+      }
+    }
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  };
+
   const loadAllPayments = async () => {
     try {
       setLoading(true);
       
       // Load all payment types in parallel
-      const [languageRegs, yearlyVerifs, supportRegs, annualSupportRegs, trainingRegs] = await Promise.all([
+      const [
+        languageRegs,
+        yearlyVerifs,
+        supportRegs,
+        annualSupportRegs,
+        trainingRegs,
+        supportLessons
+      ] = await Promise.all([
         getUnverifiedLanguageRegistrations(selectedBranchId),
         getUnverifiedYearlyVerifications(selectedBranchId),
         getUnverifiedSupportLessonRegistrations(selectedBranchId),
         getPendingAnnualFeeSupportLessonRegistrations(selectedBranchId),
-        getUnverifiedTrainingRegistrations(selectedBranchId)
+        getUnverifiedTrainingRegistrations(selectedBranchId),
+        getSupportLessons(selectedBranchId)
       ]);
 
       console.log('🔍 Training registrations loaded:', trainingRegs.length);
+
+      // Prepare lookup maps
+      const supportLessonsById = new Map(
+        Array.isArray(supportLessons)
+          ? supportLessons.map((lesson) => [lesson.id, lesson])
+          : []
+      );
 
       // Fetch user details for each payment
       const allPayments = [];
@@ -119,6 +149,43 @@ const PaymentsVerification = () => {
           ? [reg.month]
           : [];
 
+        const lessonId = reg.lessonId || reg.subjectId || null;
+        const lessonMeta = lessonId ? supportLessonsById.get(lessonId) : null;
+
+        const subjectName =
+          reg.subjectName ||
+          lessonMeta?.subject ||
+          lessonMeta?.name ||
+          'غير محددة';
+
+        const durationInMonths =
+          typeof reg.durationInMonths === 'number'
+            ? reg.durationInMonths
+            : Array.isArray(months) && months.length
+            ? months.length
+            : null;
+
+        const monthlyPrice =
+          reg.monthlyPrice ??
+          reg.pricePerMonth ??
+          (lessonMeta ? lessonMeta.price : null);
+
+        const totalPrice =
+          reg.totalPrice != null
+            ? reg.totalPrice
+            : monthlyPrice != null && durationInMonths
+            ? monthlyPrice * durationInMonths
+            : null;
+
+        const rawStart = reg.startDate || reg.createdAt;
+        const normalizedStart = normalizeToDate(rawStart);
+        let endDate = reg.endDate;
+        if (!endDate && normalizedStart && durationInMonths) {
+          const tmp = new Date(normalizedStart.getTime());
+          tmp.setMonth(tmp.getMonth() + durationInMonths);
+          endDate = tmp;
+        }
+
         allPayments.push({
           id: reg.id,
           paymentId: reg.id,
@@ -129,11 +196,17 @@ const PaymentsVerification = () => {
           source: 'monthly',
           userName: userData.name || userData.fullName || 'غير متوفر',
           userEmail: userData.email || 'غير متوفر',
-          paymentProof: reg.paymentProofUrl || reg.paymentProof || '',
+          paymentProof: reg.paymentProofUrl || reg.paymentProofURL || reg.paymentProof || '',
           createdAt: reg.createdAt,
           data: {
             ...reg,
-            selectedMonths: months
+            selectedMonths: months,
+            subjectName,
+            durationInMonths,
+            monthlyPrice,
+            totalPrice,
+            startDate: normalizedStart || reg.startDate || reg.createdAt,
+            endDate: endDate || null
           }
         });
       }
@@ -571,18 +644,33 @@ const PaymentsVerification = () => {
                 {/* Support lesson specific details */}
                 {payment.type === 'supportLesson' && (
                   <div className="border-t pt-4 mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm text-gray-700">
-                    <Detail label="المادة" value={payment.data.subjectName || 'غير محددة'} />
+                    <Detail
+                      label="المادة"
+                      value={
+                        payment.data.subjectName ||
+                        payment.data.lessonName ||
+                        'غير محددة'
+                      }
+                    />
                     <Detail
                       label="السعر الشهري"
                       value={
-                        payment.data.pricePerMonth != null
-                          ? `${payment.data.pricePerMonth} دج`
-                          : 'غير محدد'
+                        (() => {
+                          const monthly = payment.data.monthlyPrice;
+                          return monthly != null ? `${monthly} دج` : 'غير محدد';
+                        })()
                       }
                     />
                     <Detail
                       label="عدد الشهور"
-                      value={Array.isArray(payment.data.selectedMonths) ? payment.data.selectedMonths.length : 'غير محدد'}
+                      value={
+                        payment.data.durationInMonths != null
+                          ? payment.data.durationInMonths
+                          : (Array.isArray(payment.data.selectedMonths) &&
+                             payment.data.selectedMonths.length
+                              ? payment.data.selectedMonths.length
+                              : 'غير محدد')
+                      }
                     />
                     <Detail
                       label="الشهور"
@@ -595,29 +683,50 @@ const PaymentsVerification = () => {
                     <Detail
                       label="المبلغ الإجمالي"
                       value={
-                        payment.data.totalPrice != null
-                          ? `${payment.data.totalPrice} دج`
-                          : 'غير محدد'
+                        (() => {
+                          const total = payment.data.totalPrice;
+                          if (total != null) {
+                            return `${total} دج`;
+                          }
+                          const monthly = payment.data.monthlyPrice;
+                          const monthsCount = payment.data.durationInMonths;
+                          if (monthly != null && monthsCount != null) {
+                            return `${monthly * monthsCount} دج`;
+                          }
+                          return 'غير محدد';
+                        })()
                       }
                     />
                     <Detail
                       label="تاريخ البداية"
                       value={
-                        payment.data.startDate?.toDate
-                          ? payment.data.startDate.toDate().toLocaleDateString('ar-DZ')
-                          : payment.data.startDate
-                          ? new Date(payment.data.startDate).toLocaleDateString('ar-DZ')
-                          : 'غير محدد'
+                        (() => {
+                          const date = payment.data.startDate;
+                          if (!date) return 'غير محدد';
+                          if (date?.toDate) {
+                            return date.toDate().toLocaleDateString('ar-DZ');
+                          }
+                          if (typeof date === 'string' || typeof date === 'number') {
+                            return new Date(date).toLocaleDateString('ar-DZ');
+                          }
+                          return 'غير محدد';
+                        })()
                       }
                     />
                     <Detail
                       label="تاريخ الانتهاء"
                       value={
-                        payment.data.endDate?.toDate
-                          ? payment.data.endDate.toDate().toLocaleDateString('ar-DZ')
-                          : payment.data.endDate
-                          ? new Date(payment.data.endDate).toLocaleDateString('ar-DZ')
-                          : 'غير محدد'
+                        (() => {
+                          const date = payment.data.endDate;
+                          if (!date) return 'غير محدد';
+                          if (date?.toDate) {
+                            return date.toDate().toLocaleDateString('ar-DZ');
+                          }
+                          if (typeof date === 'string' || typeof date === 'number') {
+                            return new Date(date).toLocaleDateString('ar-DZ');
+                          }
+                          return 'غير محدد';
+                        })()
                       }
                     />
                   </div>

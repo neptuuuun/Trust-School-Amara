@@ -43,7 +43,7 @@ const BranchPriceManager = () => {
     const key = prompt('معرف الدورة/المادة (key)');
     const value = prompt('السعر بالدج');
     if (!key) return;
-    setField(`${mapPath}.${key}`, Number(value) || 0);
+    setField(`${mapPath}.${key}`, value || '0');
   };
 
   const removeMapItem = (mapPath, key) => {
@@ -62,7 +62,23 @@ const BranchPriceManager = () => {
     setSaving(true);
     try {
       const { id, ...payload } = data;
-      await updateDoc(doc(db, 'branches', selectedBranchId), payload);
+      
+      // Convert string values to numbers for price fields
+      const processedPayload = {
+        ...payload,
+        yearlyVerificationFee: Math.round(Number(payload.yearlyVerificationFee || 1000)),
+        trainingPrices: Object.fromEntries(
+          Object.entries(payload.trainingPrices || {}).map(([k, v]) => [k, Math.round(Number(v))])
+        ),
+        languagePrices: Object.fromEntries(
+          Object.entries(payload.languagePrices || {}).map(([k, v]) => [k, Math.round(Number(v))])
+        ),
+        supportMonthlyPrices: Object.fromEntries(
+          Object.entries(payload.supportMonthlyPrices || {}).map(([k, v]) => [k, Math.round(Number(v))])
+        ),
+      };
+      
+      await updateDoc(doc(db, 'branches', selectedBranchId), processedPayload);
       alert('تم الحفظ');
     } catch (e) {
       console.error(e);
@@ -104,7 +120,7 @@ const BranchPriceManager = () => {
             type="number"
             className="input w-full max-w-sm"
             value={data.yearlyVerificationFee || 1000}
-            onChange={(e) => setField('yearlyVerificationFee', Number(e.target.value))}
+            onChange={(e) => setField('yearlyVerificationFee', e.target.value)}
           />
         </div>
 
@@ -120,7 +136,7 @@ const BranchPriceManager = () => {
             {mapEntries(data.trainingPrices).map(([k, v]) => (
               <div key={k} className="flex items-center gap-2">
                 <span className="px-2 py-1 rounded bg-gray-100 text-gray-800">{k}</span>
-                <input type="number" className="input" value={v} onChange={(e) => setField(`trainingPrices.${k}`, Number(e.target.value))} />
+                <input type="number" className="input" value={v} onChange={(e) => setField(`trainingPrices.${k}`, e.target.value)} />
                 <button className="btn btn-danger btn-sm" onClick={() => removeMapItem('trainingPrices', k)}>
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -142,7 +158,7 @@ const BranchPriceManager = () => {
             {mapEntries(data.languagePrices).map(([k, v]) => (
               <div key={k} className="flex items-center gap-2">
                 <span className="px-2 py-1 rounded bg-gray-100 text-gray-800">{k}</span>
-                <input type="number" className="input" value={v} onChange={(e) => setField(`languagePrices.${k}`, Number(e.target.value))} />
+                <input type="number" className="input" value={v} onChange={(e) => setField(`languagePrices.${k}`, e.target.value)} />
                 <button className="btn btn-danger btn-sm" onClick={() => removeMapItem('languagePrices', k)}>
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -164,7 +180,7 @@ const BranchPriceManager = () => {
             {mapEntries(data.supportMonthlyPrices).map(([k, v]) => (
               <div key={k} className="flex items-center gap-2">
                 <span className="px-2 py-1 rounded bg-gray-100 text-gray-800">{k}</span>
-                <input type="number" className="input" value={v} onChange={(e) => setField(`supportMonthlyPrices.${k}`, Number(e.target.value))} />
+                <input type="number" className="input" value={v} onChange={(e) => setField(`supportMonthlyPrices.${k}`, e.target.value)} />
                 <button className="btn btn-danger btn-sm" onClick={() => removeMapItem('supportMonthlyPrices', k)}>
                   <Trash2 className="w-4 h-4" />
                 </button>

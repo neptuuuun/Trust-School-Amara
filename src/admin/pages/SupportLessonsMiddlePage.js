@@ -23,11 +23,16 @@ const SupportLessonsMiddlePage = () => {
     studyLevel: '',
     subject: '',
     price: '',
-    dayOfWeek: '',
-    startTime: '',
-    endTime: '',
     teacher: ''
   });
+  const [schedules, setSchedules] = useState([
+    {
+      id: Date.now(),
+      day: '',
+      start: '',
+      end: ''
+    }
+  ]);
 
   useEffect(() => {
     if (!selectedBranchId) {
@@ -54,9 +59,6 @@ const SupportLessonsMiddlePage = () => {
             subject: data.subject || '',
             price: data.price || 0,
             level: data.level || 'middle',
-            dayOfWeek: data.dayOfWeek || data.day || '',
-            startTime: data.startTime || '',
-            endTime: data.endTime || '',
             teacher: data.teacher || '',
             year: normalizedYear || '',
             grade: data.grade || normalizedYear || ''
@@ -76,8 +78,23 @@ const SupportLessonsMiddlePage = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!selectedBranchId || !form.studyLevel || !form.subject.trim() || !form.price || !form.dayOfWeek || !form.startTime || !form.endTime || !form.teacher.trim()) {
+    if (!selectedBranchId || !form.studyLevel || !form.subject.trim() || !form.price || !form.teacher.trim()) {
       alert('يرجى ملء جميع الحقول المطلوبة');
+      return;
+    }
+
+    const cleanedSchedules = Array.isArray(schedules)
+      ? schedules
+          .filter((item) => item.day && item.start && item.end)
+          .map((item) => ({
+            day: item.day,
+            start: item.start,
+            end: item.end
+          }))
+      : [];
+
+    if (cleanedSchedules.length === 0) {
+      alert('يرجى إضافة جدول زمني واحد على الأقل (اليوم + وقت البداية + وقت النهاية)');
       return;
     }
 
@@ -88,18 +105,24 @@ const SupportLessonsMiddlePage = () => {
     }
 
     try {
+      const primarySchedule = cleanedSchedules[0];
+
       const lessonData = {
         studyLevel: form.studyLevel,
         studyYear: yearCode,
         year: yearCode,
         grade: yearCode,
         subject: form.subject,
-        price: Number(form.price),
+        price: Math.round(Number(form.price)),
         level: 'middle',
-        dayOfWeek: form.dayOfWeek,
-        startTime: form.startTime,
-        endTime: form.endTime,
         teacher: form.teacher,
+        // New array-based schedules (matches Support Lessons front-end expectations)
+        timings: cleanedSchedules,
+        times: cleanedSchedules,
+        // Legacy single schedule fields for backward compatibility
+        dayOfWeek: primarySchedule?.day || '',
+        startTime: primarySchedule?.start || '',
+        endTime: primarySchedule?.end || '',
         updatedAt: serverTimestamp()
       };
 
@@ -120,15 +143,41 @@ const SupportLessonsMiddlePage = () => {
 
   const handleEdit = (lesson) => {
     const studyLevelLabel = lesson.studyLevel || (lesson.year ? getYearById(lesson.year)?.nameShort : '');
+    const existingTimings = Array.isArray(lesson.timings || lesson.times)
+      ? (lesson.timings || lesson.times)
+      : (lesson.dayOfWeek || lesson.startTime || lesson.endTime)
+      ? [
+          {
+            day: lesson.dayOfWeek || lesson.day || '',
+            start: lesson.startTime || '',
+            end: lesson.endTime || ''
+          }
+        ]
+      : [];
+
     setForm({
       studyLevel: studyLevelLabel || '',
       subject: lesson.subject || '',
       price: lesson.price || '',
-      dayOfWeek: lesson.dayOfWeek || lesson.day || '',
-      startTime: lesson.startTime || '',
-      endTime: lesson.endTime || '',
       teacher: lesson.teacher || ''
     });
+    setSchedules(
+      existingTimings.length > 0
+        ? existingTimings.map((t, index) => ({
+            id: Date.now() + index,
+            day: t.day || t.dayOfWeek || '',
+            start: t.start || t.startTime || '',
+            end: t.end || t.endTime || ''
+          }))
+        : [
+            {
+              id: Date.now(),
+              day: '',
+              start: '',
+              end: ''
+            }
+          ]
+    );
     setEditingId(lesson.id);
     setShowAddForm(true);
   };
@@ -150,13 +199,40 @@ const SupportLessonsMiddlePage = () => {
       studyLevel: '',
       subject: '',
       price: '',
-      dayOfWeek: '',
-      startTime: '',
-      endTime: '',
       teacher: ''
     });
+    setSchedules([
+      {
+        id: Date.now(),
+        day: '',
+        start: '',
+        end: ''
+      }
+    ]);
     setEditingId(null);
     setShowAddForm(false);
+  };
+
+  const updateScheduleField = (id, field, value) => {
+    setSchedules((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, [field]: value } : item))
+    );
+  };
+
+  const addSchedule = () => {
+    setSchedules((prev) => [
+      ...prev,
+      {
+        id: Date.now(),
+        day: '',
+        start: '',
+        end: ''
+      }
+    ]);
+  };
+
+  const removeSchedule = (id) => {
+    setSchedules((prev) => (prev.length > 1 ? prev.filter((item) => item.id !== id) : prev));
   };
 
   if (!selectedBranchId) {
@@ -242,46 +318,6 @@ const SupportLessonsMiddlePage = () => {
                     min="0"
                   />
                 </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">يوم الأسبوع</label>
-                  <select
-                    className="input w-full"
-                    value={form.dayOfWeek}
-                    onChange={(e) => setForm(prev => ({ ...prev, dayOfWeek: e.target.value }))}
-                    required
-                  >
-                    <option value="">اختر اليوم</option>
-                    {DAYS_OF_WEEK.map(day => (
-                      <option key={day} value={day}>{day}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">وقت البداية</label>
-                  <input
-                    type="time"
-                    className="input w-full"
-                    value={form.startTime}
-                    onChange={(e) => setForm(prev => ({ ...prev, startTime: e.target.value }))}
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">وقت النهاية</label>
-                  <input
-                    type="time"
-                    className="input w-full"
-                    value={form.endTime}
-                    onChange={(e) => setForm(prev => ({ ...prev, endTime: e.target.value }))}
-                    required
-                  />
-                </div>
-
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">اسم المدرس</label>
                   <input
@@ -293,6 +329,60 @@ const SupportLessonsMiddlePage = () => {
                     required
                   />
                 </div>
+              </div>
+
+              <div className="space-y-3">
+                <h4 className="text-sm font-semibold text-gray-700">الجداول الزمنية</h4>
+                {schedules.map((item) => (
+                  <div
+                    key={item.id}
+                    className="grid grid-cols-1 md:grid-cols-4 gap-3 p-3 bg-gray-50 rounded-lg border"
+                  >
+                    <select
+                      className="input w-full"
+                      value={item.day}
+                      onChange={(e) => updateScheduleField(item.id, 'day', e.target.value)}
+                      required
+                    >
+                      <option value="">اختر اليوم</option>
+                      {DAYS_OF_WEEK.map((day) => (
+                        <option key={day} value={day}>{day}</option>
+                      ))}
+                    </select>
+                    <input
+                      type="time"
+                      className="input w-full"
+                      value={item.start}
+                      onChange={(e) => updateScheduleField(item.id, 'start', e.target.value)}
+                      required
+                    />
+                    <input
+                      type="time"
+                      className="input w-full"
+                      value={item.end}
+                      onChange={(e) => updateScheduleField(item.id, 'end', e.target.value)}
+                      required
+                    />
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      onClick={() => removeSchedule(item.id)}
+                      className="flex items-center justify-center gap-1"
+                    >
+                      حذف
+                    </Button>
+                  </div>
+                ))}
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={addSchedule}
+                  className="w-full flex items-center justify-center gap-2"
+                >
+                  <Plus className="w-4 h-4" />
+                  إضافة يوم آخر
+                </Button>
               </div>
 
               <div className="flex gap-3">
@@ -362,10 +452,6 @@ const SupportLessonsMiddlePage = () => {
                 </CardHeader>
                 <CardContent>
                   <div className="flex flex-wrap items-center gap-3">
-                    <Badge variant="secondary">{lesson.dayOfWeek || lesson.day || '—'}</Badge>
-                    <span className="text-sm text-gray-600">
-                      {lesson.startTime || '—'} - {lesson.endTime || '—'}
-                    </span>
                     <span className="text-sm font-medium">المدرس: {lesson.teacher || '—'}</span>
                   </div>
                 </CardContent>

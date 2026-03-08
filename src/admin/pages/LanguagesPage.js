@@ -327,12 +327,16 @@ const LanguagesPage = () => {
                           <div>
                             <label className="block text-sm font-medium text-gray-700 mb-2">السعر (دج)</label>
                             <input
-                              type="number"
+                              type="text"
+                              inputMode="numeric"
+                              pattern="[0-9]*"
                               className="input w-full"
-                              value={levelData.price || ''}
-                              onChange={(e) => updateLevelField(level, 'price', e.target.value)}
+                              value={levelData.price === 0 ? '' : levelData.price}
+                              onChange={(e) => {
+                                const val = e.target.value.replace(/[^0-9]/g, ''); // strip non-digits
+                                updateLevelField(level, 'price', val === '' ? '' : Number(val));
+                              }}
                               placeholder="السعر"
-                              min="0"
                             />
                           </div>
                           <div>

@@ -129,7 +129,7 @@ const SupportRegisteredPage = () => {
     return entries.filter((entry) => {
       const resolvedName = resolveUserName(entry);
       const matchesSearch = term
-        ? `${resolvedName || ''} ${entry.subjectName || ''} ${entry.courseName || ''} ${entry.userEmail || ''}`
+        ? `${resolvedName || ''} ${entry.subjectName || ''} ${entry.courseName || ''} ${entry.yearName || ''} ${entry.teacherName || ''} ${entry.userEmail || ''}`
             .toLowerCase()
             .includes(term)
         : true;
@@ -290,9 +290,19 @@ const SupportRegisteredPage = () => {
 
               <div className="mt-4 grid gap-4 rounded-xl border border-gray-100 bg-gray-50 p-4 text-sm md:grid-cols-2 lg:grid-cols-4">
                 <div className="flex flex-col">
-                  <span className="text-gray-500">اسم الدرس</span>
+                  <span className="text-gray-500">المادة</span>
                   <span className="font-semibold text-gray-900">{entry.subjectName || entry.courseName || '—'}</span>
                 </div>
+                <div className="flex flex-col">
+                  <span className="text-gray-500">السنة الدراسية</span>
+                  <span className="font-semibold text-gray-900">{entry.yearName || entry.studyYearLabel || '—'}</span>
+                </div>
+                {(entry.teacherName != null && entry.teacherName !== '') && (
+                  <div className="flex flex-col">
+                    <span className="text-gray-500">المعلم</span>
+                    <span className="font-semibold text-gray-900">{entry.teacherName}</span>
+                  </div>
+                )}
                 <div className="flex flex-col">
                   <span className="text-gray-500">البريد الإلكتروني</span>
                   <span className="font-semibold text-gray-900">{entry.userEmail || entry.studentEmail || '—'}</span>

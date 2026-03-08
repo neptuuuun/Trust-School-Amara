@@ -459,6 +459,8 @@ exports.createSupportLessonRegistration = functions.https.onCall(async (data, co
     lessonId,
     lessonName: String(lessonData.name || lessonData.subject || '').trim(),
     subjectName: String(lessonData.subject || (Array.isArray(lessonData.subjects) ? lessonData.subjects[0] : '') || lessonData.name || '').trim(),
+    yearName: String(lessonData.studyLevel || lessonData.year || lessonData.grade || '').trim() || null,
+    teacherName: String(lessonData.teacherName || lessonData.teacher || '').trim() || null,
     studyYear: userStudyYear,
     studyYearId: userStudyYear,
     studyYearLabel: String(lessonData.studyLevel || '').trim(),

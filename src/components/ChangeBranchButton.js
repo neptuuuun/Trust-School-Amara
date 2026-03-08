@@ -31,7 +31,7 @@ const ChangeBranchButton = ({ className = '' }) => {
       onClick={handleChangeBranch}
       aria-label="Change Branch"
       title="Change Branch"
-      className={`px-3 py-1 text-sm border border-amber-500 text-white md:text-white rounded-lg hover:bg-red-100 hover:text-primary transition ${className}`}
+      className={`px-3 py-1 text-sm border border-amber-500 rounded-lg bg-transparent text-amber-600 hover:bg-amber-50 hover:text-amber-800 focus:bg-amber-50 focus:text-amber-800 focus:outline-none focus:ring-2 focus:ring-amber-500/40 transition [dir=rtl]:text-right ${className}`}
     >
       {/* Arabic label with English fallback for screen readers/title */}
       تغيير الفرع

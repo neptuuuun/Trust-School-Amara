@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
+import { sendPasswordResetEmail } from 'firebase/auth';
+import { auth } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useBranch } from '../contexts/BranchContext';
 import { Mail, Lock, Eye, EyeOff, LogIn } from 'lucide-react';
 
 const LoginPage = () => {
-  const { user, role, login, loading } = useAuth();
+  const { user, role, login, loading: authLoading } = useAuth();
   const { selectedBranchId } = useBranch();
   const navigate = useNavigate();
   const location = useLocation();
@@ -15,6 +17,9 @@ const LoginPage = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [showResetModal, setShowResetModal] = useState(false);
+  const [resetEmail, setResetEmail] = useState('');
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (user && role) {
@@ -70,6 +75,22 @@ const LoginPage = () => {
       }
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handlePasswordReset = async () => {
+    if (!resetEmail) return;
+
+    try {
+      setLoading(true);
+      await sendPasswordResetEmail(auth, resetEmail);
+      alert('تم إرسال رابط إعادة تعيين كلمة المرور إلى بريدك الإلكتروني');
+      setShowResetModal(false);
+      setResetEmail('');
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -129,11 +150,18 @@ const LoginPage = () => {
               >
               </button>
             </div>
+            <button
+              type="button"
+              onClick={() => setShowResetModal(true)}
+              className="mt-2 text-xs text-blue-600 hover:text-blue-700 hover:underline focus:outline-none"
+            >
+              نسيت كلمة المرور؟
+            </button>
           </div>
 
           <button
             type="submit"
-            disabled={submitting || loading}
+            disabled={submitting || authLoading}
             className="w-full py-3 bg-primary text-white rounded-lg hover:bg-primary-700 transition disabled:opacity-50"
           >
             {submitting ? 'جاري الدخول...' : 'دخول'}
@@ -144,6 +172,49 @@ const LoginPage = () => {
           ليس لديك حساب؟{' '}
           <Link to="/register" className="text-primary hover:text-primary-700 font-medium">سجل الآن</Link>
         </p>
+
+        {showResetModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+            <div className="bg-white rounded-2xl shadow-lg p-6 w-full max-w-sm" dir="rtl">
+              <h2 className="text-lg font-semibold text-gray-900 mb-2">إعادة تعيين كلمة المرور</h2>
+              <p className="text-sm text-gray-600 mb-4">
+                أدخل بريدك الإلكتروني وسنرسل لك رابطًا لإعادة تعيين كلمة المرور.
+              </p>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">البريد الإلكتروني</label>
+                <input
+                  type="email"
+                  value={resetEmail}
+                  onChange={(e) => setResetEmail(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                  placeholder="example@email.com"
+                />
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <button
+                  type="button"
+                  onClick={handlePasswordReset}
+                  disabled={loading || !resetEmail}
+                  className="flex-1 py-2 bg-primary text-white rounded-lg hover:bg-primary-700 transition disabled:opacity-50 text-sm"
+                >
+                  {loading ? 'جاري الإرسال...' : 'Send Reset Link'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!loading) {
+                      setShowResetModal(false);
+                      setResetEmail('');
+                    }
+                  }}
+                  className="flex-1 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition text-sm"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

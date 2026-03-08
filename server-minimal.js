@@ -108,11 +108,30 @@ app.post('/api/createSupportLessonRegistration', async (req, res) => {
       return res.status(403).json({ error: 'account-not-verified', message: 'Account must be verified' });
     }
 
-    // Create registration
+    // Fetch lesson to store subjectName, yearName, teacherName (self-contained registration)
+    let subjectName = '';
+    let yearName = null;
+    let teacherName = null;
+    try {
+      const lessonSnap = await db.collection('branches').doc(branchId).collection('supportLessons').doc(lessonId).get();
+      if (lessonSnap.exists) {
+        const lessonData = lessonSnap.data() || {};
+        subjectName = String(lessonData.name || lessonData.subject || (Array.isArray(lessonData.subjects) ? lessonData.subjects[0] : '') || '').trim();
+        yearName = String(lessonData.studyLevel || lessonData.year || lessonData.grade || '').trim() || null;
+        teacherName = String(lessonData.teacherName || lessonData.teacher || '').trim() || null;
+      }
+    } catch (e) {
+      console.warn('Could not fetch lesson for denormalized fields:', e.message);
+    }
+
+    // Create registration (self-contained)
     const registration = {
       branchId,
       userId: decoded.uid,
       lessonId,
+      subjectName,
+      yearName,
+      teacherName,
       durationInMonths,
       paymentProofUrl,
       status: 'pending',

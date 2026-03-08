@@ -47,7 +47,7 @@ const AddTrainingPage = () => {
         {
           title: formData.title,
           description: formData.description,
-          price: parseFloat(formData.price)
+          price: Math.round(Number(formData.price))
         },
         {
           uid: user?.uid || '',

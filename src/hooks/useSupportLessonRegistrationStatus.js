@@ -1,22 +1,20 @@
 import { useEffect, useState } from 'react';
-import { collection, query, where, onSnapshot, orderBy } from 'firebase/firestore';
+import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 
 /**
- * Hook to check support lesson registration status for a user+lesson in real-time
- * 
- * @param {string} branchId - Branch ID
+ * Hook to check support lesson registration status for a user+lesson in real-time.
+ * Query does NOT filter by status so the listener always sees the document when admin updates it.
+ *
+ * @param {string} branchId - Branch ID (used only to pick the right doc in memory when multiple exist)
  * @param {string} userId - User ID
- * @param {string} lessonId - Unique lesson identifier
+ * @param {string} lessonId - Lesson ID
  * @returns {{ status: 'none' | 'pending' | 'verified' | null, loading: boolean, registration: object | null }}
- * 
- * Usage:
- * const { status, loading, registration } = useSupportLessonRegistrationStatus(branchId, userId, subjectId);
- * 
- * Button logic:
- * - status === 'none' → Button enabled, text: "التسجيل"
- * - status === 'pending' → Button disabled, text: "في انتظار التأكيد"
- * - status === 'verified' → Button disabled, text: "مسجل"
+ *
+ * Button state from document status only:
+ * - No document → "التسجيل" (blue)
+ * - status === "pending" → "قيد الانتظار" (yellow)
+ * - status in ["approved","verified","registered"] → "مسجل" (green)
  */
 export function useSupportLessonRegistrationStatus(branchId, userId, lessonId) {
   const [status, setStatus] = useState(null);
@@ -24,8 +22,7 @@ export function useSupportLessonRegistrationStatus(branchId, userId, lessonId) {
   const [registration, setRegistration] = useState(null);
 
   useEffect(() => {
-    // Reset state if dependencies are missing
-    if (!branchId || !userId || !lessonId) {
+    if (!userId || !lessonId) {
       setStatus('none');
       setLoading(false);
       setRegistration(null);
@@ -34,57 +31,45 @@ export function useSupportLessonRegistrationStatus(branchId, userId, lessonId) {
 
     setLoading(true);
 
-    // Query for existing registration from the global collection
+    // Query must NOT filter by status so we always detect the doc when admin approves/updates
     const registrationsRef = collection(db, 'supportLessonRegistrations');
-    const constraints = [
-      where('branchId', '==', branchId),
+    const q = query(
+      registrationsRef,
       where('userId', '==', userId),
-      where('lessonId', '==', lessonId),
-      orderBy('createdAt', 'desc')
-    ];
-    const q = query(registrationsRef, ...constraints);
+      where('lessonId', '==', lessonId)
+    );
 
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
-        const now = new Date();
-        const registrations = snapshot.docs
-          .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
-          .sort((a, b) => {
-            const aTime = a.endDate?.toDate
-              ? a.endDate.toDate().getTime()
-              : a.endDate
-              ? new Date(a.endDate).getTime()
-              : 0;
-            const bTime = b.endDate?.toDate
-              ? b.endDate.toDate().getTime()
-              : b.endDate
-              ? new Date(b.endDate).getTime()
-              : 0;
-            return (bTime || 0) - (aTime || 0);
-          });
+        const docs = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
 
-        const activeRegistration = registrations.find((reg) => {
-          const regStatus = String(reg.status || '').toLowerCase();
-          if (regStatus === 'pending') return true;
-          if (regStatus === 'verified') {
-            const end = reg.endDate?.toDate
-              ? reg.endDate.toDate()
-              : reg.endDate
-              ? new Date(reg.endDate)
-              : null;
-            return Boolean(end && end >= now);
-          }
-          return false;
+        // Optional: same user+lesson might exist for different branches; use branchId to pick one
+        const forBranch = branchId
+          ? docs.filter((d) => d.branchId === branchId)
+          : docs;
+        const sorted = [...forBranch].sort((a, b) => {
+          const aTime = a.createdAt?.toDate?.()?.getTime() ?? a.createdAt ?? 0;
+          const bTime = b.createdAt?.toDate?.()?.getTime() ?? b.createdAt ?? 0;
+          return bTime - aTime;
         });
+        const doc = sorted[0];
 
-        if (!activeRegistration) {
+        if (!doc) {
           setStatus('none');
           setRegistration(null);
         } else {
-          const regStatus = String(activeRegistration.status || '').toLowerCase();
-          setStatus(regStatus === 'verified' ? 'verified' : 'pending');
-          setRegistration(activeRegistration);
+          const statusStr = String(doc.status || '').toLowerCase();
+          if (statusStr === 'pending') {
+            setStatus('pending');
+            setRegistration(doc);
+          } else if (['approved', 'verified', 'registered'].includes(statusStr)) {
+            setStatus('verified');
+            setRegistration(doc);
+          } else {
+            setStatus('none');
+            setRegistration(null);
+          }
         }
         setLoading(false);
       },

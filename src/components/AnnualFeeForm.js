@@ -580,7 +580,7 @@ const AnnualFeeForm = ({ onClose, onSubmitted }) => {
         lessonsData.forEach((lesson) => {
           if (lesson.subject) {
             const key = lesson.subject.toLowerCase().trim()
-            const numericPrice = Number(lesson.price)
+            const numericPrice = Math.round(Number(lesson.price))
             const calculatedPrice = Number.isFinite(numericPrice) && numericPrice >= 0 ? numericPrice : 0
             if (!subjectsMap.has(key)) {
               subjectsMap.set(key, {
@@ -688,7 +688,7 @@ const AnnualFeeForm = ({ onClose, onSubmitted }) => {
   // Calculate total amount (annual fee + selected support lesson subjects)
   const totalAmount = useMemo(() => {
     const subjectsTotal = selectedSubjectEntries.reduce((sum, entry) => {
-      const rawPrice = Number(entry?.subject?.price)
+      const rawPrice = Math.round(Number(entry?.subject?.price))
       const price = Number.isFinite(rawPrice) ? rawPrice : 0
       return sum + price
     }, 0)
@@ -963,7 +963,7 @@ const AnnualFeeForm = ({ onClose, onSubmitted }) => {
             const { subjectId, subjectName } = getSubjectIdentifiers(subject)
             if (!subjectId) return
 
-            const rawPrice = Number(subject?.price)
+            const rawPrice = Math.round(Number(subject?.price))
             const normalizedPrice = Number.isFinite(rawPrice) ? rawPrice : 0
 
             try {
@@ -1389,7 +1389,7 @@ const AnnualFeeForm = ({ onClose, onSubmitted }) => {
                 </div>
                 {selectedSubjectEntries.map((entry) => {
                   const subjectName = entry?.subject?.name || "مادة"
-                  const rawPrice = Number(entry?.subject?.price)
+                  const rawPrice = Math.round(Number(entry?.subject?.price))
                   const price = Number.isFinite(rawPrice) ? rawPrice : 0
                   return (
                     <div key={entry.combinedKey} className="flex justify-between text-sm">

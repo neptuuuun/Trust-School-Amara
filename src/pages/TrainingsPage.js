@@ -69,10 +69,27 @@ const TrainingsPage = () => {
         return null;
     };
 
-    const resolveScheduleText = (training) => {
-        const rawSchedule = training?.schedule;
-        if (typeof rawSchedule === 'string' && rawSchedule.trim()) return rawSchedule.trim();
+    const resolveSchedules = (training) => {
+        // New structure: schedules: [{ dayOfWeek, startTime, endTime }]
+        if (Array.isArray(training?.schedules) && training.schedules.length > 0) {
+            return training.schedules
+                .map((s) => {
+                    const day = (s.dayOfWeek || s.day || '').trim();
+                    const start = (s.startTime || s.start || '').trim();
+                    const end = (s.endTime || s.end || '').trim();
+                    if (!day || !start || !end) return null;
+                    return `${day} ${start} - ${end}`;
+                })
+                .filter(Boolean);
+        }
 
+        // Fallback: single schedule string
+        const rawSchedule = training?.schedule;
+        if (typeof rawSchedule === 'string' && rawSchedule.trim()) {
+            return [rawSchedule.trim()];
+        }
+
+        // Legacy flat fields
         const day = training?.dayOfWeek || training?.day || training?.timing?.day;
         const start = training?.startTime || training?.timing?.start;
         const end = training?.endTime || training?.timing?.end;
@@ -82,10 +99,10 @@ const TrainingsPage = () => {
         const normalizedEnd = typeof end === 'string' ? end.trim() : '';
 
         if (normalizedDay && normalizedStart && normalizedEnd) {
-            return `${normalizedDay} ${normalizedStart} - ${normalizedEnd}`;
+            return [`${normalizedDay} ${normalizedStart} - ${normalizedEnd}`];
         }
 
-        return null;
+        return [];
     };
 
     // Fetch active trainings
@@ -234,7 +251,7 @@ const TrainingsPage = () => {
             '';
 
         const derivedTeacherName = resolveTeacherName(training) || '';
-        const derivedSchedule = resolveScheduleText(training) || '';
+        const derivedSchedule = (resolveSchedules(training)[0] || '');
 
         navigate('/training-registration', {
             state: {
@@ -385,7 +402,7 @@ const TrainingsPage = () => {
                                     const alreadyRegistered = isVerified || isPending;
 
                                     const teacherName = resolveTeacherName(training);
-                                    const scheduleText = resolveScheduleText(training);
+                                    const scheduleText = resolveSchedules(training);
                                     
                                     return (
                                         <div key={training.id} className="bg-white rounded-xl shadow-lg p-6 border border-gray-200 hover:shadow-xl transition-shadow">
@@ -411,9 +428,11 @@ const TrainingsPage = () => {
                                                     <span className="text-sm">{teacherName || 'غير محدد'}</span>
                                                 </div>
                                                 <div className="flex items-center">
-                                                    <Clock className="h-4 w-4 text-accent ml-2" />
+                                      <Clock className="h-4 w-4 text-accent ml-2" />
                                                     <span className="text-sm">
-                                                        {scheduleText || 'غير محدد'}
+                                                        {scheduleText && Array.isArray(scheduleText)
+                                                            ? scheduleText.join('، ')
+                                                            : scheduleText || 'غير محدد'}
                                                     </span>
                                                 </div>
                                             </div>

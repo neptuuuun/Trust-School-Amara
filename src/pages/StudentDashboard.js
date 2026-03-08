@@ -54,6 +54,8 @@ const StudentDashboard = () => {
   const [loading, setLoading] = useState(true);
   const [annualFeeStatus, setAnnualFeeStatus] = useState({ paid: false, status: 'unpaid' });
   const [registrationSnapshot, setRegistrationSnapshot] = useState({ languages: [], trainings: [], annualFeeHistory: [] });
+  const [supportLessonsMap, setSupportLessonsMap] = useState({});
+  const [supportLessonsLoading, setSupportLessonsLoading] = useState(false);
   const navigate = useNavigate();
 
   const isActiveRef = useRef(false);
@@ -456,10 +458,17 @@ const StudentDashboard = () => {
     const key = getSupportStatusKey(reg);
     switch (key) {
       case 'verified':
+      case 'approved':
         return {
           key,
-          label: 'مسجل ومفعّل ✓',
+          label: 'مقبول',
           classes: 'text-green-700'
+        };
+      case 'rejected':
+        return {
+          key,
+          label: 'مرفوض',
+          classes: 'text-red-700'
         };
       case 'pending':
         return {
@@ -470,8 +479,8 @@ const StudentDashboard = () => {
       default:
         return {
           key,
-          label: 'غير محدد',
-          classes: 'text-gray-600'
+          label: 'في انتظار التأكيد',
+          classes: 'text-amber-700'
         };
     }
   };
@@ -489,15 +498,25 @@ const StudentDashboard = () => {
         : reg.createdAt?.toDate
         ? reg.createdAt.toDate()
         : null;
-      const end = reg.endDate?.toDate
+      const rawDuration = reg.durationInMonths != null ? Number(reg.durationInMonths) : null;
+      const durationMonths = Number.isFinite(rawDuration) && rawDuration > 0 ? rawDuration : null;
+      let end = reg.endDate?.toDate
         ? reg.endDate.toDate()
         : reg.endDate
         ? new Date(reg.endDate)
         : null;
+
+      if (!end && start instanceof Date && !Number.isNaN(start.getTime()) && durationMonths) {
+        const computedEnd = new Date(start.getTime());
+        computedEnd.setMonth(computedEnd.getMonth() + durationMonths);
+        end = computedEnd;
+      }
+
       return {
         ...reg,
         _startDateObj: start,
-        _endDateObj: end
+        _endDateObj: end,
+        _durationMonthsNumeric: durationMonths
       };
     })
     .sort((a, b) => {
@@ -508,7 +527,10 @@ const StudentDashboard = () => {
   
   const supportPaymentSummary = (() => {
     const verifiedRegs = normalizedSupportRegistrations
-      .filter((reg) => getSupportStatusKey(reg) === 'verified')
+      .filter((reg) => {
+        const key = getSupportStatusKey(reg);
+        return key === 'verified' || key === 'approved';
+      })
       .filter((reg) => reg._startDateObj instanceof Date && !Number.isNaN(reg._startDateObj.getTime()));
 
     if (verifiedRegs.length === 0) {
@@ -573,6 +595,77 @@ const StudentDashboard = () => {
       }
     });
   }, [supportRegistrations, selectedBranchId]);
+
+  useEffect(() => {
+    if (!selectedBranchId || !supportRegistrations || supportRegistrations.length === 0) {
+      setSupportLessonsMap({});
+      setSupportLessonsLoading(false);
+      return;
+    }
+
+    const uniqueLessonIds = Array.from(
+      new Set(
+        supportRegistrations
+          .map((reg) => reg.lessonId)
+          .filter(Boolean)
+      )
+    );
+
+    const missingIds = uniqueLessonIds.filter((id) => !supportLessonsMap[id]);
+    if (missingIds.length === 0) return;
+
+    let cancelled = false;
+
+    const loadLessons = async () => {
+      try {
+        setSupportLessonsLoading(true);
+
+        const results = await Promise.all(
+          missingIds.map(async (lessonId) => {
+            try {
+              const anyReg = supportRegistrations.find((reg) => reg.lessonId === lessonId);
+              const branchIdForLesson = anyReg?.branchId || selectedBranchId;
+              if (!branchIdForLesson) {
+                return { lessonId, data: null };
+              }
+
+              const lessonRef = doc(db, 'branches', branchIdForLesson, 'supportLessons', lessonId);
+              const snap = await getDoc(lessonRef);
+              if (!snap.exists()) {
+                return { lessonId, data: null };
+              }
+              return { lessonId, data: { id: snap.id, ...snap.data() } };
+            } catch (error) {
+              console.error('Failed to load support lesson', lessonId, error);
+              return { lessonId, data: null };
+            }
+          })
+        );
+
+        if (cancelled) return;
+
+        setSupportLessonsMap((prev) => {
+          const next = { ...prev };
+          results.forEach(({ lessonId, data }) => {
+            if (!next[lessonId]) {
+              next[lessonId] = data;
+            }
+          });
+          return next;
+        });
+      } finally {
+        if (!cancelled) {
+          setSupportLessonsLoading(false);
+        }
+      }
+    };
+
+    loadLessons();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedBranchId, supportRegistrations, supportLessonsMap]);
 
   // Computed verification status
   const normalizedVerificationStatus = String(studentData?.verificationStatus || '').toLowerCase();
@@ -910,20 +1003,47 @@ const StudentDashboard = () => {
                 </div>
               </div>
               <div className="p-6 space-y-4">
-                {normalizedSupportRegistrations.length === 0 ? (
+                {normalizedSupportRegistrations.filter((reg) => getSupportStatusKey(reg) !== 'rejected').length === 0 ? (
                   <p className="text-sm text-gray-500 text-center">لا توجد تسجيلات في دروس الدعم بعد.</p>
                 ) : (
-                  normalizedSupportRegistrations.slice(0, 5).map((reg) => {
+                  normalizedSupportRegistrations
+                    .filter((reg) => getSupportStatusKey(reg) !== 'rejected')
+                    .slice(0, 5)
+                    .map((reg) => {
                     const statusInfo = getSupportStatusInfo(reg);
                     const yearMeta = reg.studyYearId ? getYearById(reg.studyYearId) : null;
-                    const displayYearLabel = reg.studyYearLabel || yearMeta?.nameShort || yearMeta?.name || null;
+                    const displayYearLabel = reg.yearName || reg.studyYearLabel || yearMeta?.nameShort || yearMeta?.name || null;
                     const hasYear = Boolean(displayYearLabel);
+                    const lessonFromMap = reg.lessonId ? supportLessonsMap[reg.lessonId] : null;
+                    const lessonName = reg.subjectName || lessonFromMap?.name || reg.lessonName || null;
                     const subjectWithYear = hasYear
-                      ? `${reg.subjectName || reg.lessonName || 'درس دعم'} - ${displayYearLabel}`
+                      ? `${lessonName || 'المادة غير متوفرة'} - ${displayYearLabel}`
                       : 'خطأ بيانات: السنة الدراسية مفقودة';
 
-                    const durationMonths = reg.durationInMonths != null ? Number(reg.durationInMonths) : null;
+                    const durationMonths =
+                      reg._durationMonthsNumeric != null
+                        ? reg._durationMonthsNumeric
+                        : reg.durationInMonths != null
+                        ? Number(reg.durationInMonths)
+                        : null;
                     const formattedDuration = Number.isFinite(durationMonths) ? `${durationMonths}` : null;
+
+                    const rawMonthlyPrice =
+                      lessonFromMap?.monthlyPrice ??
+                      lessonFromMap?.priceMonthly ??
+                      lessonFromMap?.price ??
+                      reg.monthlyPrice ??
+                      null;
+                    const monthlyPrice =
+                      rawMonthlyPrice != null && Number.isFinite(Number(rawMonthlyPrice))
+                        ? Number(rawMonthlyPrice)
+                        : null;
+                    const totalAmount =
+                      monthlyPrice != null && Number.isFinite(durationMonths)
+                        ? monthlyPrice * durationMonths
+                        : reg.totalPrice != null && Number.isFinite(Number(reg.totalPrice))
+                        ? Number(reg.totalPrice)
+                        : null;
 
                     return (
                       <div key={reg.id} className="border border-gray-100 rounded-lg p-4 space-y-2">
@@ -948,7 +1068,9 @@ const StudentDashboard = () => {
                             <p className="text-gray-500">السعر الشهري</p>
                             <p className="font-semibold text-gray-900">
                               {hasYear
-                                ? (reg.monthlyPrice != null ? `${reg.monthlyPrice} دج` : 'غير محدد')
+                                ? monthlyPrice != null
+                                  ? `${monthlyPrice} دج`
+                                  : 'غير متوفر'
                                 : '—'}
                             </p>
                           </div>
@@ -956,7 +1078,9 @@ const StudentDashboard = () => {
                             <p className="text-gray-500">المبلغ الإجمالي</p>
                             <p className="font-semibold text-gray-900">
                               {hasYear
-                                ? (reg.totalPrice != null ? `${reg.totalPrice} دج` : 'غير محدد')
+                                ? totalAmount != null
+                                  ? `${totalAmount} دج`
+                                  : 'غير متوفر'
                                 : '—'}
                             </p>
                           </div>

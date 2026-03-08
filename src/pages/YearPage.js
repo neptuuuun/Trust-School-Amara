@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useBranch } from '../contexts/BranchContext';
@@ -6,7 +6,7 @@ import { Book, AlertCircle, X, ArrowRight, Clock, User } from 'lucide-react';
 import { getYearById, getLevelById } from '../data/studyLevels';
 import useBranchSupportLessons from '../hooks/useBranchSupportLessons';
 import useAnnualFeeStatus from '../hooks/useAnnualFeeStatus';
-import { listenSupportLessonSubjectRegistration } from '../services/firestoreService';
+import useSupportLessonRegistrationStatus from '../hooks/useSupportLessonRegistrationStatus';
 
 const parseNumericPrice = (raw) => {
   if (raw == null) return null;
@@ -116,7 +116,7 @@ function YearPage() {
     return dayMap[day] || day;
   };
 
-  // Handle registration button click
+  // Handle registration button click: open the registration form only. Do NOT create any Firestore document.
   const handleRegisterClick = (lesson, registrationStatus) => {
     if (!user) {
       setShowLoginModal(true);
@@ -128,9 +128,7 @@ function YearPage() {
       return;
     }
 
-    // CRITICAL: Block navigation if registration already exists
     if (registrationStatus && registrationStatus !== 'none') {
-      // Button should be disabled, but if somehow clicked, do nothing
       return;
     }
 
@@ -139,14 +137,7 @@ function YearPage() {
       return;
     }
 
-    // Navigate to unified registration form
-    navigate('/support-lesson-registration', { 
-      state: { 
-        lesson,
-        level: levelParam,
-        grade: yearParam
-      }
-    });
+    navigate('/support-lesson-registration', { state: { lesson } });
   };
 
   // Show loading state while checking fee or loading lessons
@@ -367,7 +358,8 @@ function YearPage() {
 
 /**
  * Lesson Card Component with Registration Status Check
- * Uses real-time hook to check registration status and update button accordingly
+ * Button state depends ONLY on Firestore (global supportLessonRegistrations) via onSnapshot.
+ * No optimistic UI: no document is created on button click; form submit creates the doc.
  */
 function LessonCard({ 
   lesson, 
@@ -382,36 +374,12 @@ function LessonCard({
   onRegisterClick,
   setShowLoginModal
 }) {
-  const [registrationStatus, setRegistrationStatus] = useState('none');
-  const [statusLoading, setStatusLoading] = useState(true);
+  const { status: registrationStatus, loading: statusLoading } = useSupportLessonRegistrationStatus(
+    selectedBranchId,
+    user?.uid ?? '',
+    lesson?.id ?? ''
+  );
   const rawPrice = lesson?.priceMonthly ?? lesson?.price;
-
-  useEffect(() => {
-    if (!selectedBranchId || !user?.uid || !lesson?.id || !yearId) {
-      setRegistrationStatus('none');
-      setStatusLoading(false);
-      return;
-    }
-
-    setStatusLoading(true);
-    const unsubscribe = listenSupportLessonSubjectRegistration(
-      selectedBranchId,
-      user.uid,
-      lesson.id,
-      yearId,
-      (registration) => {
-        const normalized = String(registration?.status || '').toLowerCase();
-        if (normalized === 'pending' || normalized === 'verified') {
-          setRegistrationStatus(normalized);
-        } else {
-          setRegistrationStatus('none');
-        }
-        setStatusLoading(false);
-      }
-    );
-
-    return () => unsubscribe?.();
-  }, [selectedBranchId, user?.uid, lesson?.id, yearId]);
 
   // Determine button state and text
   const getButtonConfig = () => {
@@ -467,32 +435,33 @@ function LessonCard({
       };
     }
 
-    switch (registrationStatus) {
-      case 'none':
-        return {
-          text: 'سجل الآن',
-          disabled: false,
-          className: 'bg-primary hover:bg-primary-600 text-white'
-        };
-      case 'pending':
-        return {
-          text: 'في انتظار التحقق',
-          disabled: true,
-          className: 'bg-yellow-100 text-yellow-800 cursor-not-allowed border border-yellow-300'
-        };
-      case 'verified':
-        return {
-          text: 'مسجل',
-          disabled: true,
-          className: 'bg-green-100 text-green-800 cursor-not-allowed border border-green-300'
-        };
-      default:
-        return {
-          text: 'سجل الآن',
-          disabled: false,
-          className: 'bg-primary hover:bg-primary-600 text-white'
-        };
-    }
+        // Button state from Firestore only: none → التسجيل, pending → قيد الانتظار, verified → مسجل
+        switch (registrationStatus) {
+          case 'none':
+            return {
+              text: 'التسجيل',
+              disabled: false,
+              className: 'bg-primary hover:bg-primary-600 text-white'
+            };
+          case 'pending':
+            return {
+              text: 'قيد الانتظار',
+              disabled: true,
+              className: 'bg-yellow-100 text-yellow-800 cursor-not-allowed border border-yellow-300'
+            };
+          case 'verified':
+            return {
+              text: 'مسجل',
+              disabled: true,
+              className: 'bg-green-100 text-green-800 cursor-not-allowed border border-green-300'
+            };
+          default:
+            return {
+              text: 'التسجيل',
+              disabled: false,
+              className: 'bg-primary hover:bg-primary-600 text-white'
+            };
+        }
   };
 
   const buttonConfig = getButtonConfig();

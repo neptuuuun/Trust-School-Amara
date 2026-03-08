@@ -316,10 +316,17 @@ const SupportLessonRegistrationForm = () => {
         paymentProofURL = publicUrlData.publicUrl;
       }
 
-      // Save registration to Firebase Firestore
+      // Save registration to Firebase Firestore (self-contained: store subject/year/teacher names)
+      const subjectName = lesson?.name || lesson?.subject || '';
+      const yearName = lesson?.studyLevel || lesson?.year || lesson?.grade || '';
+      const teacherName = lesson?.teacherName || lesson?.teacher || null;
+
       await addDoc(collection(db, 'supportLessonRegistrations'), {
         userId: user.uid,
         lessonId: lesson?.id || selectedLesson,
+        subjectName,
+        yearName: yearName || null,
+        ...(teacherName != null && teacherName !== '' && { teacherName }),
         durationInMonths: durationMonths,
         branchId: selectedBranchId,
         paymentProofURL,

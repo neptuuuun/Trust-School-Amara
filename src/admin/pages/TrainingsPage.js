@@ -25,11 +25,16 @@ const TrainingsPage = () => {
   const [form, setForm] = useState({
     title: '',
     price: '',
-    dayOfWeek: '',
-    startTime: '',
-    endTime: '',
     teacher: ''
   });
+  const [schedules, setSchedules] = useState([
+    {
+      id: Date.now(),
+      day: '',
+      start: '',
+      end: ''
+    }
+  ]);
   const [actionLoading, setActionLoading] = useState({});
 
   useEffect(() => {
@@ -42,16 +47,17 @@ const TrainingsPage = () => {
     const unsubscribe = onSnapshot(
       collection(db, 'branches', selectedBranchId, 'trainings'),
       (snapshot) => {
-        const trainingsData = snapshot.docs.map(doc => ({
-          id: doc.id,
-          title: doc.data().title || '',
-          price: doc.data().price || 0,
-          dayOfWeek: doc.data().dayOfWeek || doc.data().day || '',
-          startTime: doc.data().startTime || '',
-          endTime: doc.data().endTime || '',
-          teacher: doc.data().teacher || '',
-          ...doc.data()
-        }));
+        const trainingsData = snapshot.docs.map(doc => {
+          const data = doc.data();
+          return {
+            id: doc.id,
+            title: data.title || '',
+            price: data.price || 0,
+            teacher: data.teacher || '',
+            // keep raw data for schedules
+            ...data
+          };
+        });
         setTrainings(trainingsData);
         setLoading(false);
       },
@@ -117,19 +123,43 @@ const TrainingsPage = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!selectedBranchId || !form.title.trim() || !form.price || !form.dayOfWeek || !form.startTime || !form.endTime || !form.teacher.trim()) {
+    if (!selectedBranchId || !form.title.trim() || !form.price || !form.teacher.trim()) {
       alert('يرجى ملء جميع الحقول المطلوبة');
       return;
     }
 
+    const cleanedSchedules = Array.isArray(schedules)
+      ? schedules
+          .filter((item) => item.day && item.start && item.end)
+          .map((item) => ({
+            day: item.day,
+            start: item.start,
+            end: item.end
+          }))
+      : [];
+
+    if (cleanedSchedules.length === 0) {
+      alert('يرجى إضافة جدول زمني واحد على الأقل (اليوم + وقت البداية + وقت النهاية)');
+      return;
+    }
+
     try {
+      const primarySchedule = cleanedSchedules[0];
+
       const trainingData = {
         title: form.title,
-        price: Number(form.price),
-        dayOfWeek: form.dayOfWeek,
-        startTime: form.startTime,
-        endTime: form.endTime,
+        price: Math.round(Number(form.price)),
         teacher: form.teacher,
+        // New array-based schedules, similar to language days
+        schedules: cleanedSchedules.map((s) => ({
+          dayOfWeek: s.day,
+          startTime: s.start,
+          endTime: s.end
+        })),
+        // Legacy flat fields for backward compatibility
+        dayOfWeek: primarySchedule?.day || '',
+        startTime: primarySchedule?.start || '',
+        endTime: primarySchedule?.end || '',
         updatedAt: serverTimestamp()
       };
 
@@ -175,14 +205,40 @@ const TrainingsPage = () => {
   };
 
   const handleEdit = (training) => {
+    const existingSchedules = Array.isArray(training.schedules)
+      ? training.schedules
+      : (training.dayOfWeek || training.startTime || training.endTime)
+      ? [
+          {
+            dayOfWeek: training.dayOfWeek || training.day || '',
+            startTime: training.startTime || '',
+            endTime: training.endTime || ''
+          }
+        ]
+      : [];
+
     setForm({
       title: training.title || '',
       price: training.price || '',
-      dayOfWeek: training.dayOfWeek || training.day || '',
-      startTime: training.startTime || '',
-      endTime: training.endTime || '',
       teacher: training.teacher || ''
     });
+    setSchedules(
+      existingSchedules.length > 0
+        ? existingSchedules.map((s, index) => ({
+            id: Date.now() + index,
+            day: s.day || s.dayOfWeek || '',
+            start: s.start || s.startTime || '',
+            end: s.end || s.endTime || ''
+          }))
+        : [
+            {
+              id: Date.now(),
+              day: '',
+              start: '',
+              end: ''
+            }
+          ]
+    );
     setEditingId(training.id);
     setShowAddForm(true);
   };
@@ -203,13 +259,40 @@ const TrainingsPage = () => {
     setForm({
       title: '',
       price: '',
-      dayOfWeek: '',
-      startTime: '',
-      endTime: '',
       teacher: ''
     });
+    setSchedules([
+      {
+        id: Date.now(),
+        day: '',
+        start: '',
+        end: ''
+      }
+    ]);
     setEditingId(null);
     setShowAddForm(false);
+  };
+
+  const updateScheduleField = (id, field, value) => {
+    setSchedules((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, [field]: value } : item))
+    );
+  };
+
+  const addSchedule = () => {
+    setSchedules((prev) => [
+      ...prev,
+      {
+        id: Date.now(),
+        day: '',
+        start: '',
+        end: ''
+      }
+    ]);
+  };
+
+  const removeSchedule = (id) => {
+    setSchedules((prev) => (prev.length > 1 ? prev.filter((item) => item.id !== id) : prev));
   };
 
   if (!selectedBranchId) {
@@ -298,44 +381,7 @@ const TrainingsPage = () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">يوم الأسبوع</label>
-                  <select
-                    className="input w-full"
-                    value={form.dayOfWeek}
-                    onChange={(e) => setForm(prev => ({ ...prev, dayOfWeek: e.target.value }))}
-                    required
-                  >
-                    <option value="">اختر اليوم</option>
-                    {DAYS_OF_WEEK.map(day => (
-                      <option key={day} value={day}>{day}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">وقت البداية</label>
-                  <input
-                    type="time"
-                    className="input w-full"
-                    value={form.startTime}
-                    onChange={(e) => setForm(prev => ({ ...prev, startTime: e.target.value }))}
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">وقت النهاية</label>
-                  <input
-                    type="time"
-                    className="input w-full"
-                    value={form.endTime}
-                    onChange={(e) => setForm(prev => ({ ...prev, endTime: e.target.value }))}
-                    required
-                  />
-                </div>
-
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">اسم المدرس</label>
                   <input
@@ -347,6 +393,60 @@ const TrainingsPage = () => {
                     required
                   />
                 </div>
+              </div>
+
+              <div className="space-y-3">
+                <h4 className="text-sm font-semibold text-gray-700">الجداول الزمنية</h4>
+                {schedules.map((item) => (
+                  <div
+                    key={item.id}
+                    className="grid grid-cols-1 md:grid-cols-4 gap-3 p-3 bg-gray-50 rounded-lg border"
+                  >
+                    <select
+                      className="input w-full"
+                      value={item.day}
+                      onChange={(e) => updateScheduleField(item.id, 'day', e.target.value)}
+                      required
+                    >
+                      <option value="">اختر اليوم</option>
+                      {DAYS_OF_WEEK.map((day) => (
+                        <option key={day} value={day}>{day}</option>
+                      ))}
+                    </select>
+                    <input
+                      type="time"
+                      className="input w-full"
+                      value={item.start}
+                      onChange={(e) => updateScheduleField(item.id, 'start', e.target.value)}
+                      required
+                    />
+                    <input
+                      type="time"
+                      className="input w-full"
+                      value={item.end}
+                      onChange={(e) => updateScheduleField(item.id, 'end', e.target.value)}
+                      required
+                    />
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      onClick={() => removeSchedule(item.id)}
+                      className="flex items-center justify-center gap-1"
+                    >
+                      حذف
+                    </Button>
+                  </div>
+                ))}
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={addSchedule}
+                  className="w-full flex items-center justify-center gap-2"
+                >
+                  <Plus className="w-4 h-4" />
+                  إضافة يوم آخر
+                </Button>
               </div>
 
               <div className="flex gap-3">
@@ -446,10 +546,6 @@ const TrainingsPage = () => {
                     ) : (
                       <span className="px-3 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium">مفعلة</span>
                     )}
-                    <Badge variant="secondary">{training.dayOfWeek || training.day || '—'}</Badge>
-                    <span className="text-sm text-gray-600">
-                      {training.startTime || '—'} - {training.endTime || '—'}
-                    </span>
                     <span className="text-sm font-medium">المدرس: {training.teacher || '—'}</span>
                   </div>
                 </CardContent>

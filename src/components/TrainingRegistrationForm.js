@@ -65,7 +65,7 @@ const formatSchedule = (raw) => {
 const normalizeTrainingCourse = (trainingDoc = {}) => {
   const displayName = trainingDoc.title || trainingDoc.name || 'دورة تكوينية';
   const rawPrice = trainingDoc.price;
-  const parsedPrice = typeof rawPrice === 'number' ? rawPrice : Number(rawPrice);
+  const parsedPrice = typeof rawPrice === 'number' ? rawPrice : Math.round(Number(rawPrice));
 
   return {
     id: trainingDoc.id,

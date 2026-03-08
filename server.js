@@ -285,7 +285,11 @@ app.post('/api/createSupportLessonRegistration', async (req, res) => {
       });
     }
 
-    // Create registration payload
+    // Create registration payload (self-contained: subjectName, yearName, teacherName)
+    const subjectName = String(lessonData.subject || (Array.isArray(lessonData.subjects) ? lessonData.subjects[0] : '') || lessonData.name || '').trim();
+    const yearName = String(lessonData.studyLevel || lessonData.year || lessonData.grade || '').trim() || null;
+    const teacherName = String(lessonData.teacherName || lessonData.teacher || '').trim() || null;
+
     const payload = {
       branchId,
       userId: uid,
@@ -294,7 +298,9 @@ app.post('/api/createSupportLessonRegistration', async (req, res) => {
       userEmail: String(userProfile.email || decoded.email || '').trim(),
       lessonId,
       lessonName: String(lessonData.name || lessonData.subject || '').trim(),
-      subjectName: String(lessonData.subject || (Array.isArray(lessonData.subjects) ? lessonData.subjects[0] : '') || lessonData.name || '').trim(),
+      subjectName,
+      yearName,
+      teacherName,
       studyYear: userStudyYear,
       studyYearId: userStudyYear,
       studyYearLabel: String(lessonData.studyLevel || '').trim(),

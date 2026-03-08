@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Price Input Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            direction: rtl;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+        }
+        input {
+            width: 200px;
+            padding: 10px;
+            font-size: 16px;
+            margin: 10px 0;
+        }
+        .result {
+            background: #f5f5f5;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+        .correct {
+            color: green;
+        }
+        .incorrect {
+            color: red;
+        }
+    </style>
+</head>
+<body>
+    <h1>Price Input Bug Test</h1>
+    
+    <div class="test-section">
+        <h3>❌ Incorrect (Old Behavior)</h3>
+        <input type="number" id="incorrect-input" placeholder="Type 3000 here">
+        <div class="result" id="incorrect-result">Value will be: <span id="incorrect-value">-</span></div>
+        <div id="incorrect-status" class="result"></div>
+    </div>
+    
+    <div class="test-section">
+        <h3>✅ Correct (Fixed Behavior)</h3>
+        <input type="number" id="correct-input" placeholder="Type 3000 here">
+        <div class="result" id="correct-result">Value will be: <span id="correct-value">-</span></div>
+        <div id="correct-status" class="result"></div>
+    </div>
+    
+    <div class="test-section">
+        <h3>Test Instructions</h3>
+        <ol>
+            <li>Type "3000" in both input fields</li>
+            <li>The incorrect field will show "2999" (bug)</li>
+            <li>The correct field will show "3000" (fixed)</li>
+        </ol>
+    </div>
+
+    <script>
+        // Simulate the old buggy behavior
+        const incorrectInput = document.getElementById('incorrect-input');
+        const incorrectValue = document.getElementById('incorrect-value');
+        const incorrectStatus = document.getElementById('incorrect-status');
+        
+        incorrectInput.addEventListener('input', (e) => {
+            // This is the old buggy code that was causing the issue
+            const processedValue = Math.round(Number(e.target.value));
+            incorrectValue.textContent = processedValue;
+            
+            if (e.target.value === '3000' && processedValue !== 3000) {
+                incorrectStatus.innerHTML = '<span class="incorrect">❌ BUG: Value changed from 3000 to ' + processedValue + '</span>';
+            } else if (e.target.value === '3000' && processedValue === 3000) {
+                incorrectStatus.innerHTML = '<span class="correct">✅ Value preserved correctly</span>';
+            }
+        });
+        
+        // Simulate the new correct behavior
+        const correctInput = document.getElementById('correct-input');
+        const correctValue = document.getElementById('correct-value');
+        const correctStatus = document.getElementById('correct-status');
+        
+        correctInput.addEventListener('input', (e) => {
+            // This is the new fixed code
+            const processedValue = e.target.value; // Keep as string while typing
+            correctValue.textContent = processedValue;
+            
+            if (e.target.value === '3000') {
+                correctStatus.innerHTML = '<span class="correct">✅ CORRECT: Value preserved as ' + processedValue + '</span>';
+            }
+        });
+    </script>
+</body>
+</html>

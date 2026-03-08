@@ -43,7 +43,7 @@ const AddLanguagePage = () => {
       await createLanguage(selectedBranchId, {
         name: formData.name,
         description: formData.description,
-        price: parseFloat(formData.price)
+        price: Math.round(Number(formData.price))
       });
 
       setSuccess('تم إضافة دورة اللغة بنجاح');

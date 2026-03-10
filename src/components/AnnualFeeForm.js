@@ -1414,22 +1414,41 @@ const AnnualFeeForm = ({ onClose, onSubmitted }) => {
             </label>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {[
-                { value: "CCP", label: "بريد الجزائر CCP", account: "1234567890" },
-                { value: "Baridimob", label: "بريدي موب BaridiMob", account: "0123456789" },
+              {
+                value: "CCP",
+                label: "بريد الجزائر CCP",
+                details: [
+                  { label: "الاسم", value: "Trust School Amara" },
+                  { label: "رقم الحساب", value: "1234567890" },
+                  { label: "المفتاح", value: "55" },
+                ],
+              },
+              {
+                value: "Baridimob",
+                label: "بريدي موب BaridiMob",
+                details: [
+                  { label: "رقم الهاتف", value: "0123456789" },
+                ],
+              },
               ].map((method) => (
                 <label
                   key={method.value}
-                  className="flex items-center p-4 border border-gray-200 rounded-lg cursor-pointer hover:border-primary transition-colors"
+                  className="flex items-start p-4 border border-gray-200 rounded-lg cursor-pointer hover:border-primary transition-colors"
                 >
                   <input
                     type="radio"
                     value={method.value}
                     {...register("paymentMethod", { required: "طريقة الدفع مطلوبة" })}
-                    className="ml-3"
+                    className="ml-3 mt-1"
                   />
                   <div>
-                    <div className="font-medium">{method.label}</div>
-                    <div className="text-sm text-gray-600">{method.account}</div>
+                    <div className="font-medium mb-1">{method.label}</div>
+                    {method.details.map((detail) => (
+                      <div key={detail.label} className="text-sm text-gray-600">
+                        <span className="font-medium text-gray-700">{detail.label}: </span>
+                        <span>{detail.value}</span>
+                      </div>
+                    ))}
                   </div>
                 </label>
               ))}

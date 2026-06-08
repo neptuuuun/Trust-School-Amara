@@ -124,7 +124,7 @@ const AnnouncementsPage = () => {
   // ─────────────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6" dir="rtl">
-      <Breadcrumb items={[{ label: 'الإعلانات' }]} />
+      <Breadcrumb trail={['الإعلانات']} />
 
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">

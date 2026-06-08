@@ -1,242 +1,465 @@
+// LanguageRegisteredPage — ARCHIVE of approved language registrations.
+//
+// This page answers "who is already registered in language programs?" — it is a
+// management/archive view, NOT a verification queue. Approval (verify/reject) is
+// handled entirely on the Payments Verification page. This page therefore reads
+// ONLY the approved records (branches/{b}/languagesRegistered) and offers
+// management actions: view details, print, delete.
+//
+// Branch isolation: streamRegisteredLanguages is branchId-scoped; we early-return
+// when no branch is selected. No cross-branch data is ever fetched.
+
 import React, { useEffect, useMemo, useState } from 'react';
+import {
+  GraduationCap, Languages, CalendarPlus, Layers, Download, UserPlus,
+  Eye, Printer, Trash2, Phone, BadgeCheck,
+} from 'lucide-react';
 import { useBranch } from '../../contexts/BranchContext';
-import { streamRegisteredLanguages } from '../../services/firestoreService';
-import { Loader2, Search, GraduationCap, Phone, FileText, BadgeCheck, Download } from 'lucide-react';
+import {
+  streamRegisteredLanguages,
+  adminRemoveLanguageRegistration,
+} from '../../services/firestoreService';
 import { exportToCsv, generateFilename } from '../../utils/csvExport';
+import { printRecord } from '../../utils/printRecord';
+import AddEditLanguageModal from '../components/AddEditLanguageModal';
+import AdminModal from '../components/AdminModal';
+import AdminConfirmDialog from '../components/AdminConfirmDialog';
+import FileViewerModal from '../components/FileViewerModal';
+import { useToast } from '../components/ToastNotifications';
+import {
+  StatCard, PageHeader, SearchInput, EmptyState, ArchiveSkeleton,
+  DetailSection, DetailRow, SELECT_CLASS,
+  DATE_RANGES, inDateRange, isThisMonth, fmtDate, fmtDateTime, formatMoney,
+} from '../components/archive/ArchiveKit';
 
-const formatDate = (ts) => {
-  if (!ts) return '—';
-  const date = ts.toDate ? ts.toDate() : new Date(ts);
-  return date.toLocaleString('ar-DZ', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  });
-};
+// Format a schedules[] array into a compact Arabic string for display/CSV.
+const formatSchedulesText = (schedules) =>
+  (Array.isArray(schedules) ? schedules : [])
+    .map((s) => `${s?.day || ''} ${s?.start || ''}${s?.end ? `-${s.end}` : ''}`.trim())
+    .filter(Boolean)
+    .join('، ');
 
-const Detail = ({ label, value }) => (
-  <div className="flex flex-col text-sm">
-    <span className="text-gray-500">{label}</span>
-    <span className="font-semibold text-gray-900">{value || '—'}</span>
-  </div>
+// ── Normalizer: languagesRegistered document → view model ───────────────────────
+const norm = (e) => ({
+  id:            e.id,
+  studentId:     e.userId || '',
+  studentName:   e.studentName || '—',
+  studentPhone:  e.studentPhone || '',
+  guardianPhone: e.guardianPhone || '',
+  studentEmail:  e.studentEmail || e.userEmail || '',
+  // New Subject → Class fields (fall back to legacy language/level for old records)
+  subjectName:   e.subjectName || e.languageName || '—',
+  groupName:     e.groupName || '',
+  schedules:     Array.isArray(e.schedules) ? e.schedules : [],
+  schedulesText: formatSchedulesText(e.schedules),
+  // Legacy fields kept for existing records + filters
+  languageName:  e.languageName || e.subjectName || '—',
+  levelLabel:    e.levelLabel || '',
+  teacherName:   e.teacherName || '',
+  languagePrice: e.languagePrice ?? e.price ?? null,
+  paymentMethod: e.paymentMethod || '',
+  paymentProof:  e.receiptUrl || e.paymentProof || '',
+  registeredAt:  e.registeredAt || e.verifiedAt || e.createdAt || null,
+  verifiedBy:    e.verifiedBy || null,
+  notes:         e.notes || e.note || '',
+  birthDate:     e.birthDate || null,
+  birthPlace:    e.birthPlace || '',
+});
+
+const RegisteredBadge = () => (
+  <span className="inline-flex items-center gap-1 rounded-full border border-success-200 bg-success-50 px-2.5 py-0.5 text-xs font-semibold text-success-700">
+    <BadgeCheck className="h-3.5 w-3.5" /> مسجَّل
+  </span>
 );
 
+// ── Detail drawer ────────────────────────────────────────────────────────────────
+const DetailDrawer = ({ entry, onClose, onPrint, onDelete, onViewImage }) => (
+  <AdminModal
+    open
+    onClose={onClose}
+    size="md"
+    title="تفاصيل التسجيل"
+    badge={<RegisteredBadge />}
+    footer={(
+      <div className="flex w-full gap-2.5">
+        <button
+          onClick={() => onPrint(entry)}
+          className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-gray-200 py-2.5 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50"
+        >
+          <Printer className="h-4 w-4" /> طباعة
+        </button>
+        <button
+          onClick={() => onDelete(entry)}
+          className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-danger-200 bg-danger-50 py-2.5 text-sm font-semibold text-danger-600 transition-colors hover:bg-danger-100"
+        >
+          <Trash2 className="h-4 w-4" /> حذف
+        </button>
+      </div>
+    )}
+  >
+    <div className="space-y-5">
+      <DetailSection title="معلومات الطالب">
+        <DetailRow label="الاسم الكامل" value={entry.studentName} />
+        <DetailRow label="رقم الهاتف" value={entry.studentPhone} />
+        <DetailRow label="هاتف الولي" value={entry.guardianPhone} />
+        <DetailRow label="البريد الإلكتروني" value={entry.studentEmail} />
+        <DetailRow label="مكان الميلاد" value={entry.birthPlace} />
+        <DetailRow label="تاريخ الميلاد" value={entry.birthDate ? fmtDate(entry.birthDate) : ''} />
+      </DetailSection>
+
+      <DetailSection title="معلومات البرنامج">
+        <DetailRow label="اللغة" value={entry.subjectName} />
+        {entry.groupName && <DetailRow label="المجموعة" value={entry.groupName} />}
+        {entry.levelLabel && <DetailRow label="المستوى" value={entry.levelLabel} />}
+        <DetailRow label="الأستاذ" value={entry.teacherName} />
+        {entry.schedules?.length > 0 && <DetailRow label="المواعيد" value={entry.schedulesText} />}
+        <DetailRow label="السعر" value={formatMoney(entry.languagePrice)} />
+        <DetailRow label="طريقة الدفع" value={entry.paymentMethod} />
+        <DetailRow label="تاريخ التسجيل" value={fmtDateTime(entry.registeredAt)} />
+        <DetailRow label="تمت المعالجة بواسطة" value={entry.verifiedBy?.name} />
+      </DetailSection>
+
+      {entry.notes && (
+        <DetailSection title="ملاحظات">
+          <p className="py-2.5 text-sm text-gray-700">{entry.notes}</p>
+        </DetailSection>
+      )}
+
+      <section>
+        <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400">إيصال الدفع</p>
+        {entry.paymentProof ? (
+          <button
+            type="button"
+            onClick={() => onViewImage(entry.paymentProof)}
+            className="group relative block w-full overflow-hidden rounded-xl border border-gray-200"
+          >
+            <img src={entry.paymentProof} alt="إيصال الدفع" className="max-h-52 w-full object-contain transition-opacity group-hover:opacity-90" />
+            <span className="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/20">
+              <Eye className="h-8 w-8 text-white opacity-0 drop-shadow-lg transition-opacity group-hover:opacity-100" />
+            </span>
+          </button>
+        ) : (
+          <p className="rounded-xl border border-dashed border-gray-200 px-4 py-3 text-sm italic text-gray-400">لا يوجد إيصال مرفق</p>
+        )}
+      </section>
+    </div>
+  </AdminModal>
+);
+
+// ── Main page ─────────────────────────────────────────────────────────────────
 const LanguageRegisteredPage = () => {
   const { selectedBranchId } = useBranch();
-  const [entries, setEntries] = useState([]);
+  const { show: showToast } = useToast();
+
+  const [rawEntries, setRawEntries] = useState([]);
   const [loading, setLoading] = useState(true);
+
   const [search, setSearch] = useState('');
+  const [langFilter, setLangFilter] = useState('all');
   const [levelFilter, setLevelFilter] = useState('all');
-  const [exporting, setExporting] = useState(false);
+  const [dateFilter, setDateFilter] = useState('all');
 
+  const [drawer, setDrawer] = useState(null);
+  const [lightbox, setLightbox] = useState(null);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState({ open: false, entry: null });
+  const [deleting, setDeleting] = useState(false);
 
+  // Real-time: approved language registrations only (branch-scoped).
   useEffect(() => {
     if (!selectedBranchId) {
-      setEntries([]);
+      setRawEntries([]);
       setLoading(false);
-      return;
+      return undefined;
     }
-
     setLoading(true);
-    const unsubscribe = streamRegisteredLanguages(selectedBranchId, (list) => {
-      const sorted = [...list].sort((a, b) => {
-        const dateA = a.verifiedAt?.toDate ? a.verifiedAt.toDate() : (a.registeredAt?.toDate ? a.registeredAt.toDate() : new Date(a.registeredAt || 0));
-        const dateB = b.verifiedAt?.toDate ? b.verifiedAt.toDate() : (b.registeredAt?.toDate ? b.registeredAt.toDate() : new Date(b.registeredAt || 0));
-        return dateB - dateA;
-      });
-      setEntries(sorted);
+    const unsub = streamRegisteredLanguages(selectedBranchId, (list) => {
+      setRawEntries(list.map(norm));
       setLoading(false);
     });
-
-    return () => unsubscribe();
+    return () => unsub?.();
   }, [selectedBranchId]);
 
+  // ── Derived ───────────────────────────────────────────────────────────────
+  const stats = useMemo(() => ({
+    total:     rawEntries.length,
+    thisMonth: rawEntries.filter((e) => isThisMonth(e.registeredAt)).length,
+    languages: new Set(rawEntries.map((e) => e.languageName).filter(Boolean)).size,
+    levels:    new Set(rawEntries.map((e) => e.levelLabel).filter(Boolean)).size,
+  }), [rawEntries]);
+
+  const langOptions = useMemo(
+    () => [...new Set(rawEntries.map((e) => e.languageName).filter(Boolean))].sort(),
+    [rawEntries]
+  );
+
   const levelOptions = useMemo(() => {
-    const set = new Set();
-    entries.forEach((entry) => {
-      if (entry.levelLabel) {
-        set.add(entry.levelLabel);
-      }
-    });
-    return Array.from(set);
-  }, [entries]);
+    if (langFilter === 'all') return [];
+    return [...new Set(
+      rawEntries.filter((e) => e.languageName === langFilter).map((e) => e.levelLabel).filter(Boolean)
+    )].sort();
+  }, [rawEntries, langFilter]);
 
-  const filteredEntries = useMemo(() => {
+  const rows = useMemo(() => {
     const term = search.trim().toLowerCase();
-    return entries.filter((entry) => {
-      const matchesSearch = term
-        ? `${entry.studentName || ''} ${entry.languageName || ''} ${entry.levelLabel || ''}`
-            .toLowerCase()
-            .includes(term)
-        : true;
-      const matchesLevel = levelFilter === 'all' || entry.levelLabel === levelFilter;
-      return matchesSearch && matchesLevel;
-    });
-  }, [entries, search, levelFilter]);
-
-  const handleExportCsv = () => {
-    if (!selectedBranchId || exporting || filteredEntries.length === 0) {
-      if (filteredEntries.length === 0) {
-        alert('لا توجد بيانات للتصدير.');
+    return rawEntries.filter((e) => {
+      if (langFilter !== 'all' && e.languageName !== langFilter) return false;
+      if (levelFilter !== 'all' && e.levelLabel !== levelFilter) return false;
+      if (!inDateRange(e.registeredAt, dateFilter)) return false;
+      if (term) {
+        const hay = `${e.studentName} ${e.studentPhone} ${e.studentEmail} ${e.languageName} ${e.levelLabel}`.toLowerCase();
+        if (!hay.includes(term)) return false;
       }
-      return;
-    }
+      return true;
+    });
+  }, [rawEntries, search, langFilter, levelFilter, dateFilter]);
 
-    setExporting(true);
+  const handleLangFilter = (v) => { setLangFilter(v); setLevelFilter('all'); };
+
+  // ── Actions ───────────────────────────────────────────────────────────────
+  const handlePrint = (entry) => {
+    const ok = printRecord({
+      title: 'تأكيد تسجيل — برامج اللغات',
+      student: entry.studentName,
+      badge: { label: 'مسجَّل', tone: 'green' },
+      sections: [
+        { heading: 'معلومات الطالب', rows: [
+          ['الاسم الكامل', entry.studentName],
+          ['رقم الهاتف', entry.studentPhone],
+          ['هاتف الولي', entry.guardianPhone],
+          ['البريد الإلكتروني', entry.studentEmail],
+        ]},
+        { heading: 'معلومات البرنامج', rows: [
+          ['اللغة', entry.subjectName],
+          ['المجموعة', entry.groupName],
+          ['المستوى', entry.levelLabel],
+          ['الأستاذ', entry.teacherName],
+          ['المواعيد', entry.schedulesText],
+          ['السعر', formatMoney(entry.languagePrice)],
+          ['طريقة الدفع', entry.paymentMethod],
+          ['تاريخ التسجيل', fmtDateTime(entry.registeredAt)],
+        ]},
+      ],
+    });
+    if (!ok) showToast('warning', 'يرجى السماح بالنوافذ المنبثقة للطباعة.');
+  };
+
+  const askDelete = (entry) => setDeleteConfirm({ open: true, entry });
+
+  const confirmDelete = async () => {
+    const { entry } = deleteConfirm;
+    if (!entry) return;
+    setDeleting(true);
     try {
-      // Define CSV columns with Arabic headers
-      const columns = [
-        { key: 'studentName', header: 'اسم الطالب' },
-        { key: 'studentEmail', header: 'البريد الإلكتروني' },
-        { key: 'languageName', header: 'اللغة' },
-        { key: 'levelLabel', header: 'المستوى' },
-        { 
-          key: 'status', 
-          header: 'الحالة',
-          transform: (value, row) => {
-            if (value) return value;
-            return row.verifiedAt ? 'مؤكد' : 'موافق عليه';
-          }
-        },
-        { key: 'registeredAt', header: 'تاريخ التسجيل', type: 'date' },
-        { key: 'verifiedAt', header: 'تاريخ التأكيد', type: 'date' },
-        { key: 'paymentMethod', header: 'طريقة الدفع' },
-        { key: 'studentPhone', header: 'هاتف الطالب' },
-        { key: 'guardianPhone', header: 'هاتف الولي' },
-        { key: 'teacherName', header: 'اسم الأستاذ' },
-        { key: 'languagePrice', header: 'السعر' },
-        { key: 'receiptUrl', header: 'رابط الإيصال' },
-        { key: 'branchId', header: 'الفرع' }
-      ];
-
-      // Generate filename with current date
-      const filename = generateFilename('languages-registrations', 'csv');
-
-      // Export to CSV using filtered entries (respects search and filters)
-      exportToCsv(filteredEntries, columns, filename);
-    } catch (e) {
-      console.error('CSV export failed:', e);
-      alert('فشل تصدير الملف.');
+      await adminRemoveLanguageRegistration(selectedBranchId, entry.id);
+      showToast('info', 'تم حذف التسجيل');
+      setDeleteConfirm({ open: false, entry: null });
+      setDrawer((d) => (d?.id === entry.id ? null : d));
+    } catch (err) {
+      showToast('error', 'فشل الحذف: ' + (err.message || ''));
     } finally {
-      setExporting(false);
+      setDeleting(false);
     }
   };
 
+  const handleExport = () => {
+    if (rows.length === 0) { showToast('warning', 'لا توجد بيانات للتصدير.'); return; }
+    exportToCsv(rows, [
+      { key: 'studentName',   header: 'اسم الطالب' },
+      { key: 'studentPhone',  header: 'الهاتف' },
+      { key: 'studentEmail',  header: 'البريد الإلكتروني' },
+      { key: 'subjectName',   header: 'اللغة' },
+      { key: 'groupName',     header: 'المجموعة' },
+      { key: 'levelLabel',    header: 'المستوى' },
+      { key: 'teacherName',   header: 'الأستاذ' },
+      { key: 'schedulesText', header: 'المواعيد' },
+      { key: 'languagePrice', header: 'السعر' },
+      { key: 'registeredAt',  header: 'تاريخ التسجيل', type: 'date' },
+    ], generateFilename('language-registered', 'csv'));
+  };
+
+  // ── Guard ─────────────────────────────────────────────────────────────────
   if (!selectedBranchId) {
-    return (
-      <div className="p-6 text-center" dir="rtl">
-        <p className="text-gray-600">يرجى اختيار الفرع لعرض قائمة المسجلين.</p>
-      </div>
-    );
+    return <div className="p-6 text-center text-gray-500" dir="rtl">يرجى اختيار الفرع لعرض المسجلين في اللغات.</div>;
   }
 
   return (
-    <div className="space-y-6" dir="rtl">
-      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900">قائمة المسجلين في دورات اللغات</h1>
-          <p className="text-gray-600">عرض دائم لكل طلبات اللغات المقبولة</p>
-        </div>
-        <div className="flex w-full flex-col gap-3 md:w-auto md:flex-row md:items-center">
-          <button
-            type="button"
-            onClick={handleExportCsv}
-            disabled={exporting || loading}
-            className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <Download className="h-4 w-4" />
-            {exporting ? 'جاري التصدير...' : 'تصدير CSV'}
-          </button>
-          <div className="relative w-full md:w-72">
-            <Search className="absolute right-3 top-3.5 h-4 w-4 text-gray-400" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="ابحث باسم الطالب أو اللغة"
-              className="w-full rounded-lg border border-gray-300 bg-white py-2 pr-9 pl-3 focus:border-primary focus:ring-2 focus:ring-primary/30"
-            />
-          </div>
-          <select
-            value={levelFilter}
-            onChange={(e) => setLevelFilter(e.target.value)}
-            className="rounded-lg border border-gray-300 bg-white py-2 px-3 text-sm font-medium text-gray-700 focus:border-primary focus:ring-2 focus:ring-primary/30"
-          >
-            <option value="all">جميع المستويات</option>
-            {levelOptions.map((level) => (
-              <option key={level} value={level}>
-                {level}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
+    <div className="space-y-5" dir="rtl">
+      {/* Overlays */}
+      {drawer && (
+        <DetailDrawer
+          entry={drawer}
+          onClose={() => setDrawer(null)}
+          onPrint={handlePrint}
+          onDelete={askDelete}
+          onViewImage={setLightbox}
+        />
+      )}
+      <FileViewerModal url={lightbox} onClose={() => setLightbox(null)} />
+      {showAddModal && (
+        <AddEditLanguageModal
+          branchId={selectedBranchId}
+          registration={null}
+          onClose={() => setShowAddModal(false)}
+          onSuccess={() => setShowAddModal(false)}
+        />
+      )}
+      <AdminConfirmDialog
+        open={deleteConfirm.open}
+        title="حذف التسجيل"
+        message={`هل أنت متأكد من حذف تسجيل "${deleteConfirm.entry?.studentName || ''}"؟ لا يمكن التراجع عن هذا الإجراء.`}
+        confirmLabel="حذف"
+        danger
+        loading={deleting}
+        onConfirm={confirmDelete}
+        onCancel={() => setDeleteConfirm({ open: false, entry: null })}
+      />
+
+      {/* Header */}
+      <PageHeader
+        title="المسجلون في اللغات"
+        description="عرض وإدارة جميع الطلاب المقبولين والمسجلين في برامج اللغات."
+      >
+        <button
+          onClick={handleExport}
+          className="inline-flex items-center gap-1.5 rounded-xl border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+        >
+          <Download className="h-4 w-4" /> تصدير CSV
+        </button>
+        <button
+          onClick={() => setShowAddModal(true)}
+          className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary/90"
+        >
+          <UserPlus className="h-4 w-4" /> تسجيل يدوي
+        </button>
+      </PageHeader>
 
       {loading ? (
-        <div className="flex items-center justify-center py-20">
-          <Loader2 className="h-10 w-10 animate-spin text-primary" />
-        </div>
-      ) : filteredEntries.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-gray-300 bg-white p-12 text-center">
-          <GraduationCap className="mx-auto mb-4 h-12 w-12 text-gray-400" />
-          <p className="text-gray-600">لا توجد تسجيلات مؤكدة حالياً.</p>
-        </div>
+        <ArchiveSkeleton statCount={4} cols={5} />
       ) : (
-        <div className="grid gap-4">
-          {filteredEntries.map((entry) => (
-            <div key={entry.formId} className="rounded-2xl border border-gray-100 bg-white p-6 shadow-sm">
-              <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-                <div>
-                  <div className="flex items-center gap-3 text-lg font-semibold text-gray-900">
-                    <BadgeCheck className="h-5 w-5 text-green-500" />
-                    {entry.studentName || 'طالب غير مسمى'}
+        <>
+          {/* Stats */}
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <StatCard icon={GraduationCap} tone="primary" label="إجمالي المسجلين" value={stats.total} />
+            <StatCard icon={CalendarPlus}  tone="green"   label="المسجلون هذا الشهر" value={stats.thisMonth} />
+            <StatCard icon={Languages}     tone="blue"    label="عدد اللغات" value={stats.languages} />
+            <StatCard icon={Layers}        tone="indigo"  label="عدد المستويات" value={stats.levels} />
+          </div>
+
+          {/* Filters */}
+          <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
+            <SearchInput value={search} onChange={setSearch} placeholder="ابحث بالاسم أو الهاتف أو البريد..." />
+            <select value={langFilter} onChange={(e) => handleLangFilter(e.target.value)} className={SELECT_CLASS}>
+              <option value="all">جميع اللغات</option>
+              {langOptions.map((l) => <option key={l} value={l}>{l}</option>)}
+            </select>
+            {langFilter !== 'all' && levelOptions.length > 0 && (
+              <select value={levelFilter} onChange={(e) => setLevelFilter(e.target.value)} className={SELECT_CLASS}>
+                <option value="all">جميع المستويات</option>
+                {levelOptions.map((l) => <option key={l} value={l}>{l}</option>)}
+              </select>
+            )}
+            <select value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} className={SELECT_CLASS}>
+              {DATE_RANGES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+            </select>
+          </div>
+
+          {/* Content */}
+          {rows.length === 0 ? (
+            <EmptyState
+              icon={GraduationCap}
+              title={rawEntries.length === 0 ? 'لا يوجد طلاب مسجلون بعد' : 'لا توجد نتائج مطابقة'}
+              subtitle={rawEntries.length === 0
+                ? 'سيظهر هنا الطلاب بعد الموافقة على تسجيلاتهم في برامج اللغات.'
+                : 'جرّب تعديل البحث أو الفلاتر.'}
+            />
+          ) : (
+            <>
+              {/* Desktop table — sticky header */}
+              <div className="hidden max-h-[70vh] overflow-auto rounded-2xl border border-gray-100 bg-white shadow-sm sm:block">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 z-10">
+                    <tr className="border-b border-gray-100 bg-gray-50">
+                      {['الطالب', 'اللغة والمستوى', 'الأستاذ', 'تاريخ التسجيل', 'الإجراءات'].map((h) => (
+                        <th key={h} className="px-4 py-3 text-start text-xs font-semibold uppercase tracking-wide text-gray-500">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {rows.map((e) => (
+                      <tr key={e.id} className="transition-colors hover:bg-gray-50/70">
+                        <td className="px-4 py-3.5">
+                          <p className="font-semibold text-gray-900">{e.studentName}</p>
+                          {e.studentPhone && <p className="mt-0.5 text-xs text-gray-400">{e.studentPhone}</p>}
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <p className="font-medium text-gray-700">{e.subjectName}</p>
+                          {(e.groupName || e.levelLabel) && (
+                            <p className="mt-0.5 text-xs text-gray-500">
+                              {[e.groupName, e.levelLabel].filter(Boolean).join(' · ')}
+                            </p>
+                          )}
+                        </td>
+                        <td className="px-4 py-3.5 text-gray-600">{e.teacherName || '—'}</td>
+                        <td className="whitespace-nowrap px-4 py-3.5 text-xs text-gray-500">{fmtDate(e.registeredAt)}</td>
+                        <td className="px-4 py-3.5">
+                          <div className="flex items-center gap-1.5">
+                            <button onClick={() => setDrawer(e)} className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50">
+                              <Eye className="h-3.5 w-3.5" /> عرض
+                            </button>
+                            <button onClick={() => handlePrint(e)} aria-label="طباعة" title="طباعة" className="inline-flex items-center justify-center rounded-lg border border-gray-200 p-1.5 text-gray-500 transition-colors hover:bg-gray-50 hover:text-primary">
+                              <Printer className="h-4 w-4" />
+                            </button>
+                            <button onClick={() => askDelete(e)} aria-label="حذف" title="حذف" className="inline-flex items-center justify-center rounded-lg border border-danger-200 p-1.5 text-danger-500 transition-colors hover:bg-danger-50">
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Mobile cards */}
+              <div className="space-y-3 sm:hidden">
+                {rows.map((e) => (
+                  <div key={e.id} className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="font-semibold text-gray-900">{e.studentName}</p>
+                        <p className="mt-0.5 text-sm font-medium text-primary">
+                          {[e.subjectName, e.groupName, e.levelLabel].filter(Boolean).join(' — ')}
+                        </p>
+                        {e.studentPhone && (
+                          <p className="mt-1 inline-flex items-center gap-1 text-xs text-gray-400"><Phone className="h-3.5 w-3.5" />{e.studentPhone}</p>
+                        )}
+                      </div>
+                      <RegisteredBadge />
+                    </div>
+                    <p className="mt-2 text-xs text-gray-400">سُجّل في {fmtDate(e.registeredAt)}</p>
+                    <div className="mt-3 flex gap-2 border-t border-gray-100 pt-3">
+                      <button onClick={() => setDrawer(e)} className="inline-flex flex-1 items-center justify-center gap-1 rounded-xl border border-gray-200 py-2 text-xs font-medium text-gray-600">
+                        <Eye className="h-3.5 w-3.5" /> عرض
+                      </button>
+                      <button onClick={() => handlePrint(e)} className="inline-flex items-center justify-center rounded-xl border border-gray-200 px-3 py-2 text-gray-500">
+                        <Printer className="h-4 w-4" />
+                      </button>
+                      <button onClick={() => askDelete(e)} className="inline-flex items-center justify-center rounded-xl border border-danger-200 bg-danger-50 px-3 py-2 text-danger-600">
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
                   </div>
-                  <p className="text-sm text-gray-500">{entry.branchId}</p>
-                </div>
-                <div className="flex flex-wrap gap-4 text-sm">
-                  <Detail label="المستوى" value={entry.levelLabel} />
-                  <Detail label="اللغة" value={entry.languageName} />
-                  <Detail label="طريقة الدفع" value={entry.paymentMethod} />
-                  <Detail label="هاتف الطالب" value={entry.studentPhone} />
-                  <Detail label="هاتف الولي" value={entry.guardianPhone} />
-                </div>
+                ))}
               </div>
 
-              <div className="mt-4 grid gap-4 rounded-xl border border-gray-100 bg-gray-50 p-4 text-sm md:grid-cols-2 lg:grid-cols-4">
-                <Detail label="اسم الأستاذ" value={entry.teacherName || '—'} />
-                <Detail label="سعر الدورة" value={entry.languagePrice ? `${entry.languagePrice} دج` : '—'} />
-                <Detail label="وقت التحقق" value={formatDate(entry.verifiedAt || entry.registeredAt)} />
-                <Detail label="البريد" value={entry.studentEmail} />
-              </div>
-
-              {entry.receiptUrl && (
-                <div className="mt-4 flex items-center gap-2 text-sm text-primary-600">
-                  <FileText className="h-4 w-4" />
-                  <a href={entry.receiptUrl} target="_blank" rel="noreferrer" className="underline">
-                    عرض إيصال الدفع
-                  </a>
-                </div>
-              )}
-
-              <div className="mt-4 flex flex-wrap gap-4 text-sm text-gray-600">
-                <span className="flex items-center gap-2">
-                  <Phone className="h-4 w-4" />
-                  {entry.studentPhone || '—'}
-                </span>
-                <span className="flex items-center gap-2">
-                  <GraduationCap className="h-4 w-4" />
-                  {entry.levelId || 'غير محدد'}
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
+              <p className="px-1 text-xs text-gray-400">عرض {rows.length} من {rawEntries.length} تسجيل</p>
+            </>
+          )}
+        </>
       )}
     </div>
   );
 };
 
 export default LanguageRegisteredPage;
-

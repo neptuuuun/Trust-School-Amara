@@ -26,7 +26,7 @@ class AdminErrorBoundary extends React.Component {
       return (
         <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4" dir="rtl">
           <div className="text-center">
-            <h1 className="text-6xl font-bold text-red-600 mb-4">خطأ في النظام</h1>
+            <h1 className="text-6xl font-bold text-danger-600 mb-4">خطأ في النظام</h1>
             <h2 className="text-2xl font-semibold text-gray-800 mb-4">حدث خطأ غير متوقع</h2>
             <p className="text-gray-600 mb-6">
               يرجى تحديث الصفحة والمحاولة مرة أخرى. إذا استمرت المشكلة، يرجى التواصل مع فريق الدعم الفني.
@@ -52,12 +52,12 @@ class AdminErrorBoundary extends React.Component {
                 <summary className="cursor-pointer text-sm text-gray-500 hover:text-gray-700">
                   معلومات الخطأ (للتطوير فقط)
                 </summary>
-                <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg text-right">
-                  <p className="font-mono text-sm text-red-800 mb-2">
+                <div className="mt-4 p-4 bg-danger-50 border border-danger-200 rounded-lg text-start">
+                  <p className="font-mono text-sm text-danger-800 mb-2">
                     {this.state.error && this.state.error.toString()}
                   </p>
                   <pre className="text-xs text-gray-700 overflow-auto">
-                    {this.state.errorInfo.componentStack}
+                    {this.state.errorInfo?.componentStack}
                   </pre>
                 </div>
               </details>

@@ -21,11 +21,11 @@ import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import AdminLogin from './admin/AdminLogin';
 import InternalRulesPage from './pages/InternalRulesPage';
+import CompleteRegistrationPage from './pages/CompleteRegistrationPage';
 // New student registration forms
 import LanguageRegistrationForm from './components/LanguageRegistrationForm';
 import SupportLessonRegistrationForm from './components/SupportLessonRegistrationForm';
 import TrainingRegistrationForm from './components/TrainingRegistrationForm';
-import AnnualFeePage from './pages/AnnualFeePage';
 import './App.css';
 
 // Component to handle scroll to top on route change
@@ -41,8 +41,9 @@ function ScrollToTop() {
 function PublicLayout() {
   return (
     <>
+      <a href="#main-content" className="skip-to-content">انتقل إلى المحتوى الرئيسي</a>
       <Header />
-      <main>
+      <main id="main-content">
         <Outlet />
       </main>
       <Footer />
@@ -63,30 +64,52 @@ function RootRedirect() {
 
 // Branch selection guard
 function BranchGuard() {
-  const navigate = useNavigate();
   const location = useLocation();
   const { selectedBranchId } = useBranch();
-  const { user, branch } = useAuth();
-  
-  useEffect(() => {
-    const branchId = localStorage.getItem('branchId');
-    const isSelectingBranch = location.pathname === '/select-branch' || location.pathname === '/branch-selector';
-    const isAdminRoute = location.pathname.startsWith('/admin');
-    const isLoginRoute = location.pathname === '/login';
-    const isProfileRoute = location.pathname === '/profile';
-    
-    // Don't require branch for admin routes, login, or profile (profile has its own auth guard)
-    if (!branchId && !isSelectingBranch && !isAdminRoute && !isLoginRoute && !isProfileRoute) {
-      navigate('/select-branch', { replace: true, state: { from: location } });
-    }
+  const { user, branch, role } = useAuth();
 
-    // If a user is logged in but their profile branch doesn't match selected branch, force login
-    if (user && selectedBranchId && branch && branch !== selectedBranchId) {
-      navigate('/login', { replace: true });
-    }
-  }, [navigate, location]);
-  
+  const isSelectingBranch = location.pathname === '/select-branch' || location.pathname === '/branch-selector';
+  const isAdminRoute = location.pathname.startsWith('/admin');
+  const isLoginRoute = location.pathname === '/login';
+  const isProfileRoute = location.pathname === '/profile';
+
+  // Require a branch for non-exempt routes.
+  // Read from selectedBranchId (context) — kept in sync with localStorage by
+  // selectBranch() and setBranchFromAuth(), so no direct localStorage reads needed.
+  if (!selectedBranchId && !isSelectingBranch && !isAdminRoute && !isLoginRoute && !isProfileRoute) {
+    return <Navigate to="/select-branch" replace state={{ from: location }} />;
+  }
+
+  // Branch mismatch for non-admin users only.
+  if (user && role !== 'admin' && selectedBranchId && branch && branch !== selectedBranchId) {
+    return <Navigate to="/login" replace />;
+  }
+
   return <Outlet />;
+}
+
+
+
+// Reusable loading/blocked screen shown by route guards
+function LoadingScreen({ message = 'جاري التحميل...' }) {
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="flex items-center space-x-2 space-x-reverse">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+        <span className="text-primary text-lg">{message}</span>
+      </div>
+    </div>
+  );
+}
+
+function BlockedScreen({ children }) {
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center" dir="rtl">
+      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center mx-4 max-w-xl">
+        {children}
+      </div>
+    </div>
+  );
 }
 
 // Admin route guard - only allows authenticated admin users
@@ -95,27 +118,16 @@ function RequireAdmin() {
   const { selectedBranchId } = useBranch();
   const location = useLocation();
 
-  // Debug log
-  console.log('RequireAdmin Check:', { user: !!user, role, loading, path: location.pathname });
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="flex items-center space-x-2 space-x-reverse">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-          <span className="text-primary text-lg">جاري التحميل...</span>
-        </div>
-      </div>
-    );
-  }
+  if (loading) return <LoadingScreen />;
 
   if (!user) {
-    return <Navigate to="/login" state={{ from: location }} replace />;
+    // Redirect to the admin login page, NOT the student login page
+    return <Navigate to="/admin/login" state={{ from: location }} replace />;
   }
 
   // Enforce branch match: user must belong to selected branch
   if (branch && selectedBranchId && branch !== selectedBranchId) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/admin/login" replace />;
   }
 
   if (role !== 'admin') {
@@ -125,56 +137,62 @@ function RequireAdmin() {
   return <Outlet />;
 }
 
+// Email verification screen with inline feedback (no alert())
+function EmailVerificationScreen({ resendVerificationEmail }) {
+  const [resendStatus, setResendStatus] = React.useState('');
+
+  const handleResend = async () => {
+    setResendStatus('sending');
+    try {
+      await resendVerificationEmail();
+      setResendStatus('success');
+    } catch {
+      setResendStatus('error');
+    }
+  };
+
+  return (
+    <BlockedScreen>
+      <p className="text-gray-800 font-semibold mb-3">يرجى تأكيد البريد الإلكتروني للمتابعة.</p>
+      <p className="text-gray-700 text-sm leading-6 mb-3">
+        في حال لم تجد رسالة التأكيد، يرجى التحقق من مجلد الرسائل غير المرغوب فيها (Spam / Junk).
+      </p>
+      {resendStatus === 'success' && (
+        <p className="text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2 text-sm mb-3">
+          تم إرسال رابط التأكيد. تحقق من بريدك الإلكتروني.
+        </p>
+      )}
+      {resendStatus === 'error' && (
+        <p className="text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-sm mb-3">
+          تعذر الإرسال. حاول مرة أخرى.
+        </p>
+      )}
+      <button
+        onClick={handleResend}
+        disabled={resendStatus === 'sending' || resendStatus === 'success'}
+        className="mt-1 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-700 transition-colors disabled:opacity-50"
+      >
+        {resendStatus === 'sending' ? 'جاري الإرسال...' : 'إعادة إرسال رسالة التأكيد'}
+      </button>
+    </BlockedScreen>
+  );
+}
+
 // Student route guard - only allows authenticated student users
 function RequireStudent() {
-  const { user, role, verificationStatus, profileDoc, profileDocPath, loading, branch, authEmailVerified, emailVerificationSyncing, resendVerificationEmail } = useAuth();
+  const { user, role, verificationStatus, loading, branch, authEmailVerified, emailVerificationSyncing, resendVerificationEmail, completedProfile } = useAuth();
   const { selectedBranchId } = useBranch();
   const location = useLocation();
 
-  // Debug log - THIS WILL HELP YOU SEE WHAT'S HAPPENING
-  console.log('RequireStudent Check:', { 
-    user: !!user, 
-    role, 
-    loading, 
-    path: location.pathname 
-  });
+  if (loading) return <LoadingScreen />;
 
-  console.log('[RequireStudent] Canonical user doc (from AuthContext listener):', {
-    path: profileDocPath,
-    verificationStatus: profileDoc?.verificationStatus,
-    status: profileDoc?.status,
-    doc: profileDoc,
-  });
-
-  // CRITICAL: Wait for loading to complete
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="flex items-center space-x-2 space-x-reverse">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-          <span className="text-primary text-lg">جاري التحميل...</span>
-        </div>
-      </div>
-    );
-  }
-
-  // No user logged in
   if (!user) {
-    console.log('No user, redirecting to login');
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 
   // Wait until AuthContext finishes determining the role
   if (!loading && role == null) {
-    console.log('Role not loaded yet, staying on page temporarily');
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="flex items-center space-x-2 space-x-reverse">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-          <span className="text-primary text-lg">جاري تحميل الملف الشخصي...</span>
-        </div>
-      </div>
-    );
+    return <LoadingScreen message="جاري تحميل الملف الشخصي..." />;
   }
 
   // Enforce branch match: user must belong to selected branch
@@ -183,66 +201,40 @@ function RequireStudent() {
   }
 
   if (role !== 'student') {
-    console.log('Role is not student:', role);
-    if (role === 'admin') return <Navigate to="/admin" replace />;
+    if (role === 'admin') return <Navigate to={branch ? `/admin/${branch}` : '/admin/login'} replace />;
     return <Navigate to="/home" replace />;
   }
 
-  // Block if not verified yet (email verification gate stays as-is)
-  if (authEmailVerified === false) {
-    const handleResend = async () => {
-      try {
-        await resendVerificationEmail();
-        alert('تم إعادة إرسال رسالة تأكيد البريد الإلكتروني. يرجى التحقق من البريد الوارد أو مجلد الرسائل غير المرغوب فيها.');
-      } catch (e) {
-        alert(e?.message || 'Failed to resend.');
-      }
-    };
+  // Google users who signed up but haven't completed the registration form yet
+  // must fill in their mandatory school data before accessing any student page.
+  if (completedProfile === false) {
+    return <Navigate to="/complete-registration" replace />;
+  }
 
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center" dir="rtl">
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center mx-4 max-w-xl">
-          <p className="text-gray-800 font-semibold mb-3">يرجى تأكيد البريد الإلكتروني للمتابعة.</p>
-          <p className="text-gray-700 text-sm leading-6">
-            في حال لم تجد رسالة التأكيد، يرجى التحقق من مجلد الرسائل غير المرغوب فيها (Spam / Junk) ووضع الرسالة ضمن "ليست رسائل غير مرغوب فيها".
-          </p>
-          <button
-            onClick={handleResend}
-            className="mt-3 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-700 transition-colors"
-          >
-            إعادة إرسال رسالة تأكيد البريد الإلكتروني
-          </button>
-        </div>
-      </div>
-    );
+  if (authEmailVerified === false) {
+    return <EmailVerificationScreen resendVerificationEmail={resendVerificationEmail} />;
   }
 
   const normalizedVerificationStatus = String(verificationStatus || '').toLowerCase();
 
-  // Show pending only when the DB explicitly says pending.
   if (normalizedVerificationStatus === 'pending') {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center" dir="rtl">
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center mx-4 max-w-xl">
-          <p className="text-gray-800 font-semibold mb-2">تم تأكيد البريد الإلكتروني بنجاح.</p>
-          <p className="text-gray-800 font-semibold">حسابك قيد المراجعة من طرف الإدارة.</p>
-        </div>
-      </div>
+      <BlockedScreen>
+        <p className="text-gray-800 font-semibold mb-2">تم تأكيد البريد الإلكتروني بنجاح.</p>
+        <p className="text-gray-800 font-semibold">حسابك قيد المراجعة من طرف الإدارة.</p>
+      </BlockedScreen>
     );
   }
 
   if (emailVerificationSyncing === true) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center" dir="rtl">
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center mx-4 max-w-xl">
-          <p className="text-gray-800 font-semibold mb-2">جاري تحديث حالة الحساب...</p>
-          <p className="text-gray-600">يرجى الانتظار لحظات.</p>
-        </div>
-      </div>
+      <BlockedScreen>
+        <p className="text-gray-800 font-semibold mb-2">جاري تحديث حالة الحساب...</p>
+        <p className="text-gray-600">يرجى الانتظار لحظات.</p>
+      </BlockedScreen>
     );
   }
 
-  console.log('User is authenticated student, showing profile');
   return <Outlet />;
 }
 
@@ -272,6 +264,8 @@ function App() {
                 <Route path="/login" element={<LoginPage />} />
                 <Route path="/internal-rules" element={<InternalRulesPage />} />
                 <Route path="/register" element={<RegisterPage />} />
+                {/* Google registration completion — requires auth but NOT completedProfile */}
+                <Route path="/complete-registration" element={<CompleteRegistrationPage />} />
 
                 {/* Admin Login Route - Public access */}
                 <Route path="/admin/login" element={<AdminLogin />} />
@@ -291,7 +285,6 @@ function App() {
                     <Route path="registration-confirmation" element={<RegistrationConfirmationPage />} />
                     <Route path="language-registration" element={<LanguageRegistrationForm />} />
                     <Route path="support-lesson-registration" element={<SupportLessonRegistrationForm />} />
-                    <Route path="annual-fee" element={<AnnualFeePage />} />
                     <Route path="training-registration" element={<TrainingRegistrationForm />} />
                   </Route>
                 </Route>
@@ -321,16 +314,14 @@ function App() {
 
 // Helper component to set a branch by path and redirect to home
 function BranchAlias({ branchId }) {
-  const { selectBranch } = useBranch();
+  const { selectBranch } = useBranch();  // selectBranch now exported from BranchContext
   const navigate = useNavigate();
   useEffect(() => {
     if (branchId) {
-      // Selecting a branch through this alias will also sign the user out (handled in BranchContext)
-      // so that each branch has an isolated session.
       selectBranch(branchId);
       navigate('/home', { replace: true });
     }
-  }, [branchId]);
+  }, [branchId, selectBranch, navigate]);
   return null;
 }
 

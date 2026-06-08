@@ -1,0 +1,282 @@
+import React, { useState } from 'react';
+import { UserPlus, Loader2, Eye, EyeOff, AlertCircle, CheckCircle } from 'lucide-react';
+import apiCall from '../../utils/apiClient';
+import { useAuth } from '../../contexts/AuthContext';
+import { adminApproveAnnualFeeManually } from '../../services/firestoreService';
+import AdminModal from './AdminModal';
+
+const ACADEMIC_YEARS = [
+  { id: 'mid1', label: 'أولى متوسط' },
+  { id: 'mid2', label: 'ثانية متوسط' },
+  { id: 'mid3', label: 'ثالثة متوسط' },
+  { id: 'mid4', label: 'رابعة متوسط' },
+  { id: 'sec1', label: 'أولى ثانوي' },
+  { id: 'sec2', label: 'ثانية ثانوي' },
+  { id: 'sec3', label: 'ثالثة ثانوي' },
+];
+
+/**
+ * Modal for admins to create a student account directly (physical payment / offline enrollment).
+ * Calls the Express backend POST /api/admin/create-student.
+ */
+const AdminCreateStudentModal = ({ branchId, onClose, onSuccess }) => {
+  const { user: adminUser } = useAuth();
+
+  const [fullName,          setFullName]          = useState('');
+  const [email,             setEmail]             = useState('');
+  const [phone,             setPhone]             = useState('');
+  const [password,          setPassword]          = useState('');
+  const [showPassword,      setShowPassword]      = useState(false);
+  const [markAnnualFee,     setMarkAnnualFee]     = useState(false);
+  const [selectedAcademicYear, setSelectedAcademicYear] = useState('');
+
+  const [submitting, setSubmitting] = useState(false);
+  const [error,      setError]      = useState('');
+  const [success,    setSuccess]    = useState('');
+
+  const validate = () => {
+    if (!fullName.trim())   return 'يرجى إدخال الاسم الكامل';
+    if (!email.trim())      return 'يرجى إدخال البريد الإلكتروني';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()))
+      return 'البريد الإلكتروني غير صالح';
+    if (!password)          return 'يرجى إدخال كلمة مرور مؤقتة';
+    if (password.length < 6) return 'كلمة المرور يجب أن تكون 6 أحرف على الأقل';
+    if (markAnnualFee && !selectedAcademicYear)
+      return 'يرجى اختيار السنة الدراسية عند تسجيل الرسوم السنوية';
+    return null;
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setSuccess('');
+
+    const validationError = validate();
+    if (validationError) { setError(validationError); return; }
+
+    setSubmitting(true);
+    try {
+      const result = await apiCall('/api/admin/create-student', {
+        method: 'POST',
+        body: JSON.stringify({
+          branchId,
+          fullName:  fullName.trim(),
+          email:     email.trim().toLowerCase(),
+          phone:     phone.trim(),
+          password,
+          adminUid:  adminUser?.uid ?? null,
+        }),
+      });
+
+      const newUserId = result?.userId;
+
+      // Optionally mark the annual fee as paid for this student
+      if (markAnnualFee && newUserId) {
+        await adminApproveAnnualFeeManually(
+          branchId,
+          newUserId,
+          { uid: adminUser?.uid ?? null },
+          {
+            name: fullName.trim(),
+            phone: phone.trim(),
+            academicYear: selectedAcademicYear || null,
+          }
+        );
+      }
+
+      const yearLabel = ACADEMIC_YEARS.find(y => y.id === selectedAcademicYear)?.label || '';
+      setSuccess(
+        `تم إنشاء حساب الطالب بنجاح${markAnnualFee ? ` وتم تسجيل الرسوم السنوية للسنة: ${yearLabel}` : ''}.`
+      );
+      setTimeout(() => {
+        onSuccess?.();
+        onClose();
+      }, 1500);
+    } catch (err) {
+      console.error('createStudent error:', err);
+
+      if (err.code === 'already-exists') {
+        setError('البريد الإلكتروني مستخدم بالفعل. جرب بريداً آخر.');
+      } else if (err.code === 'permission-denied') {
+        setError('ليس لديك صلاحية إنشاء حسابات الطلاب.');
+      } else if (!navigator.onLine || err.message?.toLowerCase().includes('fetch')) {
+        setError('تعذر الوصول إلى الخادم. تحقق من اتصالك بالإنترنت.');
+      } else {
+        setError(err.message || 'حدث خطأ أثناء إنشاء الحساب.');
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const footer = (
+    <>
+      <button
+        type="button"
+        onClick={onClose}
+        className="rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50"
+      >
+        إلغاء
+      </button>
+      <button
+        type="submit"
+        form="admin-create-student-form"
+        disabled={submitting || !!success}
+        className="rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {submitting ? (
+          <span className="flex items-center justify-center gap-2">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            جاري الإنشاء...
+          </span>
+        ) : 'إنشاء الحساب'}
+      </button>
+    </>
+  );
+
+  return (
+    <AdminModal open onClose={onClose} size="md" icon={UserPlus} title="إنشاء حساب طالب" footer={footer}>
+      <form id="admin-create-student-form" onSubmit={handleSubmit} className="space-y-5">
+        {error && (
+          <div className="flex gap-2.5 rounded-lg border border-danger-200 bg-danger-50 px-4 py-3 text-sm text-danger-700">
+            <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
+        {success && (
+          <div className="flex gap-2.5 rounded-lg border border-success-200 bg-success-50 px-4 py-3 text-sm text-success-700">
+            <CheckCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+            <span>{success}</span>
+          </div>
+        )}
+
+        {/* Full name */}
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-gray-700">
+            الاسم الكامل <span className="text-danger-500">*</span>
+          </label>
+          <input
+            type="text"
+            value={fullName}
+            onChange={(e) => setFullName(e.target.value)}
+            placeholder="مثال: أحمد بن علي"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
+            required
+          />
+        </div>
+
+        {/* Email */}
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-gray-700">
+            البريد الإلكتروني <span className="text-danger-500">*</span>
+          </label>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="student@example.com"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
+            dir="ltr"
+            required
+          />
+        </div>
+
+        {/* Phone */}
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-gray-700">
+            رقم الهاتف
+          </label>
+          <input
+            type="tel"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="0555 000 000"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
+            dir="ltr"
+          />
+        </div>
+
+        {/* Temporary password */}
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-gray-700">
+            كلمة مرور مؤقتة <span className="text-danger-500">*</span>
+          </label>
+          <div className="relative">
+            <input
+              type={showPassword ? 'text' : 'password'}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="6 أحرف على الأقل"
+              className="w-full rounded-lg border border-gray-300 py-2.5 ps-3 pe-10 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
+              dir="ltr"
+              required
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((v) => !v)}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              tabIndex={-1}
+            >
+              {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </button>
+          </div>
+          <p className="mt-1.5 text-xs text-gray-500">
+            يجب إبلاغ الطالب بكلمة المرور المؤقتة لتسجيل الدخول لأول مرة.
+          </p>
+        </div>
+
+        {/* Annual fee checkbox */}
+        <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3.5 transition-colors hover:bg-gray-100">
+          <input
+            type="checkbox"
+            checked={markAnnualFee}
+            onChange={(e) => {
+              setMarkAnnualFee(e.target.checked);
+              if (!e.target.checked) setSelectedAcademicYear('');
+            }}
+            className="mt-0.5 h-4 w-4 flex-shrink-0 rounded border-gray-300 text-primary focus:ring-primary/30"
+          />
+          <div>
+            <p className="text-sm font-medium text-gray-800">تسجيل الرسوم السنوية كمدفوعة</p>
+            <p className="mt-1 text-xs leading-relaxed text-gray-500">
+              تحقق من هذا الخيار إذا دفع الطالب الرسوم السنوية نقداً في المكتب.
+              سيتم تفعيل وصوله لدروس الدعم للسنة الدراسية المختارة.
+            </p>
+          </div>
+        </label>
+
+        {/* Academic year selector — only visible when annual fee is checked */}
+        {markAnnualFee && (
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-gray-700">
+              السنة الدراسية للرسوم <span className="text-danger-500">*</span>
+            </label>
+            <select
+              value={selectedAcademicYear}
+              onChange={(e) => setSelectedAcademicYear(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
+              required
+            >
+              <option value="">-- اختر السنة الدراسية --</option>
+              <optgroup label="متوسط">
+                {ACADEMIC_YEARS.filter(y => y.id.startsWith('mid')).map(y => (
+                  <option key={y.id} value={y.id}>{y.label}</option>
+                ))}
+              </optgroup>
+              <optgroup label="ثانوي">
+                {ACADEMIC_YEARS.filter(y => y.id.startsWith('sec')).map(y => (
+                  <option key={y.id} value={y.id}>{y.label}</option>
+                ))}
+              </optgroup>
+            </select>
+            <p className="mt-1 rounded border border-secondary-200 bg-secondary-50 px-2 py-1 text-xs text-secondary-700">
+              سيتم تفعيل دروس الدعم للسنة المختارة فقط.
+            </p>
+          </div>
+        )}
+      </form>
+    </AdminModal>
+  );
+};
+
+export default AdminCreateStudentModal;

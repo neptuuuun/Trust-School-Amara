@@ -2,28 +2,35 @@ import React, { useState, useEffect } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '../firebase';
+import { getAdminByUid } from '../services/adminService';
 
 const ProtectedRoute = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
   const location = useLocation();
 
-  // Admin email whitelist - MUST match the one in AdminLogin.js exactly
-  const adminEmails = [
-    'admin@example.com',
-    'admin@trust-school.com',
-    'marouabenzaoui48@gmail.com', 
-    'trustschoolamara@gmail.com'
-    // Add more admin emails here
-  ];
-
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       console.log('ProtectedRoute - Auth state changed:', currentUser?.email);
-      console.log('ProtectedRoute - Admin emails:', adminEmails);
-      console.log('ProtectedRoute - Is admin?', currentUser ? adminEmails.includes(currentUser.email) : false);
       
       setUser(currentUser);
+      
+      if (currentUser) {
+        // Check if user is admin by fetching from admins collection
+        try {
+          const adminInfo = await getAdminByUid(currentUser.uid);
+          const isAdminUser = adminInfo && adminInfo.role === 'admin';
+          setIsAdmin(isAdminUser);
+          console.log('ProtectedRoute - Is admin?', isAdminUser);
+        } catch (error) {
+          console.error('ProtectedRoute - Error checking admin status:', error);
+          setIsAdmin(false);
+        }
+      } else {
+        setIsAdmin(false);
+      }
+      
       setLoading(false);
     });
 
@@ -49,9 +56,8 @@ const ProtectedRoute = ({ children }) => {
   }
 
   // If user is logged in but not an admin, sign them out and redirect to login
-  if (!adminEmails.includes(user.email)) {
-    console.log('ProtectedRoute - User not in admin whitelist:', user.email);
-    console.log('ProtectedRoute - Available admin emails:', adminEmails);
+  if (!isAdmin) {
+    console.log('ProtectedRoute - User not admin:', user?.email);
     auth.signOut();
     return <Navigate to="/admin/login" replace />;
   }

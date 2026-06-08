@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { collection, query, where, orderBy, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
+import { isAnnualPaymentForCurrentYear } from '../utils/registrationUtils';
 
 const INITIAL_STATUS = {
   paid: false,
@@ -36,18 +37,32 @@ export default function useAnnualFeeStatus(userId, branchId) {
     const unsubscribe = onSnapshot(
       annualPaymentsQuery,
       (snapshot) => {
-        if (snapshot.docs.length > 0) {
-          const latestDoc = snapshot.docs[0];
-          const latestPayment = latestDoc.data();
-          const normalizedStatus = String(latestPayment.status || '').toLowerCase();
-          const effectiveStatus = normalizedStatus || 'pending';
+        const docs = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+        // Academic-year-aware: a verified payment only counts for the CURRENT
+        // academic year. A verified payment from a prior year no longer satisfies
+        // the fee (resets each September); legacy records are grandfathered via
+        // their verifiedAt window inside isAnnualPaymentForCurrentYear.
+        const verifiedThisYear = docs.find((p) => isAnnualPaymentForCurrentYear(p));
+        if (verifiedThisYear) {
           setAnnualFeeStatus({
-            paid: effectiveStatus === 'verified',
-            status: effectiveStatus,
-            verifiedAt: latestPayment.verifiedAt?.toDate?.() || null,
-            createdAt: latestPayment.createdAt?.toDate?.() || null,
-            paymentId: latestDoc.id,
-            raw: latestPayment
+            paid: true,
+            status: 'verified',
+            verifiedAt: verifiedThisYear.verifiedAt?.toDate?.() || null,
+            createdAt: verifiedThisYear.createdAt?.toDate?.() || null,
+            paymentId: verifiedThisYear.id,
+            raw: verifiedThisYear,
+          });
+        } else if (docs.length > 0) {
+          const latest = docs[0]; // ordered by createdAt desc
+          const s = String(latest.status || '').toLowerCase();
+          const status = s === 'verified' ? 'unpaid' : (s || 'unpaid');
+          setAnnualFeeStatus({
+            paid: false,
+            status,
+            verifiedAt: latest.verifiedAt?.toDate?.() || null,
+            createdAt: latest.createdAt?.toDate?.() || null,
+            paymentId: latest.id,
+            raw: latest,
           });
         } else {
           setAnnualFeeStatus(INITIAL_STATUS);

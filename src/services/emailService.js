@@ -1,4 +1,5 @@
 import emailjs from 'emailjs-com';
+import { formatDate } from '../utils/dateUtils';
 
 // EmailJS configuration
 const EMAILJS_SERVICE_ID = 'your_service_id'; // Replace with your EmailJS service ID
@@ -19,13 +20,13 @@ export const sendRegistrationEmail = async (registrationData) => {
             course_name: registrationData.course,
             course_level: registrationData.level || 'غير محدد',
             payment_method: getPaymentMethodName(registrationData.paymentMethod),
-            registration_date: new Date(registrationData.registrationDate).toLocaleDateString('ar-DZ'),
+            registration_date: formatDate(registrationData.registrationDate),
             message: `
 تم تسجيل الطالب ${registrationData.fullName} بنجاح في الدورة: ${registrationData.course}
 ${registrationData.level ? `المستوى: ${registrationData.level}` : ''}
 رقم الهاتف: ${registrationData.phone}
 طريقة الدفع: ${getPaymentMethodName(registrationData.paymentMethod)}
-تاريخ التسجيل: ${new Date(registrationData.registrationDate).toLocaleDateString('ar-DZ')}
+تاريخ التسجيل: ${formatDate(registrationData.registrationDate)}
             `.trim()
         };
 
@@ -54,7 +55,7 @@ export const sendAdminNotification = async (registrationData) => {
             course_name: registrationData.course,
             course_level: registrationData.level || 'غير محدد',
             payment_method: getPaymentMethodName(registrationData.paymentMethod),
-            registration_date: new Date(registrationData.registrationDate).toLocaleDateString('ar-DZ'),
+            registration_date: formatDate(registrationData.registrationDate),
             message: `
 تم تسجيل طالب جديد:
 
@@ -64,7 +65,7 @@ export const sendAdminNotification = async (registrationData) => {
 الدورة: ${registrationData.course}
 ${registrationData.level ? `المستوى: ${registrationData.level}` : ''}
 طريقة الدفع: ${getPaymentMethodName(registrationData.paymentMethod)}
-تاريخ التسجيل: ${new Date(registrationData.registrationDate).toLocaleDateString('ar-DZ')}
+تاريخ التسجيل: ${formatDate(registrationData.registrationDate)}
 
 يرجى متابعة الطالب والتواصل معه لتحديد مواعيد الحصص.
             `.trim()

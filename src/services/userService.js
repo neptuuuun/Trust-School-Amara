@@ -7,6 +7,7 @@ import { db } from '../firebase';
 import { collection, doc, getDoc, getDocs, setDoc, updateDoc, query, where, orderBy, serverTimestamp } from 'firebase/firestore';
 import { supabase } from '../supabase';
 import { recordUserActivity, USER_STATUS } from './userLifecycleService';
+import { validateImageFile, optimizeImage } from '../utils/imageOptimizer';
 
 // ==================== Supabase Storage Functions ====================
 
@@ -37,29 +38,45 @@ export const uploadToSupabase = async (file, userId, fileType, paymentId = null)
     throw new Error(errorMsg);
   }
 
+  // Strict validation (type + 5MB max) before doing any work.
+  const { valid, error: validationError } = validateImageFile(file);
+  if (!valid) {
+    console.error('❌ Image validation failed:', validationError);
+    const err = new Error(validationError);
+    err.code = 'invalid-image';
+    throw err;
+  }
+
+  // Automatic optimization: resize → WebP → compress. Falls back to the
+  // original file on any failure so an upload is never blocked.
+  const optimizedFile = await optimizeImage(file);
+  console.log(
+    `🖼️ ${fileType} optimized: ${file.size} → ${optimizedFile.size} bytes (${optimizedFile.type})`
+  );
+
   try {
     let filePath;
-    
+
     if (fileType === 'annualPayment') {
-      // Annual payment receipt: annual-payments/{userId}/{paymentId}.jpg
+      // Annual payment receipt: annual-payments/{userId}/{paymentId}.webp
       if (!paymentId) {
         paymentId = `payment-${Date.now()}`;
       }
-      const fileExt = file.name.split('.').pop() || 'jpg';
-      filePath = `annual-payments/${userId}/${paymentId}.${fileExt}`;
+      filePath = `annual-payments/${userId}/${paymentId}.webp`;
     } else if (fileType === 'userPhoto') {
-      filePath = `userPhotos/${userId}/userPhoto.png`;
+      filePath = `userPhotos/${userId}/userPhoto.webp`;
     } else {
-      filePath = `${userId}/idPhoto.jpeg`;
+      filePath = `${userId}/idPhoto.webp`;
     }
 
     console.log(`🔵 Uploading ${fileType} to Supabase:`, filePath);
 
     const { error: uploadError } = await supabase.storage
       .from('user-uploads')
-      .upload(filePath, file, { 
+      .upload(filePath, optimizedFile, {
         upsert: true,
-        cacheControl: '3600'
+        cacheControl: '3600',
+        contentType: optimizedFile.type || 'image/webp',
       });
 
     if (uploadError) {

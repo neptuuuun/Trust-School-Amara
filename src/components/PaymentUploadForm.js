@@ -6,7 +6,11 @@ import { collection, addDoc, doc, getDoc } from 'firebase/firestore';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { auth } from '../firebase';
 import { useBranch } from '../contexts/BranchContext';
-import { Upload, CreditCard, Calendar, Hash, Camera } from 'lucide-react';
+import { CreditCard, Calendar, Hash, Upload } from 'lucide-react';
+import PaymentInstructions from './payments/PaymentInstructions';
+import { Button } from './ui/button';
+import { Input, Textarea, Label } from './ui/input';
+import { Alert, Spinner } from './ui/feedback';
 
 const PaymentUploadForm = ({ 
   paymentType, 
@@ -20,32 +24,29 @@ const PaymentUploadForm = ({
   const { selectedBranch } = useBranch();
   const [loading, setLoading] = useState(false);
   const [screenshot, setScreenshot] = useState(null);
-  
+  const [paymentMethod, setPaymentMethod] = useState('');
+  const [paymentMethodError, setPaymentMethodError] = useState('');
+  const [receiptError, setReceiptError] = useState('');
+  const [submitError, setSubmitError] = useState('');
+
   const { register, handleSubmit, formState: { errors } } = useForm();
 
-  const paymentMethods = [
-    { value: 'ccp', label: 'بريد الجزائر CCP', account: '1234567890' },
-    { value: 'baridimob', label: 'بريدي موب BaridiMob', account: '0123456789' },
-    { value: 'cib', label: 'بنك CIB', account: '9876543210' },
-    { value: 'cash', label: 'دفع نقدي', account: 'في المؤسسة' }
-  ];
-
-  const handleScreenshotUpload = (file) => {
-    if (file && file.size <= 10 * 1024 * 1024) { // 10MB limit
-      setScreenshot(file);
-    } else {
-      alert('حجم الملف يجب أن يكون أقل من 10 ميجابايت');
-    }
-  };
-
   const onSubmit = async (data) => {
-    if (!screenshot && data.paymentMethod !== 'cash') {
-      alert('يرجى رفع صورة إيصال الدفع');
+    setPaymentMethodError('');
+    setReceiptError('');
+    setSubmitError('');
+
+    if (!paymentMethod) {
+      setPaymentMethodError('يرجى اختيار طريقة الدفع');
+      return;
+    }
+    if (!screenshot) {
+      setReceiptError('يرجى رفع صورة إيصال الدفع');
       return;
     }
 
     if (!selectedBranch?.id) {
-      alert('يرجى اختيار الفرع أولاً.');
+      setSubmitError('يرجى اختيار الفرع أولاً.');
       return;
     }
     setLoading(true);
@@ -54,8 +55,12 @@ const PaymentUploadForm = ({
 
       if (screenshot) {
         const paymentId = `payment_${Date.now()}`;
-        const screenshotRef = ref(storage, `payments/${paymentId}/screenshot.jpg`);
-        const snapshot = await uploadBytes(screenshotRef, screenshot);
+        // Owner-scoped path (payments/{uid}/...) so Storage rules permit only the
+        // owner to write and only the owner/admin to read their own receipts.
+        const screenshotRef = ref(storage, `payments/${user.uid}/${paymentId}.jpg`);
+        const snapshot = await uploadBytes(screenshotRef, screenshot, {
+          contentType: screenshot.type || 'image/jpeg',
+        });
         screenshotUrl = await getDownloadURL(snapshot.ref);
       }
 
@@ -78,7 +83,7 @@ const PaymentUploadForm = ({
         type: paymentType,
         amount: finalAmount,
         month: paymentType === 'supportLesson' ? new Date().toISOString().slice(0, 7) : null, // YYYY-MM
-        paymentMethod: data.paymentMethod,
+        paymentMethod: paymentMethod,
         transactionNumber: data.transactionNumber || null,
         transactionDate: data.transactionDate || null,
         screenshotUrl: screenshotUrl,
@@ -94,7 +99,7 @@ const PaymentUploadForm = ({
 
     } catch (error) {
       console.error('Payment upload error:', error);
-      alert('حدث خطأ أثناء رفع الدفعة. يرجى المحاولة مرة أخرى.');
+      setSubmitError('حدث خطأ أثناء رفع الدفعة. يرجى المحاولة مرة أخرى.');
     } finally {
       setLoading(false);
     }
@@ -120,13 +125,13 @@ const PaymentUploadForm = ({
         <div className="p-6 bg-gray-50 border-b border-gray-200">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="flex items-center">
-              <CreditCard className="w-5 h-5 text-primary ml-2" />
+              <CreditCard className="w-5 h-5 text-primary me-2" />
               <span className="font-medium">الخدمة:</span>
-              <span className="mr-2">{serviceName}</span>
+              <span className="ms-2">{serviceName}</span>
             </div>
             <div className="flex items-center">
               <span className="font-medium">المبلغ:</span>
-              <span className="mr-2 text-primary font-bold">
+              <span className="ms-2 text-primary font-bold">
                 {(() => {
                   // Calculate final amount
                   let finalAmount = amount;
@@ -137,7 +142,7 @@ const PaymentUploadForm = ({
                   return finalAmount;
                 })()} دج
                 {paymentType === 'supportLesson' && (
-                  <span className="text-sm text-gray-600 mr-2">(قد يشمل رسوم التسجيل الأولى)</span>
+                  <span className="text-sm text-gray-600 ms-2">(قد يشمل رسوم التسجيل الأولى)</span>
                 )}
               </span>
             </div>
@@ -146,149 +151,72 @@ const PaymentUploadForm = ({
 
         {/* Form */}
         <form onSubmit={handleSubmit(onSubmit)} className="p-6 space-y-6">
-          {/* Payment Method */}
-          <div>
-            <label className="block text-lg font-medium text-gray-700 mb-3">
-              طريقة الدفع *
-            </label>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {paymentMethods.map((method) => (
-                <label
-                  key={method.value}
-                  className="flex items-center p-4 border border-gray-200 rounded-lg cursor-pointer hover:border-primary transition-colors"
-                >
-                  <input
-                    type="radio"
-                    value={method.value}
-                    {...register('paymentMethod', { required: 'طريقة الدفع مطلوبة' })}
-                    className="ml-3"
-                  />
-                  <div>
-                    <div className="font-medium">{method.label}</div>
-                    <div className="text-sm text-gray-600">{method.account}</div>
-                  </div>
-                </label>
-              ))}
-            </div>
-            {errors.paymentMethod && (
-              <p className="text-red-500 text-sm mt-1">{errors.paymentMethod.message}</p>
-            )}
-          </div>
+          {submitError && <Alert variant="danger">{submitError}</Alert>}
+
+          {/* Payment Method & Receipt */}
+          <PaymentInstructions
+            selectedMethod={paymentMethod}
+            onMethodChange={(m) => { setPaymentMethod(m); setPaymentMethodError(''); }}
+            receiptFile={screenshot}
+            onReceiptChange={(f) => { setScreenshot(f); setReceiptError(''); }}
+            methodError={paymentMethodError}
+            receiptError={receiptError}
+            disabled={loading}
+            inputId="payment-upload-screenshot"
+          />
 
           {/* Transaction Details */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
-              <label className="block text-lg font-medium text-gray-700 mb-2">
-                <Hash className="w-4 h-4 inline ml-1" />
+              <Label htmlFor="transactionNumber" className="flex items-center gap-1.5">
+                <Hash className="w-4 h-4" aria-hidden="true" />
                 رقم العملية
-              </label>
-              <input
+              </Label>
+              <Input
+                id="transactionNumber"
                 type="text"
                 {...register('transactionNumber')}
-                className="input"
                 placeholder="رقم الإيصال أو العملية (اختياري)"
               />
             </div>
 
             <div>
-              <label className="block text-lg font-medium text-gray-700 mb-2">
-                <Calendar className="w-4 h-4 inline ml-1" />
+              <Label htmlFor="transactionDate" className="flex items-center gap-1.5">
+                <Calendar className="w-4 h-4" aria-hidden="true" />
                 تاريخ العملية
-              </label>
-              <input
+              </Label>
+              <Input
+                id="transactionDate"
                 type="date"
                 {...register('transactionDate')}
-                className="input"
               />
             </div>
           </div>
 
-          {/* Screenshot Upload */}
-          <div>
-            <label className="block text-lg font-medium text-gray-700 mb-2">
-              <Camera className="w-4 h-4 inline ml-1" />
-              صورة إيصال الدفع *
-            </label>
-            <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-primary transition-colors">
-              {screenshot ? (
-                <div>
-                  <img
-                    src={URL.createObjectURL(screenshot)}
-                    alt="Payment screenshot"
-                    className="max-w-full h-48 object-contain mx-auto mb-4 rounded"
-                  />
-                  <p className="text-green-600 font-medium">{screenshot.name}</p>
-                  <button
-                    type="button"
-                    onClick={() => setScreenshot(null)}
-                    className="text-red-500 text-sm mt-2 hover:underline"
-                  >
-                    إزالة الصورة
-                  </button>
-                </div>
-              ) : (
-                <div>
-                  <Upload className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                  <p className="text-gray-600 mb-2">اضغط لرفع صورة إيصال الدفع</p>
-                  <p className="text-sm text-gray-500">JPG, PNG أقل من 10MB</p>
-                </div>
-              )}
-              <input
-                type="file"
-                accept="image/*"
-                onChange={(e) => handleScreenshotUpload(e.target.files[0])}
-                className="hidden"
-                id="screenshot-upload"
-              />
-              <label
-                htmlFor="screenshot-upload"
-                className="cursor-pointer inline-block mt-4 bg-primary text-white px-4 py-2 rounded-lg hover:bg-primary-600 transition-colors"
-              >
-                <Upload className="w-4 h-4 inline ml-2" />
-                اختيار صورة
-              </label>
-            </div>
-          </div>
 
           {/* Notes */}
           <div>
-            <label className="block text-lg font-medium text-gray-700 mb-2">
-              ملاحظات إضافية
-            </label>
-            <textarea
+            <Label htmlFor="notes">ملاحظات إضافية</Label>
+            <Textarea
+              id="notes"
               {...register('notes')}
-              className="input min-h-[80px]"
               placeholder="أي ملاحظات أو تفاصيل إضافية..."
               rows={3}
             />
           </div>
 
           {/* Submit Buttons */}
-          <div className="flex justify-end space-x-4 space-x-reverse pt-6 border-t border-gray-200">
-            <button
-              type="button"
-              onClick={onCancel}
-              className="btn btn-outline-primary"
-            >
+          <div className="flex justify-end gap-3 pt-6 border-t border-gray-200">
+            <Button type="button" variant="neutral" onClick={onCancel}>
               إلغاء
-            </button>
-            <button
-              type="submit"
-              disabled={loading}
-              className="btn btn-primary"
-            >
+            </Button>
+            <Button type="submit" disabled={loading}>
               {loading ? (
-                <div className="flex items-center">
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white ml-2"></div>
-                  جاري الرفع...
-                </div>
+                <><Spinner size="sm" className="text-white" />جاري الرفع...</>
               ) : (
-                <div className="flex items-center">
-                  <Upload className="w-4 h-4 ml-2" />
-                  رفع الدفعة
-                </div>
+                <><Upload className="w-4 h-4" />رفع الدفعة</>
               )}
-            </button>
+            </Button>
           </div>
         </form>
       </div>

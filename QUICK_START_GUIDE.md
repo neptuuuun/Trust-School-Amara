@@ -318,14 +318,14 @@ Training Courses:
 
 ### CCP (بريد الجزائر)
 ```
-Account Number: 0040385470
-Key: 94
+Account Number: 0000236141
+Key: 77
 Name: [School Name]
 ```
 
 ### BaridiMob
 ```
-Phone Number: 00799999004038547094
+Phone Number: 00799999000023614177
 ```
 
 ### After Payment

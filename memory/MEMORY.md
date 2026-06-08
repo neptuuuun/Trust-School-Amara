@@ -1,0 +1,3 @@
+- [Project overview](project_overview.md) — school management SPA (React + Firebase/Firestore + Supabase storage)
+- [Profile auto-fill refactor](project_profile_autofill.md) — enrollment forms now pre-fill from user profile; architecture notes
+- [Backend architecture](project_backend_architecture.md) — CRITICAL: which ops must use backend API (Admin SDK); root annualFees collection is dead; auth rollback on signup

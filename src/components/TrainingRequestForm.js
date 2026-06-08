@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useForm } from 'react-hook-form';
-import { User, Phone, MessageSquare, X, Mail } from 'lucide-react';
+import { User, Phone, MessageSquare, X, Mail, CheckCircle, AlertCircle } from 'lucide-react';
 import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useBranch } from '../contexts/BranchContext';
@@ -97,11 +97,17 @@ const TrainingRequestForm = ({ onClose, onSuccess }) => {
                     {/* Form */}
                     <form onSubmit={handleSubmit(onSubmit)} className="space-y-6" dir="rtl">
                         {submitStatus === 'success' && (
-                            <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg">✅ تم إرسال طلب التدريب بنجاح</div>
+                            <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg flex items-center gap-2">
+                                <CheckCircle className="w-5 h-5 flex-shrink-0" aria-hidden="true" />
+                                تم إرسال طلب التدريب بنجاح
+                            </div>
                         )}
 
                         {submitStatus === 'error' && (
-                            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">❌ حدث خطأ أثناء إرسال الطلب، يرجى المحاولة مرة أخرى</div>
+                            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-center gap-2">
+                                <AlertCircle className="w-5 h-5 flex-shrink-0" aria-hidden="true" />
+                                حدث خطأ أثناء إرسال الطلب، يرجى المحاولة مرة أخرى
+                            </div>
                         )}
 
                         {/* Name */}

@@ -1,10 +1,9 @@
 import { supabase } from '../supabase';
+import { validateImageFile, optimizeImage } from '../utils/imageOptimizer';
 
-const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024;
-const ALLOWED_TYPES = new Set(['image/png', 'image/jpeg']);
-const UPLOAD_ERROR = 'تعذر رفع صورة الإيصال. يرجى المحاولة مرة أخرى.';
+const UPLOAD_ERROR = 'تعذر رفع صورة الإيصال. يرجى المحاولة مرة أخرى. · Échec du téléchargement du reçu. Veuillez réessayer.';
 
-const inferExtension = (filename = '', fallback = 'jpg') => {
+const inferExtension = (filename = '', fallback = 'webp') => {
   const ext = filename.split('.').pop()?.toLowerCase();
   if (!ext) return fallback;
   if (ext === 'jpeg') return 'jpg';
@@ -13,31 +12,34 @@ const inferExtension = (filename = '', fallback = 'jpg') => {
 
 export const uploadTrainingReceipt = async (file, branchId, userId) => {
   if (!file) {
-    throw new Error('يرجى إرفاق صورة الإيصال.');
+    throw new Error('يرجى إرفاق صورة الإيصال. · Veuillez joindre une image du reçu.');
   }
   if (!branchId || !userId) {
     throw new Error(UPLOAD_ERROR);
   }
-  if (!ALLOWED_TYPES.has(file.type || '')) {
-    throw new Error('يجب رفع صورة بصيغة PNG أو JPG فقط.');
-  }
-  if (file.size > MAX_FILE_SIZE_BYTES) {
-    throw new Error('حجم الصورة كبير جداً. الحد الأقصى 5 ميجابايت.');
+
+  // Strict validation (type + 5MB max) with bilingual messages.
+  const { valid, error: validationError } = validateImageFile(file);
+  if (!valid) {
+    throw new Error(validationError);
   }
   if (!supabase) {
     throw new Error(UPLOAD_ERROR);
   }
 
-  const extension = inferExtension(file.name, file.type === 'image/png' ? 'png' : 'jpg');
+  // Optimize (resize → WebP → compress); safe fallback to the original file.
+  const optimizedFile = await optimizeImage(file);
+
+  const extension = inferExtension(optimizedFile.name, 'webp');
   const objectPath = `trainings/${branchId}/${userId}/${Date.now()}.${extension}`;
 
   try {
     const { error } = await supabase.storage
       .from('training-receipts')
-      .upload(objectPath, file, {
+      .upload(objectPath, optimizedFile, {
         cacheControl: '3600',
         upsert: false,
-        contentType: file.type || 'image/jpeg',
+        contentType: optimizedFile.type || 'image/webp',
       });
 
     if (error) {

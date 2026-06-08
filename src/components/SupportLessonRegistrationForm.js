@@ -1,20 +1,22 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useBranch } from '../contexts/BranchContext';
 import {
-  getSupportLessons,
-  canAccessSupportLessons,
-  getUser
+  getAnnualFeeStatusForYear,
+  getUser,
 } from '../services/firestoreService';
+import apiCall from '../utils/apiClient';
 import useSupportLessonRegistrationStatus from '../hooks/useSupportLessonRegistrationStatus';
 import { supabase } from '../supabase';
-import { db } from '../firebase';
-import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
-import { BookOpen, Upload, DollarSign, AlertCircle, CheckCircle, Calendar, Clock } from 'lucide-react';
-import { Link } from 'react-router-dom';
-
-const SUMMER_MONTHS = [5, 6, 7]; // June, July, August
+import { optimizeImage } from '../utils/imageOptimizer';
+import { isRegistrationBlocking, isRenewalCandidate, addMonthsKeepingDay, ANNUAL_FEE_DZD } from '../utils/registrationUtils';
+import { formatDate } from '../utils/dateUtils';
+import { BookOpen, DollarSign } from 'lucide-react';
+import PaymentInstructions from './payments/PaymentInstructions';
+import { Button } from './ui/button';
+import { Select, Label } from './ui/input';
+import { Alert, LoadingState } from './ui/feedback';
 
 const parseNumericPrice = (raw) => {
   if (raw == null) return null;
@@ -35,107 +37,50 @@ const formatPriceText = (raw) => {
   return `${price.toLocaleString('en-US')} دج`;
 };
 
-const formatDate = (date) => {
-  if (!date) return '—';
-  const d = date.toDate ? date.toDate() : date;
-  return d.toLocaleDateString('ar-DZ', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric'
-  });
-};
-
-const isSummerMonth = (monthIndex) => SUMMER_MONTHS.includes(monthIndex);
-
-const addMonthsKeepingDay = (date, months) => {
-  const result = new Date(date.getTime());
-  result.setMonth(result.getMonth() + months);
-  return result;
-};
 
 const getAcademicYearLabel = (date) => {
   const year = date.getFullYear();
   return date.getMonth() >= 8 ? `${year}-${year + 1}` : `${year - 1}-${year}`;
 };
 
-const getAcademicYearEndBoundary = (date) => {
-  const year = date.getFullYear();
-  const boundaryYear = date.getMonth() >= 8 ? year + 1 : year;
-  return new Date(boundaryYear, 4, 31, 23, 59, 59, 999); // May 31
-};
-
-const calculateSubscriptionWindow = (startDate, durationInMonths) => {
-  if (!startDate || durationInMonths < 1) {
-    return { valid: false, message: 'مدة الاشتراك غير صالحة' };
-  }
-
-  if (isSummerMonth(startDate.getMonth())) {
-    return {
-      valid: false,
-      message: 'لا يمكن بدء اشتراك جديد خلال أشهر العطلة الصيفية (يونيو، يوليو، أغسطس).'
-    };
-  }
-
-  const endDate = addMonthsKeepingDay(startDate, durationInMonths);
-  const academicYearEnd = getAcademicYearEndBoundary(startDate);
-
-  if (endDate > academicYearEnd) {
-    return {
-      valid: false,
-      message: 'لا يمكن أن يتجاوز الاشتراك نهاية السنة الدراسية (31 ماي). يرجى تقليل المدة.'
-    };
-  }
-
-  return {
-    valid: true,
-    endDate,
-    academicYear: getAcademicYearLabel(startDate)
-  };
-};
-
-/**
- * Student form for registering for support lessons (monthly)
- * User must be verified AND have paid yearly fee (1000 DZD)
- */
 const SupportLessonRegistrationForm = () => {
   const { user } = useAuth();
   const { selectedBranchId } = useBranch();
   const location = useLocation();
-  const navigate = useNavigate();
-  
-  // State variables - define all state first
-  const [lessons, setLessons] = useState([]);
+
+  const [lessons] = useState([]); // legacy dropdown source (unused — class arrives via navigation state)
   const [selectedLesson, setSelectedLesson] = useState('');
-  const [durationMonths, setDurationMonths] = useState(1);
-  const [startDate, setStartDate] = useState(() => new Date());
-  const [endDate, setEndDate] = useState(() => addMonthsKeepingDay(new Date(), 1));
-  const [academicYear, setAcademicYear] = useState(() => getAcademicYearLabel(new Date()));
-  const [durationError, setDurationError] = useState('');
   const [paymentProof, setPaymentProof] = useState(null);
+  const [paymentMethod, setPaymentMethod] = useState('');
+  const [paymentMethodError, setPaymentMethodError] = useState('');
+  const [receiptError, setReceiptError] = useState('');
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [canAccess, setCanAccess] = useState(false);
+  // annualFeeStatus: { status: 'loading' | 'unpaid' | 'pending' | 'verified' | 'rejected', paymentId: string|null }
+  const [annualFeeStatus, setAnnualFeeStatus] = useState({ status: 'loading', paymentId: null });
   const [userData, setUserData] = useState(null);
-  
-  // Get lesson from navigation state
-  const stateLesson = location.state?.lesson;
+
+  // Support lessons are always 1-month subscriptions — no user choice needed.
+  const DURATION_MONTHS = 1;
+
+  // Estimated subscription window (official dates are set by admin on verification).
+  const now = new Date();
+  const estimatedStart = now;
+  const estimatedEnd   = addMonthsKeepingDay(now, DURATION_MONTHS);
+
+  const stateLesson     = location.state?.lesson;
   const lessonIdFromState = stateLesson?.id;
   const effectiveLessonId = selectedLesson || lessonIdFromState;
-  
-  // Memoized values - now after state is defined
+
   const lessonOptions = useMemo(() => lessons || [], [lessons]);
 
   const selectedLessonData = useMemo(
-    () => lessonOptions.find((l) => l.id === selectedLesson) || null,
-    [lessonOptions, selectedLesson]
+    () => lessonOptions.find((l) => l.id === selectedLesson) || stateLesson || null,
+    [lessonOptions, selectedLesson, stateLesson]
   );
 
-  const durationOptions = useMemo(() => Array.from({ length: 3 }, (_, idx) => idx + 1), []);
-
-  // CRITICAL: ONLY use studyYear as the source of truth. Do NOT fallback to schoolLevel.
-  // schoolLevel is the level (middle/high), not the year (mid1/sec2).
   const userStudyYear = useMemo(() => {
     const raw = userData?.studyYear || '';
     return String(raw || '').trim() || null;
@@ -151,65 +96,36 @@ const SupportLessonRegistrationForm = () => {
   );
 
   const pricePerMonth = selectedLessonData?.priceMonthly ?? selectedLessonData?.price ?? null;
-  const totalPrice =
-    pricePerMonth != null && durationMonths
-      ? pricePerMonth * durationMonths
-      : null;
-  
-  // Check if registration already exists (edge case protection)
-  const { status: existingRegistrationStatus, loading: checkingExisting } = useSupportLessonRegistrationStatus(
-    selectedBranchId,
-    user?.uid,
-    effectiveLessonId || ''
-  );
-  const registrationBlocked =
-    existingRegistrationStatus && existingRegistrationStatus !== 'none';
+
+  // Annual-fee case (academic-year aware): CASE 2 = first support reg of the year.
+  const monthlyPriceNum  = parseNumericPrice(pricePerMonth) ?? 0;
+  const needsAnnualFee   = annualFeeStatus.status === 'unpaid';   // bundle annual + first month
+  const annualFeePending = annualFeeStatus.status === 'pending';  // first reg already under review
+  const annualFeeAmount  = needsAnnualFee ? ANNUAL_FEE_DZD : 0;
+  const bundledTotal     = monthlyPriceNum + annualFeeAmount;
+
+  const { loading: checkingExisting, registration: existingRegistration } =
+    useSupportLessonRegistrationStatus(selectedBranchId, user?.uid, effectiveLessonId || '');
+
+  const registrationBlocked = isRegistrationBlocking(existingRegistration);
+  const isRenewal = isRenewalCandidate(existingRegistration);
 
   useEffect(() => {
-    const start = new Date();
-    const window = calculateSubscriptionWindow(start, durationMonths);
-    setStartDate(start);
-
-    if (window.valid) {
-      setEndDate(window.endDate);
-      setAcademicYear(window.academicYear);
-      setDurationError('');
-    } else {
-      setEndDate(null);
-      setAcademicYear(null);
-      setDurationError(window.message || 'مدة الاشتراك غير صالحة');
-    }
-  }, [durationMonths]);
-
-  useEffect(() => {
-    if (selectedBranchId && user) {
-      loadData();
-    }
+    if (selectedBranchId && user) loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBranchId, user]);
 
   const loadData = async () => {
     try {
       setLoading(true);
-      
-      // Check if user can access support lessons (verified + yearly fee paid)
-      const hasAccess = await canAccessSupportLessons(selectedBranchId, user.uid);
-      setCanAccess(hasAccess);
-
-      // Get user data to show status
-      const userSnap = await getUser(selectedBranchId, user.uid);
-      if (userSnap.exists()) {
-        setUserData(userSnap.data());
-      }
-
-      // Load available lessons with dynamic price from admin
-      const lessonsData = await getSupportLessons(selectedBranchId);
-      setLessons(lessonsData);
-
-      // Prefill lesson from navigation state (YearPage → registration)
-      const stateLesson = location.state?.lesson;
-      if (stateLesson?.id) {
-        setSelectedLesson(stateLesson.id);
-      }
+      const [feeStatus, userSnap] = await Promise.all([
+        getAnnualFeeStatusForYear(selectedBranchId, user.uid),
+        getUser(selectedBranchId, user.uid),
+      ]);
+      setAnnualFeeStatus(feeStatus);
+      if (userSnap.exists()) setUserData(userSnap.data());
+      // The class to register into is passed via navigation state from YearPage.
+      if (location.state?.lesson?.id) setSelectedLesson(location.state.lesson.id);
     } catch (err) {
       console.error('Error loading data:', err);
       setError('فشل في تحميل البيانات');
@@ -218,132 +134,116 @@ const SupportLessonRegistrationForm = () => {
     }
   };
 
-  const handleFileChange = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      if (!file.type.startsWith('image/')) {
-        setError('يرجى تحميل صورة فقط');
-        return;
-      }
-      if (file.size > 5 * 1024 * 1024) {
-        setError('حجم الملف كبير جداً (الحد الأقصى 5 ميجابايت)');
-        return;
-      }
-      setPaymentProof(file);
-      setError('');
-    }
-  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
     setSuccess('');
-
-    if (!canAccess) {
-      setError('يجب أن يتم التحقق من حسابك ودفع الرسوم السنوية أولاً');
-      return;
-    }
+    setPaymentMethodError('');
+    setReceiptError('');
 
     if (!selectedLesson) {
       setError('يرجى اختيار الدرس المراد الاشتراك فيه');
       return;
     }
-
     if (isSelectedLessonMismatched) {
       setError('غير متاح لهذا المستوى (سنتك الدراسية لا تطابق سنة الدرس).');
       return;
     }
-
+    if (!paymentMethod) {
+      setPaymentMethodError('يرجى اختيار طريقة الدفع');
+      return;
+    }
     if (!paymentProof) {
-      setError('يرجى رفع إثبات الدفع');
+      setReceiptError('يرجى رفع صورة إيصال الدفع');
       return;
     }
-
     if (registrationBlocked) {
-      setError('لديك اشتراك قائم لهذا الدرس. لا يمكن إرسال طلب جديد حالياً.');
+      setError('لديك اشتراك نشط لهذا الدرس. لا يمكن إرسال طلب جديد حالياً.');
       return;
     }
 
-    const lesson = lessons.find((l) => l.id === selectedLesson);
-    const pricePerMonth = lesson?.priceMonthly ?? lesson?.price ?? null;
+    const lesson      = selectedLessonData;
     const studyYearId = lesson?.studyYear || lesson?.year || lesson?.grade || null;
-    const studyYearLabel = lesson?.studyLevel || '';
     const studyLevelId = lesson?.level || null;
 
     if (!studyYearId) {
       setError('يجب تحديد السنة الدراسية لهذا الدرس قبل التسجيل. يرجى التواصل مع الإدارة.');
       return;
     }
-    const submissionStartDate = new Date();
-    const subscriptionWindow = calculateSubscriptionWindow(submissionStartDate, durationMonths);
-
-    if (!subscriptionWindow.valid) {
-      setError(subscriptionWindow.message || 'مدة الاشتراك غير صالحة');
-      return;
-    }
 
     try {
       setSubmitting(true);
 
-      // Upload payment proof to Supabase Storage
+      // Upload payment proof
       let paymentProofURL = '';
       if (paymentProof) {
-        if (!supabase) {
-          throw new Error('خدمة رفع الملفات غير متاحة حالياً. يرجى إبلاغ الإدارة.');
-        }
+        if (!supabase) throw new Error('خدمة رفع الملفات غير متاحة حالياً. يرجى إبلاغ الإدارة.');
 
-        const filePath = `support-lessons/${Date.now()}-${paymentProof.name}`;
+        // Optimize (resize → WebP → compress) before upload. Falls back to original.
+        const optimizedProof = await optimizeImage(paymentProof);
 
-        const { data, error: uploadError } = await supabase
-          .storage
+        const filePath = `support-lessons/${user.uid}/${Date.now()}.webp`;
+        const { error: uploadError } = await supabase.storage
           .from('support-lesson-payments')
-          .upload(filePath, paymentProof);
+          .upload(filePath, optimizedProof, {
+            contentType: optimizedProof.type || 'image/webp',
+          });
 
-        if (uploadError) {
-          console.error('Supabase upload error:', uploadError);
-          throw new Error('تعذر رفع صورة الإيصال. يرجى المحاولة مرة أخرى.');
-        }
+        if (uploadError) throw new Error('تعذر رفع صورة الإيصال. يرجى المحاولة مرة أخرى.');
 
-        const { data: publicUrlData } = supabase
-          .storage
+        const { data: publicUrlData } = supabase.storage
           .from('support-lesson-payments')
           .getPublicUrl(filePath);
 
-        if (!publicUrlData?.publicUrl) {
-          throw new Error('تعذر الحصول على رابط لصورة الإيصال.');
-        }
-
+        if (!publicUrlData?.publicUrl) throw new Error('تعذر الحصول على رابط لصورة الإيصال.');
         paymentProofURL = publicUrlData.publicUrl;
       }
 
-      // Save registration to Firebase Firestore (self-contained: store subject/year/teacher names)
-      const subjectName = lesson?.name || lesson?.subject || '';
-      const yearName = lesson?.studyLevel || lesson?.year || lesson?.grade || '';
-      const teacherName = lesson?.teacherName || lesson?.teacher || null;
+      const submissionDate = new Date();
 
-      await addDoc(collection(db, 'supportLessonRegistrations'), {
-        userId: user.uid,
-        lessonId: lesson?.id || selectedLesson,
-        subjectName,
-        yearName: yearName || null,
-        ...(teacherName != null && teacherName !== '' && { teacherName }),
-        durationInMonths: durationMonths,
-        branchId: selectedBranchId,
-        paymentProofURL,
-        status: 'pending',
-        createdAt: serverTimestamp(),
+      // Route through the Express backend — the Firestore rule explicitly denies
+      // all client writes to supportLessonRegistrations (allow create,update,delete: if false).
+      // The backend validates annual fee, study year, and duplicates server-side.
+      await apiCall('/api/registrations/support', {
+        method: 'POST',
+        body: JSON.stringify({
+          branchId:        selectedBranchId,
+          lessonId:        lesson?.id || selectedLesson,
+          studyYearLabel:  lesson?.studyYearLabel || lesson?.yearLabel || '',
+          durationInMonths: DURATION_MONTHS,
+          startDate:       submissionDate.toISOString(),
+          endDate:         addMonthsKeepingDay(submissionDate, DURATION_MONTHS).toISOString(),
+          academicYear:    getAcademicYearLabel(submissionDate),
+          paymentProofUrl: paymentProofURL,
+          paymentMethod:   paymentMethod,
+          monthlyPrice:    monthlyPriceNum,
+          totalPrice:      monthlyPriceNum,
+          // Annual fee bundling — only on the first support registration of the year.
+          includesAnnualFee: needsAnnualFee,
+          annualFeeAmount:   annualFeeAmount,
+          totalAmount:       bundledTotal,
+          source:          'manual',
+        }),
       });
 
       setSuccess('تم إرسال طلب الاشتراك بنجاح! سيتم مراجعته من قبل الإدارة.');
       setPaymentProof(null);
-      setDurationMonths(1);
+      setPaymentMethod('');
       setError('');
-
       const fileInput = document.getElementById('payment-proof');
       if (fileInput) fileInput.value = '';
     } catch (err) {
       console.error('Error submitting registration:', err);
-      setError(err.message || 'حدث خطأ أثناء إرسال الطلب. حاول مرة أخرى.');
+      if (err?.code === 'class-full') {
+        setError('المجموعة مكتملة. لم يعد بالإمكان التسجيل في هذه المجموعة.');
+      } else if (err?.code === 'yearly-fee-required') {
+        setError('الرسوم السنوية مطلوبة للتسجيل في دروس الدعم.');
+      } else if (err?.code === 'study-year-mismatch') {
+        setError('غير متاح لهذا المستوى (سنتك الدراسية لا تطابق سنة المجموعة).');
+      } else {
+        setError(err.message || 'حدث خطأ أثناء إرسال الطلب. حاول مرة أخرى.');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -351,75 +251,8 @@ const SupportLessonRegistrationForm = () => {
 
   if (loading) {
     return (
-      <div className="p-6 text-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div>
-        <p className="mt-4 text-gray-600">جاري التحميل...</p>
-      </div>
-    );
-  }
-
-  // Show status if user doesn't have access
-  if (!canAccess) {
-    const verified = userData?.verified || false;
-    const yearlyFeePaid = userData?.yearlyFeePaid || false;
-
-    return (
-      <div className="p-6" dir="rtl">
-        <div className="max-w-2xl mx-auto">
-          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6">
-            <AlertCircle className="w-12 h-12 text-yellow-500 mx-auto mb-4" />
-            <h3 className="text-xl font-semibold text-gray-900 mb-4 text-center">
-              يجب استكمال المتطلبات التالية
-            </h3>
-            
-            <div className="space-y-3">
-              <div className={`flex items-center gap-3 p-3 rounded-lg ${
-                verified ? 'bg-green-100' : 'bg-red-100'
-              }`}>
-                <div className={`w-6 h-6 rounded-full flex items-center justify-center ${
-                  verified ? 'bg-green-600' : 'bg-red-600'
-                }`}>
-                  {verified ? (
-                    <CheckCircle className="w-4 h-4 text-white" />
-                  ) : (
-                    <AlertCircle className="w-4 h-4 text-white" />
-                  )}
-                </div>
-                <span className="font-medium">
-                  {verified ? 'تم التحقق من حسابك ✓' : 'يجب التحقق من حسابك من قبل الإدارة'}
-                </span>
-              </div>
-
-              <div className={`flex items-center gap-3 p-3 rounded-lg ${
-                yearlyFeePaid ? 'bg-green-100' : 'bg-red-100'
-              }`}>
-                <div className={`w-6 h-6 rounded-full flex items-center justify-center ${
-                  yearlyFeePaid ? 'bg-green-600' : 'bg-red-600'
-                }`}>
-                  {yearlyFeePaid ? (
-                    <CheckCircle className="w-4 h-4 text-white" />
-                  ) : (
-                    <AlertCircle className="w-4 h-4 text-white" />
-                  )}
-                </div>
-                <span className="font-medium">
-                  {yearlyFeePaid ? 'تم دفع الرسوم السنوية ✓' : 'يجب دفع الرسوم السنوية (1000 دج)'}
-                </span>
-              </div>
-            </div>
-
-            {!yearlyFeePaid && verified && (
-              <div className="mt-6 text-center">
-                <Link
-                  to="/yearly-fee"
-                  className="inline-block px-6 py-3 bg-primary text-white rounded-lg hover:bg-primary-dark transition-colors font-semibold"
-                >
-                  دفع الرسوم السنوية الآن
-                </Link>
-              </div>
-            )}
-          </div>
-        </div>
+      <div className="p-6">
+        <LoadingState />
       </div>
     );
   }
@@ -429,23 +262,17 @@ const SupportLessonRegistrationForm = () => {
       <div className="max-w-2xl mx-auto">
         <div className="mb-6">
           <h1 className="text-3xl font-bold text-gray-900 mb-2">التسجيل في درس الدعم</h1>
-          <p className="text-gray-600">اختر الدرس والشهر وأرفق إثبات الدفع الشهري</p>
+          <p className="text-gray-600">راجع تفاصيل المجموعة وأرفق إيصال الدفع.</p>
         </div>
 
-        {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-4 mb-6">
-            {error}
-          </div>
+        {isRenewal && (
+          <Alert variant="info" className="mb-6">اشتراكك السابق منتهٍ. يمكنك تجديده بإرسال طلب جديد أدناه.</Alert>
         )}
 
-        {success && (
-          <div className="bg-green-50 border border-green-200 text-green-700 rounded-lg p-4 mb-6 flex items-center gap-3">
-            <CheckCircle className="w-6 h-6" />
-            <span>{success}</span>
-          </div>
-        )}
+        {error && <Alert variant="danger" className="mb-6">{error}</Alert>}
+        {success && <Alert variant="success" className="mb-6">{success}</Alert>}
 
-        {lessons.length === 0 ? (
+        {!selectedLessonData && lessons.length === 0 ? (
           <div className="bg-white rounded-lg shadow-md p-12 text-center">
             <BookOpen className="w-16 h-16 text-gray-400 mx-auto mb-4" />
             <h3 className="text-xl font-semibold text-gray-900 mb-2">لا توجد دروس متاحة حالياً</h3>
@@ -453,178 +280,145 @@ const SupportLessonRegistrationForm = () => {
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="bg-white rounded-lg shadow-md p-6 space-y-6">
-            {/* Lesson Selection */}
+            {/* Lesson selection */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                درس الدعم <span className="text-red-500">*</span>
-              </label>
-              {location.state?.lesson && selectedLessonData ? (
-                <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm text-gray-800">
-                  <p className="font-semibold mb-1">
-                    {selectedLessonData.name || selectedLessonData.subject || 'درس غير معروف'}
+              <Label required>درس الدعم</Label>
+              {stateLesson && selectedLessonData ? (
+                <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm text-gray-800 space-y-1">
+                  <p className="font-semibold">
+                    {selectedLessonData.subjectName || selectedLessonData.name || selectedLessonData.subject || 'درس غير معروف'}
                   </p>
-                  {isSelectedLessonMismatched && (
-                    <p className="text-red-600 font-medium mt-2">
-                      غير متاح لهذا المستوى
+                  {selectedLessonData.groupName && (
+                    <p><span className="text-gray-500">المجموعة:</span> {selectedLessonData.groupName}</p>
+                  )}
+                  {(selectedLessonData.teacherName || selectedLessonData.teacher) && (
+                    <p><span className="text-gray-500">الأستاذ:</span> {selectedLessonData.teacherName || selectedLessonData.teacher}</p>
+                  )}
+                  {Array.isArray(selectedLessonData.schedules) && selectedLessonData.schedules.length > 0 && (
+                    <p>
+                      <span className="text-gray-500">المواعيد:</span>{' '}
+                      {selectedLessonData.schedules
+                        .map((s) => `${s.day || ''} ${s.start || ''}${s.end ? `-${s.end}` : ''}`.trim())
+                        .filter(Boolean)
+                        .join('، ')}
                     </p>
                   )}
-                  <p className="text-gray-600">
-                    هذا الحقل محدد تلقائياً من صفحة دروس الدعم ولا يمكن تغييره هنا.
-                  </p>
+                  {isSelectedLessonMismatched && (
+                    <p className="text-danger font-medium">غير متاح لهذا المستوى</p>
+                  )}
+                  <p className="text-gray-500 text-xs">محدد تلقائياً من صفحة دروس الدعم.</p>
                 </div>
               ) : (
-                <select
+                <Select
                   value={selectedLesson}
                   onChange={(e) => setSelectedLesson(e.target.value)}
-                  className="block w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary"
                   required
                 >
                   <option value="">-- اختر درس --</option>
                   {lessonOptions.map((lesson) => {
-                    const lessonStudyYear = String(lesson?.studyYear || lesson?.year || lesson?.grade || '').trim() || null;
-                    const mismatched = Boolean(userStudyYear && lessonStudyYear && userStudyYear !== lessonStudyYear);
+                    const lsy = String(lesson?.studyYear || lesson?.year || lesson?.grade || '').trim() || null;
+                    const mismatched = Boolean(userStudyYear && lsy && userStudyYear !== lsy);
                     const title = lesson.name || lesson.subject || 'درس بدون اسم';
                     return (
                       <option key={lesson.id} value={lesson.id} disabled={mismatched}>
-                        {mismatched ? `${title} - غير متاح لهذا المستوى` : title}
+                        {mismatched ? `${title} — غير متاح لهذا المستوى` : title}
                       </option>
                     );
                   })}
-                </select>
+                </Select>
               )}
             </div>
 
-            {/* Duration selector */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                مدة الاشتراك (بالأشهر) <span className="text-red-500">*</span>
-              </label>
-              <div className="relative">
-                <select
-                  value={durationMonths}
-                  onChange={(e) => setDurationMonths(Number(e.target.value))}
-                  className="block w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary appearance-none"
-                >
-                  {durationOptions.map((option) => (
-                    <option key={option} value={option}>
-                      {option} {option === 1 ? 'شهر' : 'أشهر'}
-                    </option>
-                  ))}
-                </select>
-                <Clock className="w-4 h-4 text-gray-400 absolute left-3 top-3 pointer-events-none" />
+            {/* Subscription info (read-only) */}
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-2">
+              <p className="text-sm font-semibold text-blue-900">تفاصيل الاشتراك</p>
+              <div className="grid grid-cols-2 gap-3 text-sm text-blue-800">
+                <div>
+                  <span className="text-blue-600">المدة:</span>
+                  <span className="font-semibold ms-1">شهر واحد</span>
+                </div>
+                <div>
+                  <span className="text-blue-600">السنة الدراسية:</span>
+                  <span className="font-semibold ms-1">
+                    {userStudyYear || '—'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-blue-600">تاريخ البداية المتوقع:</span>
+                  <span className="font-semibold ms-1">{formatDate(estimatedStart)}</span>
+                </div>
+                <div>
+                  <span className="text-blue-600">تاريخ الانتهاء المتوقع:</span>
+                  <span className="font-semibold ms-1">{formatDate(estimatedEnd)}</span>
+                </div>
               </div>
-              <p className="mt-1 text-xs text-gray-500">
-                الاشتراك يبدأ من تاريخ اليوم ويستمر لأشهر متتالية.
+              <p className="text-xs text-blue-600 pt-1">
+                التواريخ الفعلية تُحدَّد عند تأكيد الإدارة للدفع.
               </p>
             </div>
 
-            {/* Subscription summary */}
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-3">
-              <div className="flex items-center gap-2 text-blue-900">
-                <Calendar className="w-5 h-5" />
-                <div>
-                  <p className="text-sm text-blue-800">تاريخ البداية</p>
-                  <p className="font-semibold">{formatDate(startDate)}</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 text-blue-900">
-                <Clock className="w-5 h-5" />
-                <div>
-                  <p className="text-sm text-blue-800">تاريخ الانتهاء</p>
-                  <p className="font-semibold">{endDate ? formatDate(endDate) : '—'}</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 text-blue-900">
-                <BookOpen className="w-5 h-5" />
-                <div>
-                  <p className="text-sm text-blue-800">السنة الدراسية</p>
-                  <p className="font-semibold">{academicYear || '—'}</p>
-                </div>
-              </div>
-              {durationError && (
-                <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg p-3">
-                  {durationError}
+            {/* Payment breakdown (CASE 2 bundles annual fee + first month) */}
+            {selectedLessonData && (needsAnnualFee ? (
+              <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                <p className="mb-2 flex items-center gap-2 text-sm font-semibold text-gray-900">
+                  <DollarSign className="w-5 h-5 text-gray-500" /> المدفوعات المطلوبة
                 </p>
-              )}
-            </div>
-
-            {/* Selected lesson details & pricing */}
-            {selectedLessonData && (
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-2">
-                <h4 className="font-semibold text-blue-900">
-                  {selectedLessonData.name || selectedLessonData.subject || 'درس غير معروف'}
-                </h4>
-                {selectedLessonData.subject && (
-                  <p className="text-sm text-blue-800">المادة: {selectedLessonData.subject}</p>
-                )}
-                <div className="flex items-center gap-2 text-blue-900 font-bold">
-                  <DollarSign className="w-5 h-5" />
-                  <span>
-                    السعر الشهري:{' '}
-                    {`${formatPriceText(pricePerMonth)} / شهر`}
-                  </span>
+                <div className="space-y-1.5 text-sm text-gray-700">
+                  <div className="flex items-center justify-between">
+                    <span>الرسوم السنوية (مرة واحدة في السنة)</span>
+                    <span className="font-semibold">{formatPriceText(annualFeeAmount)}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span>اشتراك الشهر الأول</span>
+                    <span className="font-semibold">{formatPriceText(monthlyPriceNum)}</span>
+                  </div>
+                  <div className="mt-1.5 flex items-center justify-between border-t border-gray-200 pt-1.5">
+                    <span className="font-bold text-gray-900">الإجمالي</span>
+                    <span className="font-bold text-primary">{formatPriceText(bundledTotal)}</span>
+                  </div>
                 </div>
-                <div className="mt-2 text-sm text-blue-900">
-                  <p>
-                    مدة الاشتراك: <span className="font-semibold">{durationMonths} شهر</span>
-                  </p>
-                  <p>
-                    المجموع الكلي:{' '}
-                    <span className="font-semibold">
-                      {formatPriceText(totalPrice)}
-                    </span>
-                  </p>
+                <p className="mt-3 rounded-lg border border-blue-200 bg-blue-50 p-2.5 text-xs text-blue-800">
+                  هذا أول تسجيل لك في دروس الدعم هذا العام. تُدفع الرسوم السنوية مرة واحدة فقط في السنة الدراسية، وبعدها تكفيك المدفوعات الشهرية. أرفق إيصالاً واحداً يشمل المبلغ الإجمالي.
+                </p>
+              </div>
+            ) : (
+              <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 flex items-center gap-3">
+                <DollarSign className="w-5 h-5 text-gray-500 shrink-0" />
+                <div className="text-sm">
+                  <p className="text-gray-600">السعر الشهري</p>
+                  <p className="font-bold text-gray-900 text-base">{formatPriceText(monthlyPriceNum)}</p>
                 </div>
               </div>
+            ))}
+
+            {/* Payment Method & Receipt */}
+            <PaymentInstructions
+              selectedMethod={paymentMethod}
+              onMethodChange={(m) => { setPaymentMethod(m); setPaymentMethodError(''); }}
+              receiptFile={paymentProof}
+              onReceiptChange={(f) => { setPaymentProof(f); setReceiptError(''); }}
+              methodError={paymentMethodError}
+              receiptError={receiptError}
+              disabled={submitting}
+              inputId="support-lesson-payment-proof"
+            />
+
+            {/* Fee status note */}
+            {annualFeeStatus.status === 'verified' && (
+              <Alert variant="success">الرسوم السنوية مدفوعة لهذا العام ✓ — هذا الطلب للدفع الشهري فقط.</Alert>
+            )}
+            {annualFeePending && (
+              <Alert variant="warning">رسومك السنوية قيد المراجعة. يمكنك إرسال هذا الطلب الآن، وسيتم تفعيله بعد اعتماد الرسوم السنوية.</Alert>
             )}
 
-            {/* Payment Proof Upload */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                إثبات الدفع الشهري <span className="text-red-500">*</span>
-              </label>
-              <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-primary transition-colors">
-                <input
-                  type="file"
-                  id="payment-proof"
-                  accept="image/*"
-                  onChange={handleFileChange} 
-                  className="hidden"
-                  required
-                />
-                <label
-                  htmlFor="payment-proof"
-                  className="cursor-pointer flex flex-col items-center"
-                >
-                  <Upload className="w-12 h-12 text-gray-400 mb-2" />
-                  <span className="text-sm text-gray-600">
-                    {paymentProof ? paymentProof.name : 'انقر لرفع صورة إثبات الدفع'}
-                  </span>
-                  <span className="text-xs text-gray-500 mt-1">
-                    (الحد الأقصى: 5 ميجابايت)
-                  </span>
-                </label>
-              </div>
-            </div>
-
-            {/* Info box */}
-            <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-              <h4 className="font-semibold text-green-900 mb-2">ملاحظة:</h4>
-              <p className="text-sm text-green-800">
-                الرسوم السنوية (1000 دج) تم دفعها مسبقاً ✓
-                <br />
-                هذا الطلب هو للدفع الشهري فقط.
-              </p>
-            </div>
-
-            {/* Submit Button */}
-            <button
-              type="submit"
-              disabled={submitting}
-              className="w-full px-6 py-3 bg-primary text-white rounded-lg hover:bg-primary-dark disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-semibold"
-            >
-              {submitting ? 'جاري الإرسال...' : 'إرسال طلب التسجيل'}
-            </button>
+            {/* Submit */}
+            <Button type="submit" fullWidth disabled={submitting || registrationBlocked || checkingExisting || !paymentMethod || !paymentProof}>
+              {submitting
+                ? 'جاري الإرسال...'
+                : isRenewal
+                ? 'تجديد الاشتراك'
+                : 'إرسال طلب التسجيل'}
+            </Button>
           </form>
         )}
       </div>

@@ -1,95 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
+import { Link } from 'react-router-dom';
 import ServiceCard from '../components/ServiceCard';
-import CourseRegistrationForm from '../components/CourseRegistrationForm';
-import { Book, Globe, GraduationCap, Users, BarChart3, Target } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
-import { sendRegistrationEmail, sendAdminNotification, initiateAlgerianPayment } from '../services/emailService';
-import { collection, onSnapshot, query, where } from 'firebase/firestore';
-import { db } from '../firebase';
+import { Book, Globe, GraduationCap, Users, BarChart3, Target, Play, Phone } from 'lucide-react';
 import { useBranch } from '../contexts/BranchContext';
+import { buttonClasses } from '../components/ui/button';
 
 const HomePage = () => {
-    const [showRegistrationForm, setShowRegistrationForm] = useState(false);
-    const [selectedCourseType, setSelectedCourseType] = useState('');
-    const [activeTrainings, setActiveTrainings] = useState([]);
-    const [supportLessons, setSupportLessons] = useState([]);
-    const [languages, setLanguages] = useState([]);
     const { selectedBranchId } = useBranch();
-    const navigate = useNavigate();
 
-    useEffect(() => {
-        // FIXED: Guard for required dependency
-        if (!selectedBranchId) {
-            setActiveTrainings([]);
-            setSupportLessons([]);
-            setLanguages([]);
-            return;
-        }
-
-        // FIXED: Track all unsubscribes to ensure proper cleanup
-        const unsubscribes = [];
-
-        // FIXED: Debounce branch switches to prevent rapid listener recreation
-        const timeoutId = setTimeout(() => {
-            try {
-                // Per-branch reads:
-                // trainings -> branches/{branchId}/trainings (active == true)
-                const trainingsQuery = query(
-                    collection(db, 'branches', selectedBranchId, 'trainings'),
-                    where('active', '==', true)
-                );
-                const trainingsUnsubscribe = onSnapshot(
-                    trainingsQuery,
-                    (snapshot) => {
-                        const trainingsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                        setActiveTrainings(trainingsData);
-                    },
-                    (error) => {
-                        console.error('onSnapshot trainings error:', error);
-                    }
-                );
-                unsubscribes.push(trainingsUnsubscribe);
-
-                // support lessons -> branches/{branchId}/supportLessons
-                const supportUnsubscribe = onSnapshot(
-                    collection(db, 'branches', selectedBranchId, 'supportLessons'),
-                    (snapshot) => {
-                        const lessonsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                        setSupportLessons(lessonsData);
-                    },
-                    (error) => {
-                        console.error('onSnapshot supportLessons error:', error);
-                    }
-                );
-                unsubscribes.push(supportUnsubscribe);
-
-                // languages -> branches/{branchId}/languages
-                const languagesUnsubscribe = onSnapshot(
-                    collection(db, 'branches', selectedBranchId, 'languages'),
-                    (snapshot) => {
-                        const languagesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                        setLanguages(languagesData);
-                    },
-                    (error) => {
-                        console.error('onSnapshot languages error:', error);
-                    }
-                );
-                unsubscribes.push(languagesUnsubscribe);
-            } catch (error) {
-                console.error('Error setting up listeners:', error);
-            }
-        }, 100); // 100ms debounce
-
-        // FIXED: Proper cleanup that unsubscribes all listeners and clears timeout
-        return () => {
-            clearTimeout(timeoutId);
-            unsubscribes.forEach(unsub => {
-                if (unsub && typeof unsub === 'function') {
-                    unsub();
-                }
-            });
-        };
-    }, [selectedBranchId]);
+    const handleScrollToDemo = (e) => {
+        e.preventDefault();
+        const target = document.getElementById('demo');
+        if (target) target.scrollIntoView({ behavior: 'smooth' });
+    };
 
     const services = [
         {
@@ -134,51 +57,38 @@ const HomePage = () => {
     ];
 
     const videoTestimonials = [
-    {
-        title: 'تجربة تلميذة',
-        description: 'تجربة ناجحة في دروس الدعم',
-        videoSrc: 'https://jzplbnzmsfbsmeaobamg.supabase.co/storage/v1/object/public/Videos/student-feedback2.mp4',
-        studentName: 'طالبة',
-    }
-    ];
-
-    const handleRegistration = (courseType) => {
-        setSelectedCourseType(courseType);
-        setShowRegistrationForm(true);
-    };
-
-    const handleRegistrationSubmit = async (registrationData) => {
-        try {
-            await sendRegistrationEmail(registrationData);
-            await sendAdminNotification(registrationData);
-            const paymentResult = await initiateAlgerianPayment(registrationData);
-
-            if (paymentResult.success) {
-                navigate('/registration-confirmation', {
-                    state: { registrationData }
-                });
-            }
-        } catch (error) {
-            console.error('Registration failed:', error);
-            alert('حدث خطأ أثناء التسجيل. يرجى المحاولة مرة أخرى.');
+        {
+            title: 'تجربة تلميذة',
+            description: 'تجربة ناجحة في دروس الدعم',
+            videoSrc: 'https://jzplbnzmsfbsmeaobamg.supabase.co/storage/v1/object/public/Videos/student-feedback2.mp4',
+            studentName: 'طالبة',
         }
-
-        setShowRegistrationForm(false);
-    };
+    ];
 
     return (
         <div className="home-page">
             {/* Hero Section */}
-            <section className="hero">
-                <div className="overlay"></div>
-                <div className="container">
-                    <div className="hero-content">
-                        <h1>مرحباً بكم في Trust School Amara</h1>
-                        <p>الثقة في التعليم هو شغفنا، وبناء مستقبل مشرق هو هدفنا</p>
-                        <div className="hero-buttons">
-                            <a href="#demo" className="cta-button primary">شاهد عرضنا التعريفي <i className="fas fa-play-circle"></i></a>
-                            <a href="/contact" className="cta-button secondary">تواصل معنا <i className="fas fa-arrow-left"></i></a>
-                        </div>
+            <section className="relative flex min-h-[calc(100vh-5rem)] items-center overflow-hidden bg-gradient-hero text-white">
+                <div className="absolute inset-0 bg-primary-900/40" aria-hidden="true"></div>
+                <div className="container relative mx-auto px-6 py-20 text-center" dir="rtl">
+                    <h1 className="mb-6 text-4xl font-extrabold leading-tight md:text-5xl lg:text-6xl">
+                        مرحباً بكم في Trust School Amara
+                    </h1>
+                    <p className="mx-auto mb-10 max-w-2xl text-lg leading-relaxed text-white/90 md:text-2xl">
+                        الثقة في التعليم هو شغفنا، وبناء مستقبل مشرق هو هدفنا
+                    </p>
+                    <div className="flex flex-col items-center justify-center gap-4 sm:flex-row">
+                        <a href="#demo" onClick={handleScrollToDemo} className={buttonClasses({ variant: 'warning', size: 'lg' })}>
+                            <Play className="h-5 w-5" aria-hidden="true" />
+                            شاهد عرضنا التعريفي
+                        </a>
+                        <Link
+                            to="/contact"
+                            className="inline-flex items-center justify-center gap-2 rounded-lg border-2 border-white/80 px-8 py-4 text-lg font-semibold text-white transition-colors hover:bg-white hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 focus-visible:ring-offset-2 focus-visible:ring-offset-primary-800"
+                        >
+                            <Phone className="h-5 w-5" aria-hidden="true" />
+                            تواصل معنا
+                        </Link>
                     </div>
                 </div>
             </section>
@@ -201,7 +111,7 @@ const HomePage = () => {
                     <h2 className="text-3xl md:text-4xl font-bold text-primary text-center mb-12" dir="rtl">لماذا تختارنا؟</h2>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                         {features.map((feature, index) => (
-                            <div key={index} className="text-center bg-white p-8 rounded-lg shadow-md hover:shadow-lg transition-shadow" dir="rtl">
+                            <div key={index} className="text-center bg-white p-8 rounded-2xl border border-gray-100 shadow-sm hover:shadow-lg transition-shadow" dir="rtl">
                                 <div className="flex justify-center mb-4">{feature.icon}</div>
                                 <h3 className="text-xl font-semibold text-primary mb-3">{feature.title}</h3>
                                 <p className="text-gray-600 leading-relaxed">{feature.description}</p>
@@ -250,7 +160,7 @@ const HomePage = () => {
                                     <source src={video.videoSrc} type="video/mp4" />
                                     متصفحك لا يدعم تشغيل الفيديو.
                                 </video>
-                                <div className="p-6 text-right" dir="rtl">
+                                <div className="p-6 text-start" dir="rtl">
                                     <h3 className="text-xl font-semibold text-primary mb-2">{video.title}</h3>
                                     <p className="text-gray-700 mb-3">{video.description}</p>
                                     <div className="flex items-center justify-between text-sm text-gray-600">

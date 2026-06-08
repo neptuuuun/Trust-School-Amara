@@ -1,6 +1,7 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { CheckCircle, User, Mail, Phone, BookOpen, GraduationCap, Calendar, CreditCard } from 'lucide-react';
+import { formatDateTime } from '../utils/dateUtils';
 
 const RegistrationConfirmationPage = () => {
     const location = useLocation();
@@ -11,17 +12,6 @@ const RegistrationConfirmationPage = () => {
         navigate('/');
         return null;
     }
-
-    const formatDate = (dateString) => {
-        const date = new Date(dateString);
-        return date.toLocaleDateString('ar-DZ', {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit'
-        });
-    };
 
     const getPaymentMethodName = (method) => {
         const methods = {
@@ -99,7 +89,7 @@ const RegistrationConfirmationPage = () => {
                                 <div className="flex items-center">
                                     <Calendar className="w-5 h-5 text-blue-600 ml-3" />
                                     <span className="font-medium ml-2">تاريخ التسجيل:</span>
-                                    <span>{formatDate(registrationData.registrationDate)}</span>
+                                    <span>{formatDateTime(registrationData.registrationDate)}</span>
                                 </div>
                                 <div className="flex items-center">
                                     <CreditCard className="w-5 h-5 text-blue-600 ml-3" />

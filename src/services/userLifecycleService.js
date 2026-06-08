@@ -14,7 +14,7 @@ import {
   serverTimestamp,
   setDoc
 } from 'firebase/firestore';
-import { supabase } from '../supabase';
+import { cleanupDeletedStudent } from './storageCleanupService';
 
 // User status constants
 export const USER_STATUS = {
@@ -246,8 +246,12 @@ export const handleUserDeletion = async (user) => {
     // 1. Archive user data for statistics before deletion
     await archiveUserDataForStats(user);
     
-    // 2. Clean up media files
-    await cleanupUserMedia(user.id);
+    // 2. Clean up media files — pass any known Firestore refs so the cleanup
+    //    service can delete them directly without needing a storage list call.
+    await cleanupUserMedia(user.id, {
+      photoUrl:  user.photoUrl  || null,
+      idCardUrl: user.idCardUrl || null,
+    });
     
     // 3. Anonymize user document (keep only statistical data)
     await anonymizeUserDocument(user);
@@ -293,54 +297,20 @@ export const archiveUserDataForStats = async (user) => {
 };
 
 /**
- * Clean up user media files from Supabase storage
+ * Clean up user media files from Supabase storage (spec §6 — account deletion).
+ * Delegates to the centralized storageCleanupService which handles all buckets,
+ * graceful missing-file handling, and logging.
+ *
  * @param {string} userId - User ID
+ * @param {object} [knownRefs] - Any known photoUrl / idCardUrl refs from Firestore
  */
-export const cleanupUserMedia = async (userId) => {
-  if (!supabase) {
-    console.warn('⚠️ Supabase not configured, skipping media cleanup');
-    return;
-  }
-
-  try {
-    // Clean up user photos
-    const { error: photoError } = await supabase.storage
-      .from('user-uploads')
-      .remove([`userPhotos/${userId}/userPhoto.png`]);
-
-    if (photoError && !photoError.message.includes('Not Found')) {
-      console.warn(`⚠️ Error removing user photo: ${photoError.message}`);
-    }
-
-    // Clean up ID cards
-    const { error: idError } = await supabase.storage
-      .from('user-uploads')
-      .remove([`${userId}/idPhoto.jpeg`]);
-
-    if (idError && !idError.message.includes('Not Found')) {
-      console.warn(`⚠️ Error removing ID card: ${idError.message}`);
-    }
-
-    // Clean up annual payment receipts
-    const { data: paymentFiles } = await supabase.storage
-      .from('user-uploads')
-      .list(`annual-payments/${userId}`);
-
-    if (paymentFiles && paymentFiles.length > 0) {
-      const filePaths = paymentFiles.map(file => `annual-payments/${userId}/${file.name}`);
-      const { error: paymentError } = await supabase.storage
-        .from('user-uploads')
-        .remove(filePaths);
-
-      if (paymentError && !paymentError.message.includes('Not Found')) {
-        console.warn(`⚠️ Error removing payment files: ${paymentError.message}`);
-      }
-    }
-
-    console.log(`🧹 Cleaned up media files for user: ${userId}`);
-  } catch (error) {
-    console.error(`❌ Error cleaning up media for user ${userId}:`, error);
-  }
+export const cleanupUserMedia = async (userId, knownRefs = {}) => {
+  await cleanupDeletedStudent({
+    userId,
+    photoUrl:   knownRefs.photoUrl  || null,
+    idCardUrl:  knownRefs.idCardUrl || null,
+    extraRefs:  knownRefs.extraRefs || [],
+  });
 };
 
 /**

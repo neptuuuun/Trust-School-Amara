@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { db } from '../../firebase';
 import { Users, BookOpen, GraduationCap, FileText, DollarSign, Languages, AlertCircle, Clock, CreditCard, ClipboardList } from 'lucide-react';
 import { useBranch } from '../../contexts/BranchContext';
+import { LoadingState } from '../../components/ui/feedback';
 
 const Overview = () => {
   const navigate = useNavigate();
@@ -72,9 +73,9 @@ const Overview = () => {
         setLoading(true);
 
         const usersRef = collection(db, 'branches', selectedBranchId, 'users');
-        const supportLessonsRef = collection(db, 'branches', selectedBranchId, 'supportLessons');
-        const languagesRef = collection(db, 'branches', selectedBranchId, 'languages');
-        const trainingsRef = collection(db, 'branches', selectedBranchId, 'trainings');
+        // New unified catalog: count subjects per serviceType (replaces the
+        // legacy supportLessons/languages/trainings catalog collections).
+        const subjectsRef = collection(db, 'branches', selectedBranchId, 'subjects');
         const branchRegistrationsRef = collection(db, 'branches', selectedBranchId, 'registrations');
         const annualPaymentsRef = collection(db, 'branches', selectedBranchId, 'annualPayments');
         const supportLessonRegistrationsRef = collection(db, 'supportLessonRegistrations');
@@ -104,9 +105,9 @@ const Overview = () => {
         ] = await Promise.all([
           countForQuery(query(usersRef)),
           countForQuery(query(usersRef, where('verified', '==', true))),
-          countForQuery(query(supportLessonsRef)),
-          countForQuery(query(languagesRef)),
-          countForQuery(query(trainingsRef)),
+          countForQuery(query(subjectsRef, where('serviceType', '==', 'support'))),
+          countForQuery(query(subjectsRef, where('serviceType', '==', 'language'))),
+          countForQuery(query(subjectsRef, where('serviceType', '==', 'training'))),
           countForQuery(query(branchRegistrationsRef)),
           countForQuery(query(collectionGroup(db, 'languageFormEntries'), where('branchId', '==', selectedBranchId))),
           countForQuery(query(collectionGroup(db, 'trainingFormEntries'), where('branchId', '==', selectedBranchId))),
@@ -200,15 +201,6 @@ const Overview = () => {
   // Handle quick action navigation
   const handleQuickAction = (action) => {
     switch (action) {
-      case 'addLanguage':
-        navigate('/admin/add-language');
-        break;
-      case 'addTraining':
-        navigate('/admin/add-training');
-        break;
-      case 'addSupportLesson':
-        navigate('/admin/add-support-lesson');
-        break;
       case 'viewUsers':
         navigate('/admin/users');
         break;
@@ -229,23 +221,21 @@ const Overview = () => {
     }
   };
 
-  // Main statistics cards
+  // Main statistics cards — semantic tokens give categorical variety on-brand
   const mainStatCards = [
     {
       title: 'إجمالي الطلاب',
       value: stats.students,
       subtitle: `${stats.verifiedStudents} موثق | ${stats.unverifiedStudents} غير موثق`,
       icon: Users,
-      color: 'bg-blue-500',
-      textColor: 'text-blue-600',
-      bgColor: 'bg-blue-50'
+      textColor: 'text-secondary-600',
+      bgColor: 'bg-secondary-50'
     },
     {
       title: 'إجمالي التسجيلات',
       value: stats.registrations,
       subtitle: 'جميع أنواع التسجيلات',
       icon: FileText,
-      color: 'bg-primary',
       textColor: 'text-primary-600',
       bgColor: 'bg-primary-50'
     },
@@ -254,9 +244,8 @@ const Overview = () => {
       value: stats.pendingPayments,
       subtitle: 'تتطلب مراجعة فورية',
       icon: CreditCard,
-      color: 'bg-yellow-500',
-      textColor: 'text-yellow-600',
-      bgColor: 'bg-yellow-50',
+      textColor: 'text-warning-600',
+      bgColor: 'bg-warning-50',
       alert: stats.pendingPayments > 0
     },
     {
@@ -264,9 +253,8 @@ const Overview = () => {
       value: stats.trainingRequests,
       subtitle: `${stats.trainingRequestsPending} قيد الانتظار`,
       icon: GraduationCap,
-      color: 'bg-purple-500',
-      textColor: 'text-purple-600',
-      bgColor: 'bg-purple-50',
+      textColor: 'text-accent-600',
+      bgColor: 'bg-accent-50',
       alert: stats.trainingRequestsPending > 0
     }
   ];
@@ -277,34 +265,27 @@ const Overview = () => {
       title: 'اللغات',
       value: stats.languages,
       icon: Languages,
-      color: 'bg-green-500',
-      textColor: 'text-green-600',
-      bgColor: 'bg-green-50'
+      textColor: 'text-success-600',
+      bgColor: 'bg-success-50'
     },
     {
       title: 'دروس الدعم',
       value: stats.supportLessons,
       icon: BookOpen,
-      color: 'bg-indigo-500',
-      textColor: 'text-indigo-600',
-      bgColor: 'bg-indigo-50'
+      textColor: 'text-secondary-600',
+      bgColor: 'bg-secondary-50'
     },
     {
       title: 'الدورات التكوينية',
       value: stats.trainings,
       icon: GraduationCap,
-      color: 'bg-purple-500',
-      textColor: 'text-purple-600',
-      bgColor: 'bg-purple-50'
+      textColor: 'text-accent-600',
+      bgColor: 'bg-accent-50'
     }
   ];
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
-      </div>
-    );
+    return <LoadingState />;
   }
 
   return (
@@ -325,7 +306,7 @@ const Overview = () => {
             <div 
               key={index} 
               className={`bg-white rounded-xl shadow-md p-6 border-2 transition-all hover:shadow-lg ${
-                stat.alert ? 'border-yellow-400' : 'border-gray-100'
+                stat.alert ? 'border-warning-400' : 'border-gray-100'
               }`}
             >
               <div className="flex items-center justify-between mb-3">
@@ -333,7 +314,7 @@ const Overview = () => {
                   <Icon className={`h-6 w-6 ${stat.textColor}`} />
                 </div>
                 {stat.alert && (
-                  <div className="flex items-center gap-1 text-yellow-600">
+                  <div className="flex items-center gap-1 text-warning-600">
                     <AlertCircle className="h-5 w-5" />
                   </div>
                 )}
@@ -390,7 +371,7 @@ const Overview = () => {
           <div className="space-y-3">
             <button
               onClick={() => handleQuickAction('adminGuide')}
-              className="w-full p-4 rounded-lg border-2 text-right transition-all hover:shadow-md border-gray-200 bg-gray-50 hover:bg-gray-100"
+              className="w-full p-4 rounded-lg border-2 text-start transition-all hover:shadow-md border-gray-200 bg-gray-50 hover:bg-gray-100"
             >
               <div className="flex items-center justify-between">
                 <div className="flex-1">
@@ -405,9 +386,9 @@ const Overview = () => {
 
             <button
               onClick={() => handleQuickAction('viewPayments')}
-              className={`w-full p-4 rounded-lg border-2 text-right transition-all hover:shadow-md ${
-                stats.pendingPayments > 0 
-                  ? 'border-yellow-400 bg-yellow-50 hover:bg-yellow-100' 
+              className={`w-full p-4 rounded-lg border-2 text-start transition-all hover:shadow-md ${
+                stats.pendingPayments > 0
+                  ? 'border-warning-400 bg-warning-50 hover:bg-warning-100'
                   : 'border-gray-200 bg-gray-50 hover:bg-gray-100'
               }`}
             >
@@ -423,29 +404,29 @@ const Overview = () => {
                   {stats.pendingPayments > 0 && (
                     <div className="flex gap-2 mt-2 text-xs">
                       {stats.pendingPaymentsLanguage > 0 && (
-                        <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded">لغات: {stats.pendingPaymentsLanguage}</span>
+                        <span className="px-2 py-1 bg-secondary-100 text-secondary-700 rounded">لغات: {stats.pendingPaymentsLanguage}</span>
                       )}
                       {stats.pendingPaymentsYearly > 0 && (
-                        <span className="px-2 py-1 bg-green-100 text-green-700 rounded">سنوية: {stats.pendingPaymentsYearly}</span>
+                        <span className="px-2 py-1 bg-success-100 text-success-700 rounded">سنوية: {stats.pendingPaymentsYearly}</span>
                       )}
                       {stats.pendingPaymentsSupport > 0 && (
-                        <span className="px-2 py-1 bg-indigo-100 text-indigo-700 rounded">دعم: {stats.pendingPaymentsSupport}</span>
+                        <span className="px-2 py-1 bg-primary-100 text-primary-700 rounded">دعم: {stats.pendingPaymentsSupport}</span>
                       )}
                       {stats.pendingPaymentsTraining > 0 && (
-                        <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded">تكوين: {stats.pendingPaymentsTraining}</span>
+                        <span className="px-2 py-1 bg-accent-100 text-accent-700 rounded">تكوين: {stats.pendingPaymentsTraining}</span>
                       )}
                     </div>
                   )}
                 </div>
-                <CreditCard className={`h-6 w-6 ${stats.pendingPayments > 0 ? 'text-yellow-600' : 'text-gray-400'}`} />
+                <CreditCard className={`h-6 w-6 ${stats.pendingPayments > 0 ? 'text-warning-600' : 'text-gray-400'}`} />
               </div>
             </button>
 
             <button
               onClick={() => handleQuickAction('viewAnnualFees')}
-              className={`w-full p-4 rounded-lg border-2 text-right transition-all hover:shadow-md ${
-                stats.pendingAnnualFees > 0 
-                  ? 'border-yellow-400 bg-yellow-50 hover:bg-yellow-100' 
+              className={`w-full p-4 rounded-lg border-2 text-start transition-all hover:shadow-md ${
+                stats.pendingAnnualFees > 0
+                  ? 'border-warning-400 bg-warning-50 hover:bg-warning-100'
                   : 'border-gray-200 bg-gray-50 hover:bg-gray-100'
               }`}
             >
@@ -459,20 +440,20 @@ const Overview = () => {
                     }
                   </p>
                   {stats.approvedAnnualFees > 0 && (
-                    <p className="text-xs text-green-600 mt-1">
+                    <p className="text-xs text-success-600 mt-1">
                       {stats.approvedAnnualFees} موافق عليه
                     </p>
                   )}
                 </div>
-                <DollarSign className={`h-6 w-6 ${stats.pendingAnnualFees > 0 ? 'text-yellow-600' : 'text-gray-400'}`} />
+                <DollarSign className={`h-6 w-6 ${stats.pendingAnnualFees > 0 ? 'text-warning-600' : 'text-gray-400'}`} />
               </div>
             </button>
 
             <button
               onClick={() => handleQuickAction('viewTrainingRequests')}
-              className={`w-full p-4 rounded-lg border-2 text-right transition-all hover:shadow-md ${
-                stats.trainingRequestsPending > 0 
-                  ? 'border-purple-400 bg-purple-50 hover:bg-purple-100' 
+              className={`w-full p-4 rounded-lg border-2 text-start transition-all hover:shadow-md ${
+                stats.trainingRequestsPending > 0
+                  ? 'border-accent-400 bg-accent-50 hover:bg-accent-100'
                   : 'border-gray-200 bg-gray-50 hover:bg-gray-100'
               }`}
             >
@@ -487,13 +468,13 @@ const Overview = () => {
                   </p>
                   {stats.trainingRequests > 0 && (
                     <div className="flex gap-2 mt-2 text-xs">
-                      <span className="px-2 py-1 bg-yellow-100 text-yellow-700 rounded">قيد الانتظار: {stats.trainingRequestsPending}</span>
-                      <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded">تمت المراجعة: {stats.trainingRequestsReviewed}</span>
-                      <span className="px-2 py-1 bg-green-100 text-green-700 rounded">مكتمل: {stats.trainingRequestsCompleted}</span>
+                      <span className="px-2 py-1 bg-warning-100 text-warning-700 rounded">قيد الانتظار: {stats.trainingRequestsPending}</span>
+                      <span className="px-2 py-1 bg-secondary-100 text-secondary-700 rounded">تمت المراجعة: {stats.trainingRequestsReviewed}</span>
+                      <span className="px-2 py-1 bg-success-100 text-success-700 rounded">مكتمل: {stats.trainingRequestsCompleted}</span>
                     </div>
                   )}
                 </div>
-                <FileText className={`h-6 w-6 ${stats.trainingRequestsPending > 0 ? 'text-purple-600' : 'text-gray-400'}`} />
+                <FileText className={`h-6 w-6 ${stats.trainingRequestsPending > 0 ? 'text-accent-600' : 'text-gray-400'}`} />
               </div>
             </button>
           </div>

@@ -4,9 +4,13 @@ import { useAuth } from '../contexts/AuthContext';
 import { useBranch } from '../contexts/BranchContext';
 import { UserPlus, Mail, Lock, Building2, Camera, Upload, Eye, EyeOff } from 'lucide-react';
 import { registerUser } from '../services/userService';
+import GoogleSignInButton from '../components/GoogleSignInButton';
+import { Button, buttonClasses } from '../components/ui/button';
+import { Input, Label } from '../components/ui/input';
+import { Alert } from '../components/ui/feedback';
 
 const RegisterPage = () => {
-  const { user, role, signup, loading } = useAuth();
+  const { user, role, signup, registerWithGoogle, loading, completedProfile } = useAuth();
   const { branches, selectBranch, selectedBranchId, selectedBranch } = useBranch();
   const navigate = useNavigate();
 
@@ -23,14 +27,16 @@ const RegisterPage = () => {
   const [phoneNumber, setPhoneNumber] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [rulesAccepted, setRulesAccepted] = useState(false);
 
   useEffect(() => {
     if (user && role) {
       if (role === 'admin') navigate('/admin', { replace: true });
-      else navigate('/student-dashboard', { replace: true });
+      // Don't redirect incomplete Google users — let handleGoogleSignUp do it explicitly
+      else if (completedProfile !== false) navigate('/student-dashboard', { replace: true });
     }
-  }, [user, role, navigate]);
+  }, [user, role, completedProfile, navigate]);
 
   // Preload branchId from BranchContext/localStorage
   useEffect(() => {
@@ -90,6 +96,43 @@ const RegisterPage = () => {
     return `${prefix}-${y}${m}-${rand}`;
   }, [branchId]);
 
+  // ── Google sign-up ────────────────────────────────────────────────────────
+
+  const handleGoogleSignUp = async () => {
+    setError('');
+    setGoogleLoading(true);
+    try {
+      const result = await registerWithGoogle();
+      // New or incomplete-profile user must complete the registration form
+      if (result.isNewUser || result.completedProfile === false) {
+        navigate('/complete-registration', { replace: true });
+        return;
+      }
+      // Existing complete user — useEffect handles redirect
+    } catch (err) {
+      switch (err.code) {
+        case 'google/popup-closed':
+          break;
+        case 'google/needs-branch':
+          navigate('/branch-selector', {
+            replace: false,
+            state: { message: 'يرجى اختيار الفرع أولاً ثم المتابعة بحساب Google.' },
+          });
+          break;
+        case 'google/account-exists':
+          setError('هذا البريد الإلكتروني مرتبط بحساب آخر. يرجى تسجيل الدخول بكلمة المرور.');
+          break;
+        default:
+          setError('حدث خطأ أثناء إنشاء الحساب بـ Google. حاول مرة أخرى.');
+          console.error('Google sign-up error:', err);
+      }
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
+
+  // ── Email / password sign-up ──────────────────────────────────────────────
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
@@ -132,12 +175,6 @@ const RegisterPage = () => {
         (currentBranchId === 'boumerdes' ? 'بومرداس' : 
          currentBranchId === 'bordj_menaiel' ? 'برج منايل' : currentBranchId);
       
-      console.log('🔵 Starting registration with:', {
-        branchId: currentBranchId,
-        branchName: finalBranchName,
-        email: email
-      });
-
       // Step 1: Create Firebase Auth user with COMPLETE data
       const createdUser = await signup(email, password, {
         fullName,
@@ -152,13 +189,9 @@ const RegisterPage = () => {
         phoneNumber,
       });
 
-      console.log('✅ Firebase Auth user created:', createdUser.uid);
-
       const userId = createdUser.uid;
 
       // Step 2: Upload photos and complete user profile in Firestore
-      console.log('🔵 Calling registerUser to upload photos and save to Firestore...');
-      
       await registerUser(
         {
           fullName,
@@ -176,15 +209,11 @@ const RegisterPage = () => {
         idCard
       );
 
-      console.log('✅ User registered successfully in Firestore');
-
       // Step 3: Ensure branch is selected
       selectBranch(currentBranchId);
-      
+
       // Step 4: Clear saved form data
       sessionStorage.removeItem('registerFormData');
-      
-      console.log('✅ Registration complete, navigating to dashboard...');
       
       // Give Firestore a moment to propagate before navigation
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -192,7 +221,7 @@ const RegisterPage = () => {
       navigate('/student-dashboard', { replace: true });
       
     } catch (err) {
-      console.error('❌ Registration error:', err);
+      console.error('Registration error:', err);
       
       // Handle permission errors
       if (err.code === 'permission-denied' || 
@@ -232,132 +261,120 @@ const RegisterPage = () => {
         </div>
 
         {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-3 mb-4 text-sm">
-            {error}
-          </div>
+          <Alert variant="danger" className="mb-4">{error}</Alert>
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">الاسم الكامل</label>
-            <div className="relative">
-              <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
-                <UserPlus className="h-5 w-5 text-gray-400" />
-              </div>
-              <input
-                type="text"
-                required
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
-                className="w-full px-3 py-3 pr-10 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
-                placeholder="محمد علي"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">تاريخ الازدياد</label>
-            <input
-              type="date"
+            <Label htmlFor="reg-fullname">الاسم الكامل</Label>
+            <Input
+              id="reg-fullname"
+              type="text"
               required
-              value={birthDate}
-              onChange={(e) => setBirthDate(e.target.value)}
-              className="w-full px-3 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              placeholder="محمد علي"
+              startIcon={<UserPlus className="h-5 w-5" />}
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">مكان الازدياد</label>
-            <input
+            <Label htmlFor="reg-birthdate">تاريخ الازدياد</Label>
+            <Input
+              id="reg-birthdate"
+              type="date"
+              required
+              value={birthDate}
+              onChange={(e) => setBirthDate(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <Label htmlFor="reg-birthplace">مكان الازدياد</Label>
+            <Input
+              id="reg-birthplace"
               type="text"
               required
               value={birthPlace}
               onChange={(e) => setBirthPlace(e.target.value)}
-              className="w-full px-3 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
               placeholder="المدينة / المنطقة"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">العنوان</label>
-            <input
+            <Label htmlFor="reg-address">العنوان</Label>
+            <Input
+              id="reg-address"
               type="text"
               required
               value={address}
               onChange={(e) => setAddress(e.target.value)}
-              className="w-full px-3 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
               placeholder="العنوان الكامل"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">رقم الهاتف</label>
-            <input
+            <Label htmlFor="reg-phone">رقم الهاتف</Label>
+            <Input
+              id="reg-phone"
               type="tel"
               required
               value={phoneNumber}
               onChange={(e) => setPhoneNumber(e.target.value)}
-              className="w-full px-3 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
               placeholder="0XXXXXXXXX"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">البريد الإلكتروني</label>
-            <div className="relative">
-              <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
-                <Mail className="h-5 w-5 text-gray-400" />
-              </div>
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-3 py-3 pr-10 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
-                placeholder="example@email.com"
-              />
-            </div>
+            <Label htmlFor="reg-email">البريد الإلكتروني</Label>
+            <Input
+              id="reg-email"
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="example@email.com"
+              startIcon={<Mail className="h-5 w-5" />}
+            />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">كلمة المرور</label>
-            <div className="relative">
-              <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
-                <Lock className="h-5 w-5 text-gray-400" />
-              </div>
-              <input
-                type={showPassword ? 'text' : 'password'}
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-3 py-3 pr-10 pl-10 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
-                placeholder="••••••••"
-              />
-              <button
-                type="button"
-                aria-label={showPassword ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور'}
-                onClick={() => setShowPassword((v) => !v)}
-                className="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-500 hover:text-gray-700"
-              >
-                {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
-              </button>
-            </div>
+            <Label htmlFor="reg-password">كلمة المرور</Label>
+            <Input
+              id="reg-password"
+              type={showPassword ? 'text' : 'password'}
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              startIcon={<Lock className="h-5 w-5" />}
+              endAdornment={
+                <button
+                  type="button"
+                  aria-label={showPassword ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور'}
+                  onClick={() => setShowPassword((v) => !v)}
+                  className="flex items-center text-gray-500 hover:text-gray-700 focus:outline-none"
+                >
+                  {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                </button>
+              }
+            />
           </div>
 
-          <div className="bg-primary-50 border border-primary-200 rounded-lg p-3 text-sm text-primary-800 flex items-center">
-            <Building2 className="w-4 h-4 ml-2" />
+          <div className="bg-primary-50 border border-primary-200 rounded-lg p-3 text-sm text-primary-800 flex items-center gap-2">
+            <Building2 className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
             <span>
               سيتم تسجيلك في فرع: {branches.find(b => b.id === branchId)?.name || '—'}
             </span>
           </div>
 
           <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm text-gray-700">
-            <span className="font-medium">رقم التسجيل:</span> <span className="ltr:ml-2 rtl:mr-2">{registrationNumber}</span>
+            <span className="font-medium">رقم التسجيل:</span> <span className="ms-2">{registrationNumber}</span>
           </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              <Camera className="w-4 h-4 inline ml-1" />
+              <Camera className="w-4 h-4 inline me-1" />
               الصورة الشخصية *
             </label>
             <div className="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center hover:border-primary transition-colors">
@@ -368,11 +385,11 @@ const RegisterPage = () => {
                     alt="Profile"
                     className="max-w-full h-32 object-cover mx-auto mb-4 rounded"
                   />
-                  <p className="text-green-600 font-medium">{profilePic.name}</p>
+                  <p className="text-success-600 font-medium">{profilePic.name}</p>
                   <button
                     type="button"
                     onClick={() => setProfilePic(null)}
-                    className="text-red-500 text-sm mt-2 hover:underline"
+                    className="text-danger hover:text-danger-700 text-sm mt-2 hover:underline"
                   >
                     إزالة الصورة
                   </button>
@@ -389,20 +406,22 @@ const RegisterPage = () => {
                 accept="image/*"
                 onChange={(e) => {
                   const file = e.target.files[0];
-                  if (file && file.size <= 5 * 1024 * 1024) {
-                    setProfilePic(file);
-                  } else {
-                    alert('حجم الملف يجب أن يكون أقل من 5 ميجابايت');
+                  if (!file) return;
+                  if (file.size > 5 * 1024 * 1024) {
+                    setError('حجم الصورة الشخصية يجب أن يكون أقل من 5 ميجابايت');
+                    e.target.value = '';
+                    return;
                   }
+                  setProfilePic(file);
                 }}
                 className="hidden"
                 id="profile-pic-upload"
               />
               <label
                 htmlFor="profile-pic-upload"
-                className="cursor-pointer inline-block mt-4 bg-primary text-white px-4 py-2 rounded-lg hover:bg-primary-600 transition-colors"
+                className={buttonClasses({ size: 'sm', className: 'mt-4 cursor-pointer' })}
               >
-                <Upload className="w-4 h-4 inline ml-2" />
+                <Upload className="w-4 h-4" aria-hidden="true" />
                 اختيار صورة
               </label>
             </div>
@@ -410,7 +429,7 @@ const RegisterPage = () => {
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              <Upload className="w-4 h-4 inline ml-1" />
+              <Upload className="w-4 h-4 inline me-1" />
               صورة بطاقة الهوية *
             </label>
             <div className="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center hover:border-primary transition-colors">
@@ -421,11 +440,11 @@ const RegisterPage = () => {
                     alt="ID Card"
                     className="max-w-full h-32 object-cover mx-auto mb-4 rounded"
                   />
-                  <p className="text-green-600 font-medium">{idCard.name}</p>
+                  <p className="text-success-600 font-medium">{idCard.name}</p>
                   <button
                     type="button"
                     onClick={() => setIdCard(null)}
-                    className="text-red-500 text-sm mt-2 hover:underline"
+                    className="text-danger hover:text-danger-700 text-sm mt-2 hover:underline"
                   >
                     إزالة الصورة
                   </button>
@@ -442,20 +461,22 @@ const RegisterPage = () => {
                 accept="image/*"
                 onChange={(e) => {
                   const file = e.target.files[0];
-                  if (file && file.size <= 5 * 1024 * 1024) {
-                    setIdCard(file);
-                  } else {
-                    alert('حجم الملف يجب أن يكون أقل من 5 ميجابايت');
+                  if (!file) return;
+                  if (file.size > 5 * 1024 * 1024) {
+                    setError('حجم صورة البطاقة يجب أن يكون أقل من 5 ميجابايت');
+                    e.target.value = '';
+                    return;
                   }
+                  setIdCard(file);
                 }}
                 className="hidden"
                 id="id-card-upload"
               />
               <label
                 htmlFor="id-card-upload"
-                className="cursor-pointer inline-block mt-4 bg-primary text-white px-4 py-2 rounded-lg hover:bg-primary-600 transition-colors"
+                className={buttonClasses({ size: 'sm', className: 'mt-4 cursor-pointer' })}
               >
-                <Upload className="w-4 h-4 inline ml-2" />
+                <Upload className="w-4 h-4" aria-hidden="true" />
                 اختيار صورة
               </label>
             </div>
@@ -483,14 +504,30 @@ const RegisterPage = () => {
             </label>
           </div>
 
-          <button
-            type="submit"
-            disabled={submitting || loading || !rulesAccepted}
-            className="w-full py-3 bg-primary text-white rounded-lg hover:bg-primary-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
-          >
+          <Button type="submit" fullWidth disabled={submitting || loading || googleLoading || !rulesAccepted}>
             {submitting ? 'جاري المتابعة...' : 'إنشاء الحساب'}
-          </button>
+          </Button>
         </form>
+
+        {/* Divider */}
+        <div className="flex items-center my-5">
+          <div className="flex-1 border-t border-gray-200" />
+          <span className="mx-3 text-sm text-gray-400">أو</span>
+          <div className="flex-1 border-t border-gray-200" />
+        </div>
+
+        {/* Google sign-up */}
+        <div className="mb-1">
+          <p className="text-center text-xs text-gray-500 mb-3">
+            التسجيل بـ Google يُنشئ حساباً مبدئياً — ستُكمل بياناتك في الخطوة التالية.
+          </p>
+          <GoogleSignInButton
+            onClick={handleGoogleSignUp}
+            loading={googleLoading}
+            disabled={submitting || loading}
+            label="التسجيل بحساب Google"
+          />
+        </div>
 
         <p className="text-center text-sm text-gray-600 mt-4">
           لديك حساب بالفعل؟{' '}

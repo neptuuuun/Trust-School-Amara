@@ -1,87 +1,75 @@
 import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import LogoImage from '../assets/images/logo.png';
 import { useAuth } from '../contexts/AuthContext';
 import ChangeBranchButton from './ChangeBranchButton';
+
+const NAV_ITEMS = [
+    { to: '/home',            label: 'الرئيسية' },
+    { to: '/support-lessons', label: 'دروس الدعم' },
+    { to: '/languages',       label: 'تعليم اللغات' },
+    { to: '/trainings',       label: 'الدورات التكوينية' },
+    { to: '/contact',         label: 'اتصل بنا' },
+];
 
 const Header = () => {
     const [isMobileMenuOpen, setMobileMenuOpen] = useState(false);
     const { user, role, logout, loading } = useAuth();
     const navigate = useNavigate();
+    const location = useLocation();
 
-    const toggleMobileMenu = () => {
-        setMobileMenuOpen(!isMobileMenuOpen);
-    };
+    const toggleMobileMenu = () => setMobileMenuOpen((v) => !v);
+    const closeMobileMenu = () => setMobileMenuOpen(false);
 
-    const closeMobileMenu = () => {
-        setMobileMenuOpen(false);
-    };
+    const isActive = (to) => location.pathname === to;
 
     return (
-        <header className="sticky top-0 left-0 w-full z-50 bg-primary shadow-primary">
+        <header className="sticky top-0 z-50 w-full bg-primary shadow-primary">
+            {/* Backdrop — closes the mobile drawer on outside click */}
+            {isMobileMenuOpen && (
+                <div
+                    className="fixed left-0 right-0 bottom-0 top-20 z-40 bg-black/40 transition-opacity duration-300 md:hidden"
+                    onClick={closeMobileMenu}
+                    aria-hidden="true"
+                />
+            )}
             <div className="container mx-auto px-4">
-                <nav className="flex items-center justify-between h-20">
+                <nav className="flex items-center justify-between h-20" role="navigation" aria-label="التنقل الرئيسي">
+                    {/* Logo */}
                     <div className="logo">
-                        <Link to="/home" className="logo-link">
+                        <Link to="/home" className="logo-link" aria-label="الصفحة الرئيسية - Trust School Amara">
                             <img src={LogoImage} alt="Trust School Amara" className="logo-img" />
                             <span className="logo-text">Trust School Amara</span>
                         </Link>
                     </div>
-                    <ul className={`nav-links ${isMobileMenuOpen ? 'active' : ''}`}>
-                        <li>
-                            <Link 
-                            to="/" 
-                            className="text-primary md:!text-white hover:text-warning transition-colors"
-                            onClick={closeMobileMenu}
-                            >
-                            الرئيسية
-                            </Link>
-                        </li>
-                        <li>
-                            <Link 
-                            to="/support-lessons" 
-                            className="text-primary md:!text-white hover:text-warning transition-colors"
-                            onClick={closeMobileMenu}
-                            >
-                            دروس الدعم
-                            </Link>
-                        </li>
-                        <li>
-                            <Link 
-                            to="/languages" 
-                            className="text-primary md:!text-white hover:text-warning transition-colors"
-                            onClick={closeMobileMenu}
-                            >
-                            تعليم اللغات
-                            </Link>
-                        </li>
-                        <li>
-                            <Link 
-                            to="/trainings" 
-                            className="text-primary md:!text-white hover:text-warning transition-colors"
-                            onClick={closeMobileMenu}
-                            >
-                            الدورات التكوينية
-                            </Link>
-                        </li>
-                        <li>
-                            <Link 
-                            to="/contact" 
-                            className="text-primary md:!text-white hover:text-warning transition-colors"
-                            onClick={closeMobileMenu}
-                            >
-                            اتصل بنا
-                            </Link>
-                        </li>
+
+                    {/* Desktop nav links */}
+                    <ul id="mobile-nav" className={`nav-links relative z-[60] ${isMobileMenuOpen ? 'active' : ''}`} role="list">
+                        {NAV_ITEMS.map(({ to, label }) => (
+                            <li key={to}>
+                                <Link
+                                    to={to}
+                                    className={`transition-colors ${
+                                        isActive(to)
+                                            ? 'text-warning md:!text-warning font-semibold border-b-2 border-warning pb-0.5'
+                                            : 'text-primary md:!text-white hover:text-warning'
+                                    }`}
+                                    onClick={closeMobileMenu}
+                                    aria-current={isActive(to) ? 'page' : undefined}
+                                >
+                                    {label}
+                                </Link>
+                            </li>
+                        ))}
                         {/* Change Branch inside menu for mobile */}
                         <li className="md:hidden">
-                            <ChangeBranchButton className="w-full text-right mt-2 border-amber-500" />
+                            <ChangeBranchButton className="w-full text-start mt-2 border-amber-500" />
                         </li>
                     </ul>
-                    {/* Auth actions - Desktop */}
-                    <div className="hidden md:flex items-center space-x-3 space-x-reverse">
-                        {/* Change Branch button - Desktop (top-right) */}
-                        <ChangeBranchButton className="border-red-500" />
+
+                    {/* Auth actions — Desktop */}
+                    <div className="hidden md:flex items-center gap-3">
+                        <ChangeBranchButton />
                         {loading ? null : user ? (
                             <>
                                 <Link
@@ -91,10 +79,7 @@ const Header = () => {
                                     {role === 'admin' ? 'لوحة الإدارة' : 'الملف الشخصي'}
                                 </Link>
                                 <button
-                                    onClick={async () => {
-                                        await logout();
-                                        navigate('/');
-                                    }}
+                                    onClick={async () => { await logout(); navigate('/'); }}
                                     className="bg-warning text-primary font-semibold px-4 py-1.5 rounded-lg hover:opacity-90 transition"
                                 >
                                     خروج
@@ -103,28 +88,25 @@ const Header = () => {
                         ) : (
                             <>
                                 <Link to="/login" className="text-white hover:text-warning transition">دخول</Link>
-                                <Link to="/register" className="bg-warning text-primary font-semibold px-4 py-1.5 rounded-lg hover:opacity-90 transition">تسجيل</Link>
+                                <Link to="/register" className="bg-warning text-primary font-semibold px-4 py-1.5 rounded-lg hover:opacity-90 transition">
+                                    تسجيل
+                                </Link>
                             </>
                         )}
                     </div>
-                    {/* Auth actions - Mobile */}
-                    <div className="flex md:hidden items-center space-x-2 space-x-reverse">
+
+                    {/* Auth actions — Mobile */}
+                    <div className="flex md:hidden items-center gap-2">
                         {loading ? null : user ? (
                             <>
                                 <button
-                                    onClick={() => {
-                                        navigate(role === 'admin' ? '/admin' : '/profile');
-                                    }}
+                                    onClick={() => navigate(role === 'admin' ? '/admin' : '/profile')}
                                     className="text-white border border-white/40 px-2 py-1 rounded-md text-sm hover:bg-white hover:text-primary transition"
                                 >
                                     {role === 'admin' ? 'الإدارة' : 'حسابي'}
                                 </button>
                                 <button
-                                    onClick={async () => {
-                                        await logout();
-                                        navigate('/');
-                                        setMobileMenuOpen(false);
-                                    }}
+                                    onClick={async () => { await logout(); navigate('/'); setMobileMenuOpen(false); }}
                                     className="bg-warning text-primary font-semibold px-3 py-1 rounded-md text-sm hover:opacity-90 transition"
                                 >
                                     خروج
@@ -133,15 +115,23 @@ const Header = () => {
                         ) : (
                             <>
                                 <Link onClick={closeMobileMenu} to="/login" className="text-white text-sm hover:text-warning transition">دخول</Link>
-                                <Link onClick={closeMobileMenu} to="/register" className="bg-warning text-primary font-semibold px-3 py-1 rounded-md text-sm hover:opacity-90 transition">تسجيل</Link>
+                                <Link onClick={closeMobileMenu} to="/register" className="bg-warning text-primary font-semibold px-3 py-1 rounded-md text-sm hover:opacity-90 transition">
+                                    تسجيل
+                                </Link>
                             </>
                         )}
-                    </div>
-                    {/* Mobile menu icon */}
-                    <div className="mobile-menu" onClick={toggleMobileMenu}>
-                        <span></span>
-                        <span></span>
-                        <span></span>
+                        {/* Hamburger */}
+                        <button
+                            className="flex flex-col justify-center gap-1.5 p-2 bg-primary hover:brightness-110 transition"
+                            onClick={toggleMobileMenu}
+                            aria-label="فتح القائمة"
+                            aria-expanded={isMobileMenuOpen}
+                            aria-controls="mobile-nav"
+                        >
+                            <span className="block w-6 h-0.5 rounded bg-white" aria-hidden="true"></span>
+                            <span className="block w-6 h-0.5 rounded bg-white" aria-hidden="true"></span>
+                            <span className="block w-6 h-0.5 rounded bg-white" aria-hidden="true"></span>
+                        </button>
                     </div>
                 </nav>
             </div>

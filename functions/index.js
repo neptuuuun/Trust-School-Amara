@@ -315,16 +315,6 @@ function addMonthsKeepingDay(date, months) {
   return result;
 }
 
-function isSummerMonth(monthIndex) {
-  return [5, 6, 7].includes(monthIndex);
-}
-
-function getAcademicYearEndBoundary(date) {
-  const year = date.getFullYear();
-  const boundaryYear = date.getMonth() >= 8 ? year + 1 : year;
-  return new Date(boundaryYear, 4, 31, 23, 59, 59, 999);
-}
-
 function normalizeSupportStudyYear(lessonData = {}) {
   return String(lessonData.studyYear || lessonData.year || lessonData.grade || '').trim() || null;
 }
@@ -431,15 +421,8 @@ exports.createSupportLessonRegistration = functions.https.onCall(async (data, co
   }
 
   const startDateObj = parseDateInput(data?.startDate) || new Date();
-  if (isSummerMonth(startDateObj.getMonth())) {
-    throw new functions.https.HttpsError('failed-precondition', 'Summer registrations are forbidden.', { code: 'summer-registration-forbidden' });
-  }
 
   const endDateObj = parseDateInput(data?.endDate) || addMonthsKeepingDay(startDateObj, durationInMonths);
-  const academicBoundary = getAcademicYearEndBoundary(startDateObj);
-  if (endDateObj > academicBoundary) {
-    throw new functions.https.HttpsError('failed-precondition', 'Duration exceeds academic year boundary.', { code: 'duration-exceeds-academic-year' });
-  }
 
   const academicYear = String(data?.academicYear || '').trim() || null;
 

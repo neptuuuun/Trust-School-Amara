@@ -1,7 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
-import { db, auth } from '../firebase';
+import { db } from '../firebase';
 import { collection, onSnapshot, query } from 'firebase/firestore';
-import { signOut } from 'firebase/auth';
 
 const BranchContext = createContext();
 
@@ -14,35 +13,30 @@ export const useBranch = () => {
 };
 
 export const BranchProvider = ({ children }) => {
-  const [selectedBranch, setSelectedBranch] = useState(null);
-  const [selectedBranchId, setSelectedBranchId] = useState(null);
+  // Always initialise from localStorage or null — NEVER a hardcoded branch name.
+  const [selectedBranchId, setSelectedBranchId] = useState(
+    () => localStorage.getItem('branchId') || null
+  );
   const [branches, setBranches] = useState([]);
-  // Track active listener to prevent duplicates
   const unsubscribeRef = useRef(null);
+  const branchesRef = useRef([]);
 
+  // Keep the branches list in sync from Firestore (read-only, for display purposes).
   useEffect(() => {
-    // FIXED: Ensure only one listener is active at a time
     if (unsubscribeRef.current) {
       unsubscribeRef.current();
       unsubscribeRef.current = null;
     }
 
-    // FIXED: Guard against invalid collection reference
-    const branchesQuery = query(collection(db, 'branches'));
-    
-    // FIXED: Properly wrap onSnapshot in useEffect with cleanup
     const unsubscribe = onSnapshot(
-      branchesQuery,
+      query(collection(db, 'branches')),
       (snapshot) => {
-        const branchesData = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        }));
-        setBranches(branchesData);
+        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        branchesRef.current = data;
+        setBranches(data);
       },
       (error) => {
         console.error('onSnapshot branches error:', error);
-        // Prevent internal assertion errors by ensuring cleanup on error
         if (unsubscribeRef.current) {
           unsubscribeRef.current();
           unsubscribeRef.current = null;
@@ -51,8 +45,6 @@ export const BranchProvider = ({ children }) => {
     );
 
     unsubscribeRef.current = unsubscribe;
-
-    // FIXED: Proper cleanup function that ensures listener is removed
     return () => {
       if (unsubscribeRef.current) {
         unsubscribeRef.current();
@@ -61,99 +53,67 @@ export const BranchProvider = ({ children }) => {
     };
   }, []);
 
-  // Load branchId from localStorage on mount (new behavior)
-  useEffect(() => {
-    const savedBranchId = localStorage.getItem('branchId');
-    if (savedBranchId) {
-      setSelectedBranchId(savedBranchId);
-    } else {
-      // Backward compatibility: try old selectedBranch object
-      const savedBranch = localStorage.getItem('selectedBranch');
-      if (savedBranch) {
-        try {
-          const branch = JSON.parse(savedBranch);
-          if (branch?.id) {
-            setSelectedBranchId(branch.id);
-            setSelectedBranch(branch);
-            // Normalize storage to new key
-            localStorage.setItem('branchId', branch.id);
-          }
-        } catch (error) {
-          console.error('Error parsing saved branch:', error);
-          localStorage.removeItem('selectedBranch');
-        }
-      }
-    }
-  }, []);
-
-  const selectBranch = async (branchId) => {
-    // If a user is currently authenticated and is switching to a different branch,
-    // force logout so that each branch has its own isolated session.
-    try {
-      const currentUser = auth.currentUser;
-      if (currentUser && branchId && branchId !== selectedBranchId) {
-        await signOut(auth);
-      }
-    } catch (error) {
-      console.error('Error signing out on branch change:', error);
-    }
-
-    // Always set the branchId immediately
-    setSelectedBranchId(branchId);
-    localStorage.setItem('branchId', branchId);
-
-    // If we have branches loaded, also set full object for legacy consumers
-    const branch = branches.find(b => b.id === branchId);
-    if (branch) {
-      setSelectedBranch(branch);
-      localStorage.setItem('selectedBranch', JSON.stringify(branch));
-    }
+  /**
+   * selectBranch
+   * ------------
+   * Write path for pre-auth branch selection (BranchSelector UI, /branchA aliases).
+   * Updates both React state and localStorage atomically so all consumers
+   * (BranchGuard, components using selectedBranchId) stay in sync immediately.
+   */
+  const selectBranch = (id) => {
+    if (!id) return;
+    setSelectedBranchId(id);
+    localStorage.setItem('branchId', id);
   };
 
-  const clearBranch = async () => {
-    // Clearing the branch should also clear any active session
-    try {
-      if (auth.currentUser) {
-        await signOut(auth);
-      }
-    } catch (error) {
-      console.error('Error signing out on branch clear:', error);
-    }
+  /**
+   * setBranchFromAuth
+   * -----------------
+   * Write path for post-auth branch state, called by AuthContext after reading
+   * the admin or user document from Firestore.
+   */
+  const setBranchFromAuth = (id) => {
+    if (!id) return;
+    setSelectedBranchId(id);
+    localStorage.setItem('branchId', id);
+  };
 
-    setSelectedBranch(null);
+  /**
+   * resetBranch
+   * -----------
+   * Clears branch state and localStorage.
+   * Called by AuthContext.logout() — does NOT sign the user out.
+   */
+  const resetBranch = () => {
     setSelectedBranchId(null);
-    localStorage.removeItem('selectedBranch');
     localStorage.removeItem('branchId');
   };
 
-  const getBranchPrice = (serviceType, priceType = 'base') => {
-    if (!selectedBranch || !selectedBranch.priceOverrides) {
-      return null;
-    }
-
-    const overrides = selectedBranch.priceOverrides;
-    
+  /**
+   * getBranchPrice
+   * --------------
+   * Kept for backwards compatibility with components that read pricing data.
+   */
+  const getBranchPrice = (serviceType) => {
+    const branch = branchesRef.current.find(b => b.id === selectedBranchId);
+    if (!branch?.priceOverrides) return null;
     switch (serviceType) {
-      case 'yearlyFee':
-        return overrides.yearlyFee || 1000;
-      case 'supportLessons':
-        return overrides.supportLessons?.monthly || 2000;
-      default:
-        return null;
+      case 'yearlyFee':      return branch.priceOverrides.yearlyFee || null;
+      case 'supportLessons': return branch.priceOverrides.supportLessons?.monthly || null;
+      default:               return null;
     }
   };
 
   const value = {
-    // New preferred state
     selectedBranchId,
-    // Legacy/optional
-    selectedBranch,
     branches,
-    // APIs
-    selectBranch,
-    clearBranch,
+    // Write paths
+    selectBranch,       // pre-auth: UI branch picker, alias routes
+    setBranchFromAuth,  // post-auth: set from Firestore user/admin doc
+    resetBranch,        // logout: clears state + localStorage
+    // Helpers
     getBranchPrice,
-    isSelected: !!selectedBranchId
+    isSelected: !!selectedBranchId,
   };
 
   return (

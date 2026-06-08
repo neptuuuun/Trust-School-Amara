@@ -6,22 +6,33 @@ service firebase.storage {
       return request.auth != null;
     }
 
-    // Students can upload to their own folders only
+    // Global admin = a document exists in Firestore /admins/{uid}.
+    // (Admin docs are provisioned only via the Admin SDK / Firebase Console.)
+    function isAdmin() {
+      return isSignedIn()
+        && firestore.exists(/databases/(default)/documents/admins/$(request.auth.uid));
+    }
+
+    // Uploads must be images and at most 5 MB (prevents abuse / non-image payloads).
+    function isValidImageUpload() {
+      return request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    // Student-owned files (ID cards, photos, receipts): owner read/write, admin read.
     match /students/{uid}/{allPaths=**} {
-      allow read: if isSignedIn() && (request.auth.uid == uid ||
-        // Admins can read all (checked via Firestore users doc)
-        (exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
-         get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin'));
-      allow write: if isSignedIn() && request.auth.uid == uid;
+      allow read:  if isSignedIn() && (request.auth.uid == uid || isAdmin());
+      allow write: if isSignedIn() && request.auth.uid == uid && isValidImageUpload();
     }
 
-    // Payments screenshots: students can write their own, admins read all
-    match /payments/{paymentId}/{fileName} {
-      allow write: if isSignedIn();
-      allow read: if isSignedIn();
+    // Payment screenshots — owner-scoped path (payments/{uid}/...).
+    // Only the owner may upload (images only); only the owner or an admin may read.
+    match /payments/{uid}/{allPaths=**} {
+      allow read:  if isSignedIn() && (request.auth.uid == uid || isAdmin());
+      allow write: if isSignedIn() && request.auth.uid == uid && isValidImageUpload();
     }
 
-    // Default deny
+    // Default deny — everything not explicitly allowed above is blocked.
     match /{allPaths=**} {
       allow read, write: if false;
     }

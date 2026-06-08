@@ -1,532 +1,486 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { auth } from '../../firebase';
 import { onAuthStateChanged } from 'firebase/auth';
-import { Search, AlertCircle, CheckCircle, Clock, X as CloseIcon, Eye, UserCheck, Image as ImageIcon, Filter } from 'lucide-react';
+import {
+  Search,
+  Clock,
+  Eye,
+  UserCheck,
+  Image as ImageIcon,
+  CheckCircle,
+  XCircle,
+  Phone,
+  Mail,
+  MapPin,
+  Calendar,
+  Hash,
+  Building2,
+  Users,
+  UserPlus,
+} from 'lucide-react';
 import Breadcrumb from '../components/Breadcrumb';
 import FileViewerModal from '../components/FileViewerModal';
+import AdminCreateStudentModal from '../components/AdminCreateStudentModal';
+import AdminConfirmDialog from '../components/AdminConfirmDialog';
 import { useBranch } from '../../contexts/BranchContext';
-import { getPendingAdminUsersByBranch, updateUser } from '../../services/userService';
+import { getUsersByBranch, updateUser } from '../../services/userService';
+import { cleanupRejectedRegistration } from '../../services/storageCleanupService';
+import { useToast } from '../components/ToastNotifications';
+import apiCall from '../../utils/apiClient';
+import { formatDate } from '../../utils/dateUtils';
+import { Button } from '../../components/ui/button';
+import { Input } from '../../components/ui/input';
+import { Alert, LoadingState } from '../../components/ui/feedback';
+
+// ─── helpers ────────────────────────────────────────────────────────────────
+
+const branchLabel = (id) =>
+  id === 'boumerdes' ? 'بومرداس' : id === 'bordj_menaiel' ? 'برج منايل' : id || '—';
+
+const getImageUrl = (v) => {
+  if (!v) return null;
+  if (typeof v === 'string') return v;
+  if (typeof v === 'object' && v.publicUrl) return v.publicUrl;
+  return null;
+};
+
+
+const STATUS_CONFIG = {
+  pending:  { label: 'قيد المراجعة', color: 'bg-warning-100 text-warning-800', icon: Clock },
+  verified: { label: 'مقبول',        color: 'bg-success-100 text-success-800', icon: CheckCircle },
+  active:   { label: 'مقبول',        color: 'bg-success-100 text-success-800', icon: CheckCircle },
+  rejected: { label: 'مرفوض',        color: 'bg-danger-100  text-danger-800',  icon: XCircle },
+};
+
+const getStatusConfig = (user) => {
+  const raw = String(user?.verificationStatus || user?.status || '').toLowerCase();
+  return STATUS_CONFIG[raw] || { label: raw || 'غير محدد', color: 'bg-gray-100 text-gray-700', icon: Clock };
+};
+
+// ─── Field row inside card ───────────────────────────────────────────────────
+
+const Field = ({ icon: Icon, label, value }) => (
+  <div className="flex items-start gap-2">
+    <Icon className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
+    <div className="min-w-0">
+      <span className="text-xs text-gray-500 block">{label}</span>
+      <span className="text-sm text-gray-900 font-medium break-words">{value || '—'}</span>
+    </div>
+  </div>
+);
+
+// ─── Single user card ────────────────────────────────────────────────────────
+
+const UserCard = ({ user, onDecision, processing, onViewImage }) => {
+  const photoUrl  = getImageUrl(user.photoUrl);
+  const idCardUrl = getImageUrl(user.idCardUrl);
+  const busy      = processing[`decision-${user.id}`];
+  const status    = getStatusConfig(user);
+  const StatusIcon = status.icon;
+  const isPending = String(user?.verificationStatus || '').toLowerCase() === 'pending';
+
+  return (
+    <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex flex-col">
+
+      {/* Header */}
+      <div className="bg-primary-50 border-b border-primary-100 p-4 flex items-center gap-4">
+        {photoUrl ? (
+          <button
+            onClick={() => onViewImage(user.photoUrl, 'الصورة الشخصية')}
+            className="relative group flex-shrink-0"
+            title="عرض الصورة الشخصية"
+          >
+            <img
+              src={photoUrl}
+              alt="الصورة الشخصية"
+              className="w-16 h-16 rounded-full object-cover border-2 border-white shadow cursor-pointer hover:opacity-90 transition-opacity"
+              onError={(e) => { e.target.style.display = 'none'; }}
+            />
+            <div className="absolute inset-0 flex items-center justify-center rounded-full bg-black bg-opacity-0 group-hover:bg-opacity-20 transition-opacity">
+              <Eye className="w-4 h-4 text-white opacity-0 group-hover:opacity-100" />
+            </div>
+          </button>
+        ) : (
+          <div className="w-16 h-16 rounded-full bg-gray-200 flex items-center justify-center flex-shrink-0">
+            <UserCheck className="w-8 h-8 text-gray-400" />
+          </div>
+        )}
+
+        <div className="flex-1 min-w-0">
+          <h3 className="text-lg font-bold text-gray-900 truncate">{user.fullName || user.name || '—'}</h3>
+          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium mt-1 ${status.color}`}>
+            <StatusIcon className="w-3 h-3" />
+            {status.label}
+          </span>
+        </div>
+      </div>
+
+      {/* Details */}
+      <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3 flex-1">
+        <Field icon={Hash}      label="رقم التسجيل"      value={user.registrationNumber} />
+        <Field icon={Mail}      label="البريد الإلكتروني" value={user.email} />
+        <Field icon={Phone}     label="رقم الهاتف"        value={user.phone || user.phoneNumber} />
+        <Field icon={Calendar}  label="تاريخ الازدياد"    value={formatDate(user.birthDate)} />
+        <Field icon={MapPin}    label="مكان الازدياد"     value={user.birthPlace} />
+        <Field icon={MapPin}    label="العنوان"           value={user.address} />
+        <Field icon={Building2} label="الفرع"             value={branchLabel(user.branchId)} />
+        <Field icon={Calendar}  label="تاريخ التسجيل"    value={formatDate(user.createdAt)} />
+      </div>
+
+      {/* ID card thumbnail */}
+      {idCardUrl && (
+        <div className="px-4 pb-3">
+          <p className="text-xs text-gray-500 mb-1">بطاقة الهوية</p>
+          <button
+            onClick={() => onViewImage(user.idCardUrl, 'صورة بطاقة الهوية')}
+            className="relative group w-full rounded-lg overflow-hidden border border-gray-200 hover:border-primary transition-colors"
+          >
+            <img
+              src={idCardUrl}
+              alt="بطاقة الهوية"
+              className="w-full h-28 object-cover"
+              onError={(e) => { e.target.style.display = 'none'; }}
+            />
+            <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-0 group-hover:bg-opacity-25 transition-opacity">
+              <ImageIcon className="w-6 h-6 text-white opacity-0 group-hover:opacity-100" />
+            </div>
+          </button>
+        </div>
+      )}
+
+      {/* Accept / Reject — only for pending users */}
+      {isPending && (
+        <div className="px-4 pb-4 grid grid-cols-2 gap-2">
+          <Button
+            variant="success"
+            size="sm"
+            fullWidth
+            onClick={() => onDecision(user.id, true, user.branchId)}
+            disabled={busy}
+          >
+            <CheckCircle className="w-4 h-4" />
+            {busy ? 'جاري...' : 'قبول'}
+          </Button>
+          <Button
+            variant="danger"
+            size="sm"
+            fullWidth
+            onClick={() => onDecision(user.id, false, user.branchId)}
+            disabled={busy}
+          >
+            <XCircle className="w-4 h-4" />
+            {busy ? 'جاري...' : 'رفض'}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ─── Page ────────────────────────────────────────────────────────────────────
+
+const STATUS_FILTERS = [
+  { value: 'all',      label: 'الكل' },
+  { value: 'pending',  label: 'قيد المراجعة' },
+  { value: 'verified', label: 'مقبول' },
+  { value: 'rejected', label: 'مرفوض' },
+];
 
 const UsersPage = () => {
-  const [users, setUsers] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [branchFilter, setBranchFilter] = useState('all');
-  const [processing, setProcessing] = useState({});
-  const [selectedUser, setSelectedUser] = useState(null);
-  const [modalOpen, setModalOpen] = useState(false);
-  const [imageModal, setImageModal] = useState({ open: false, url: null, title: '' });
-  const [viewMode, setViewMode] = useState('table');
-  const [currentUser, setCurrentUser] = useState(null);
+  const [users,               setUsers]               = useState([]);
+  const [loading,             setLoading]             = useState(true);
+  const [error,               setError]               = useState('');
+  const [searchQuery,         setSearchQuery]         = useState('');
+  const [statusFilter,        setStatusFilter]        = useState('all');
+  const [processing,          setProcessing]          = useState({});
+  const [imageModal,          setImageModal]          = useState({ open: false, url: null });
+  const [showCreateModal,     setShowCreateModal]     = useState(false);
+  const [currentUser,         setCurrentUser]         = useState(null);
+  const [rejectDialog,        setRejectDialog]        = useState({ open: false, userId: null, branchId: null, userName: '' });
   const { selectedBranchId } = useBranch();
+  const { show: showToast } = useToast();
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setCurrentUser(user);
-      if (!user) {
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setCurrentUser(u);
+      if (!u) {
         setError('يجب تسجيل الدخول كمشرف للوصول إلى هذه الصفحة');
         setLoading(false);
       }
     });
-    return () => unsubscribe();
+    return () => unsub();
   }, []);
 
   useEffect(() => {
-    // Only load users when an admin is authenticated AND a branch is selected.
     if (!currentUser || !selectedBranchId) return;
-    
-    const loadUsers = async () => {
-      setLoading(true);
+
+    let isFirstLoad = true;
+
+    const load = async () => {
+      // Only show the full-page spinner on the very first fetch.
+      // Background refreshes must NOT call setLoading(true) because that
+      // triggers the early-return spinner, which unmounts the modal and
+      // destroys any in-progress form data the admin may have typed.
+      if (isFirstLoad) setLoading(true);
       try {
-        const usersData = await getPendingAdminUsersByBranch(selectedBranchId);
-        setUsers(usersData);
+        const data = await getUsersByBranch(selectedBranchId);
+        setUsers(data);
         setError('');
       } catch (err) {
-        console.error('Error loading users:', err);
-        if (err.code === 'permission-denied') {
-          setError('ليس لديك صلاحية للوصول إلى قائمة المستخدمين. تحقق من إعدادات Firebase Security Rules.');
-        } else {
-          setError('فشل في تحميل المستخدمين: ' + err.message);
-        }
+        setError(
+          err.code === 'permission-denied'
+            ? 'ليس لديك صلاحية للوصول إلى قائمة المستخدمين.'
+            : 'فشل في تحميل المستخدمين: ' + err.message
+        );
       } finally {
-        setLoading(false);
+        if (isFirstLoad) {
+          setLoading(false);
+          isFirstLoad = false;
+        }
       }
     };
 
-    loadUsers();
-    const interval = setInterval(loadUsers, 30000);
+    load();
+    const interval = setInterval(load, 30000);
     return () => clearInterval(interval);
   }, [currentUser, selectedBranchId]);
 
   const filteredUsers = useMemo(() => {
-    let filtered = users;
-    if (branchFilter !== 'all') {
-      filtered = filtered.filter(user => user.branchId === branchFilter);
+    let list = users;
+
+    // Status filter
+    if (statusFilter !== 'all') {
+      list = list.filter((u) => {
+        const vs = String(u?.verificationStatus || u?.status || '').toLowerCase();
+        if (statusFilter === 'verified') return vs === 'verified' || vs === 'active';
+        return vs === statusFilter;
+      });
     }
 
-    // SINGLE SOURCE OF TRUTH:
-    // branches/{branchId}/users/{uid}.verificationStatus
-    filtered = filtered.filter((u) => String(u?.verificationStatus || '').toLowerCase() === 'pending');
-
-    const query = searchQuery.trim().toLowerCase();
-    if (query) {
-      filtered = filtered.filter(user =>
-        (user.fullName || '').toLowerCase().includes(query) ||
-        (user.email || '').toLowerCase().includes(query) ||
-        (user.registrationNumber || '').toLowerCase().includes(query) ||
-        (user.phone || '').toLowerCase().includes(query) ||
-        (user.phoneNumber || '').toLowerCase().includes(query)
+    // Search
+    const q = searchQuery.trim().toLowerCase();
+    if (q) {
+      list = list.filter(
+        (u) =>
+          (u.fullName         || '').toLowerCase().includes(q) ||
+          (u.email            || '').toLowerCase().includes(q) ||
+          (u.registrationNumber||'').toLowerCase().includes(q) ||
+          (u.phone            || '').toLowerCase().includes(q) ||
+          (u.phoneNumber      || '').toLowerCase().includes(q) ||
+          (u.address          || '').toLowerCase().includes(q) ||
+          (u.birthPlace       || '').toLowerCase().includes(q)
       );
     }
-    return filtered;
-  }, [users, searchQuery, branchFilter]);
 
-  const handleDecision = async (userId, approve, branchId) => {
+    return list;
+  }, [users, searchQuery, statusFilter]);
+
+  // Counts per status for the filter pills
+  const counts = useMemo(() => {
+    const c = { all: users.length, pending: 0, verified: 0, rejected: 0 };
+    users.forEach((u) => {
+      const vs = String(u?.verificationStatus || u?.status || '').toLowerCase();
+      if (vs === 'pending')              c.pending++;
+      else if (vs === 'verified' || vs === 'active') c.verified++;
+      else if (vs === 'rejected')        c.rejected++;
+    });
+    return c;
+  }, [users]);
+
+  const handleDecision = (userId, approve, branchId) => {
+    if (!approve) {
+      const targetUser = users.find((u) => u.id === userId);
+      setRejectDialog({
+        open: true,
+        userId,
+        branchId,
+        userName: targetUser?.fullName || targetUser?.name || 'هذا المستخدم',
+      });
+      return;
+    }
+    executeDecision(userId, true, branchId);
+  };
+
+  const executeDecision = async (userId, approve, branchId) => {
+    setProcessing((prev) => ({ ...prev, [`decision-${userId}`]: true }));
     try {
-      setProcessing(prev => ({ ...prev, [`decision-${userId}`]: true }));
-      if (!branchId) {
-        const user = users.find(u => u.id === userId);
-        branchId = user?.branchId;
-      }
-      if (!branchId) {
-        throw new Error('branchId is required to update verification status');
-      }
+      const resolved = branchId || users.find((u) => u.id === userId)?.branchId;
+      if (!resolved) throw new Error('branchId is required');
 
+      const targetUser = users.find((u) => u.id === userId);
       await updateUser(
         userId,
         approve
-          ? {
-              status: 'active',
-              verificationStatus: 'verified',
-              verificationRequest: null,
-              verified: true,
-              accountVerified: true,
-            }
-          : {
-              status: 'rejected',
-              verificationStatus: 'rejected',
-              verificationRequest: null,
-              verified: false,
-              accountVerified: false,
-              uploadedDocs: [],
-              photoUrl: null,
-              idCardUrl: null,
-            },
-        branchId
+          ? { status: 'active', verificationStatus: 'verified', verificationRequest: null, verified: true, accountVerified: true }
+          : { status: 'rejected', verificationStatus: 'rejected', verificationRequest: null, verified: false, accountVerified: false, uploadedDocs: [], photoUrl: null, idCardUrl: null },
+        resolved
       );
 
-      setUsers(prev => prev.filter(u => u.id !== userId));
-      if (selectedUser && selectedUser.id === userId) {
-        setSelectedUser(null);
-        setModalOpen(false);
+      // When a registration is rejected, immediately remove the applicant's
+      // uploaded identity media from Supabase Storage (spec §4).
+      // Best-effort: never throws, never blocks UI.
+      if (!approve && targetUser) {
+        await cleanupRejectedRegistration({
+          photoUrl:   targetUser.photoUrl,
+          idCardUrl:  targetUser.idCardUrl,
+          documents:  targetUser.uploadedDocs || [],
+        });
       }
 
-      alert(approve ? 'تم قبول الحساب بنجاح' : 'تم رفض الحساب');
+      apiCall('/api/notify/user-decision', {
+        method: 'POST',
+        body: JSON.stringify({
+          userId, branchId: resolved, approved: approve,
+          studentName:  targetUser?.fullName || targetUser?.name || '',
+          studentEmail: targetUser?.email || '',
+        }),
+      }).catch(() => {});
+
+      setUsers((prev) =>
+        prev.map((u) =>
+          u.id === userId
+            ? { ...u, verificationStatus: approve ? 'verified' : 'rejected', status: approve ? 'active' : 'rejected', verified: approve, accountVerified: approve }
+            : u
+        )
+      );
+      showToast(approve ? 'success' : 'info', approve ? 'تم قبول الحساب بنجاح' : 'تم رفض الحساب');
     } catch (err) {
-      console.error('Error toggling verification:', err);
-      alert('حدث خطأ أثناء معالجة الحساب: ' + err.message);
+      showToast('error', 'حدث خطأ: ' + err.message);
     } finally {
-      setProcessing(prev => ({ ...prev, [`decision-${userId}`]: false }));
+      setProcessing((prev) => ({ ...prev, [`decision-${userId}`]: false }));
     }
   };
 
-  // Helper function to extract URL from either string or object format
-  const getImageUrl = (urlValue) => {
-    if (!urlValue) return null;
-    if (typeof urlValue === 'string') {
-      return urlValue;
-    }
-    if (typeof urlValue === 'object' && urlValue.publicUrl) {
-      return urlValue.publicUrl;
-    }
-    return null;
+  const confirmRejectUser = () => {
+    const { userId, branchId } = rejectDialog;
+    setRejectDialog({ open: false, userId: null, branchId: null, userName: '' });
+    executeDecision(userId, false, branchId);
   };
 
-  const openImageModal = (url, title) => {
-    const imageUrl = getImageUrl(url);
-    if (imageUrl) {
-      setImageModal({ open: true, url: imageUrl, title });
-    }
-  };
-
-  const formatDate = (date) => {
-    if (!date) return 'غير محدد';
-    try {
-      if (date.toDate) {
-        return date.toDate().toLocaleDateString('ar-EG');
-      }
-      if (typeof date === 'string') {
-        return new Date(date).toLocaleDateString('ar-EG');
-      }
-      return date.toString();
-    } catch (err) {
-      return 'غير محدد';
-    }
-  };
-
-  const openDetailsModal = (user) => {
-    setSelectedUser(user);
-    setModalOpen(true);
-  };
-
-  const closeModal = () => {
-    setModalOpen(false);
-    setSelectedUser(null);
+  const openImage = (urlValue, title) => {
+    const url = getImageUrl(urlValue);
+    if (url) setImageModal({ open: true, url, title });
   };
 
   if (loading) {
-    return (
-      <div className="p-6 text-center" dir="rtl">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div>
-        <p className="mt-4 text-gray-600">جاري تحميل المستخدمين...</p>
-      </div>
-    );
+    return <LoadingState label="جاري تحميل المستخدمين..." />;
   }
 
   return (
     <div className="space-y-6" dir="rtl">
-      <Breadcrumb trail={["المستخدمون"]} />
-      
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+      {/* Reject confirmation dialog */}
+      <AdminConfirmDialog
+        open={rejectDialog.open}
+        title="تأكيد رفض الحساب"
+        message={`هل أنت متأكد من رفض حساب "${rejectDialog.userName}"؟ سيتم حذف وثائقه وإشعاره بالرفض.`}
+        confirmLabel="رفض الحساب"
+        danger={true}
+        onConfirm={confirmRejectUser}
+        onCancel={() => setRejectDialog({ open: false, userId: null, branchId: null, userName: '' })}
+      />
+
+      <Breadcrumb trail={['المستخدمون']} />
+
+      <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-3xl font-bold text-primary">إدارة المستخدمين</h1>
-          <p className="text-gray-600">عرض طلبات إنشاء الحسابات التي تم التحقق من بريدها الإلكتروني</p>
+          <h1 className="text-3xl font-bold text-primary">قائمة المستخدمين</h1>
+          <p className="text-gray-600 mt-1">جميع المستخدمين المسجلين في الفرع مع معلوماتهم الكاملة</p>
         </div>
+        <Button variant="primary" size="sm" onClick={() => setShowCreateModal(true)}>
+          <UserPlus className="h-4 w-4" />
+          إنشاء حساب طالب
+        </Button>
       </div>
 
-      {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-4">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="w-5 h-5" />
-            <div>
-              <p className="font-semibold">{error}</p>
-              {error.includes('صلاحية') && (
-                <p className="text-sm mt-2">
-                  تأكد من إضافة القواعد التالية في Firebase Console → Firestore Database → Rules:
-                </p>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {error && <Alert variant="danger">{error}</Alert>}
 
+      {/* Search */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="relative">
-            <Search className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
-            <input
-              type="text"
-              placeholder="ابحث بالاسم، البريد الإلكتروني، رقم التسجيل، أو رقم الهاتف..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pr-10 pl-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent text-right"
-            />
-          </div>
-          <div className="relative">
-            <Filter className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
-            <select
-              value={branchFilter}
-              onChange={(e) => setBranchFilter(e.target.value)}
-              className="w-full pr-10 pl-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent text-right appearance-none bg-white"
-            >
-              <option value="all">جميع الفروع</option>
-              <option value="boumerdes">بومرداس</option>
-              <option value="bordj_menaiel">برج منايل</option>
-            </select>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-600">عرض:</span>
-            <button
-              onClick={() => setViewMode('table')}
-              className={`px-4 py-2 rounded-lg transition-colors ${
-                viewMode === 'table' ? 'bg-primary text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-              }`}
-            >
-              جدول
-            </button>
-            <button
-              onClick={() => setViewMode('card')}
-              className={`px-4 py-2 rounded-lg transition-colors ${
-                viewMode === 'card' ? 'bg-primary text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-              }`}
-            >
-              بطاقات
-            </button>
-          </div>
-        </div>
+        <Input
+          type="text"
+          placeholder="ابحث بالاسم، البريد، رقم التسجيل، الهاتف، العنوان، أو مكان الازدياد..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          startIcon={<Search className="w-5 h-5" />}
+        />
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-          <div className="text-2xl font-bold text-gray-900">{filteredUsers.length}</div>
-          <div className="text-sm text-gray-600">
-            {branchFilter === 'all' ? 'إجمالي الطلبات' : `الطلبات (${branchFilter === 'boumerdes' ? 'بومرداس' : 'برج منايل'})`}
-          </div>
-        </div>
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-          <div className="text-2xl font-bold text-green-600">{filteredUsers.length}</div>
-          <div className="text-sm text-gray-600">طلبات بانتظار القرار</div>
-        </div>
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-          <div className="text-2xl font-bold text-yellow-600">{filteredUsers.length}</div>
-          <div className="text-sm text-gray-600">بانتظار المراجعة</div>
-        </div>
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-          <div className="text-2xl font-bold text-blue-600">{filteredUsers.filter(u => u.branchId).length}</div>
-          <div className="text-sm text-gray-600">مستخدمون في الفروع</div>
-        </div>
+      {/* Status filter pills */}
+      <div className="flex flex-wrap gap-2">
+        {STATUS_FILTERS.map((f) => (
+          <button
+            key={f.value}
+            onClick={() => setStatusFilter(f.value)}
+            className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
+              statusFilter === f.value
+                ? 'bg-primary text-white shadow-sm'
+                : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            {f.label}
+            <span className={`ms-1.5 text-xs px-1.5 py-0.5 rounded-full ${
+              statusFilter === f.value ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-600'
+            }`}>
+              {counts[f.value] ?? 0}
+            </span>
+          </button>
+        ))}
+      </div>
+
+      {/* Results count */}
+      <div className="flex items-center gap-2 text-sm text-gray-500">
+        <Users className="w-4 h-4" />
+        <span>عرض {filteredUsers.length} من أصل {users.length} مستخدم</span>
       </div>
 
       {filteredUsers.length === 0 ? (
-        <div className="bg-white rounded-lg shadow-md p-12 text-center">
-          <UserCheck className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-12 text-center">
+          <UserCheck className="w-16 h-16 text-gray-300 mx-auto mb-4" />
           <h3 className="text-xl font-semibold text-gray-900 mb-2">
-            {searchQuery ? 'لا توجد نتائج' : 'لا يوجد مستخدمون'}
+            {searchQuery || statusFilter !== 'all' ? 'لا توجد نتائج' : 'لا يوجد مستخدمون'}
           </h3>
-          <p className="text-gray-600">
-            {searchQuery ? 'جرب البحث بكلمات مختلفة' : 'لم يتم تسجيل أي مستخدمين حتى الآن'}
+          <p className="text-gray-500">
+            {searchQuery || statusFilter !== 'all'
+              ? 'جرب تغيير معايير البحث أو الفلتر'
+              : 'لم يتم تسجيل أي مستخدمين في هذا الفرع بعد'}
           </p>
         </div>
-      ) : viewMode === 'table' ? (
-        <div className="admin-table-container">
-          <div className="admin-table-scroll">
-            <table className="admin-table">
-              <thead>
-                <tr>
-                  <th>الاسم الكامل</th>
-                  <th>رقم التسجيل</th>
-                  <th>البريد الإلكتروني</th>
-                  <th>الفرع</th>
-                  <th>الصور</th>
-                  <th>الحالة</th>
-                  <th>الإجراءات</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredUsers.map((user) => (
-                  (console.log('[Admin UsersPage] Pending user row', {
-                    path: `branches/${selectedBranchId}/users/${user.id}`,
-                    verificationStatus: user?.verificationStatus,
-                    status: user?.status,
-                    doc: user,
-                  }),
-                  <tr key={user.id} className="hover:bg-gray-50 transition-colors">
-                    <td className="whitespace-nowrap">
-                      <div className="text-sm font-medium text-gray-900">{user.fullName || 'غير محدد'}</div>
-                    </td>
-                    <td className="whitespace-nowrap">
-                      <div className="text-sm text-gray-700">{user.registrationNumber || '—'}</div>
-                    </td>
-                    <td className="whitespace-nowrap">
-                      <div className="text-sm text-gray-600">{user.email || '—'}</div>
-                    </td>
-                    <td className="whitespace-nowrap">
-                      <div className="text-sm text-gray-700">
-                        {user.branchId === 'boumerdes' ? 'بومرداس' : user.branchId === 'bordj_menaiel' ? 'برج منايل' : user.branchName || user.branchId || '—'}
-                      </div>
-                    </td>
-                    <td className="whitespace-nowrap">
-                      <div className="flex items-center gap-2">
-                        {user.photoUrl && (
-                          <button onClick={() => openImageModal(user.photoUrl, 'الصورة الشخصية')} className="relative group" title="الصورة الشخصية">
-                            <img src={getImageUrl(user.photoUrl)} alt="الصورة الشخصية" className="w-12 h-12 object-cover rounded-lg border-2 border-gray-200 hover:border-primary transition-colors cursor-pointer" onError={(e) => { e.target.style.display = 'none'; }} />
-                            <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-20 rounded-lg transition-opacity flex items-center justify-center">
-                              <Eye className="w-4 h-4 text-white opacity-0 group-hover:opacity-100" />
-                            </div>
-                          </button>
-                        )}
-                        {user.idCardUrl && (
-                          <button onClick={() => openImageModal(user.idCardUrl, 'صورة بطاقة الهوية')} className="relative group" title="صورة بطاقة الهوية">
-                            <img src={getImageUrl(user.idCardUrl)} alt="صورة بطاقة الهوية" className="w-12 h-12 object-cover rounded-lg border-2 border-gray-200 hover:border-primary transition-colors cursor-pointer" onError={(e) => { e.target.style.display = 'none'; }} />
-                            <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-20 rounded-lg transition-opacity flex items-center justify-center">
-                              <Eye className="w-4 h-4 text-white opacity-0 group-hover:opacity-100" />
-                            </div>
-                          </button>
-                        )}
-                        {!user.photoUrl && !user.idCardUrl && <span className="text-gray-400 text-xs whitespace-normal">لا توجد صور</span>}
-                      </div>
-                    </td>
-                    <td className="whitespace-nowrap">
-                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-yellow-100 text-yellow-800 text-xs font-medium">
-                        <Clock className="w-3 h-3" />قيد المراجعة
-                      </span>
-                    </td>
-                    <td className="admin-table-actions">
-                      <button
-                        onClick={() => openDetailsModal(user)}
-                        className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-700 transition-colors text-sm font-medium"
-                      >
-                        <Eye className="w-4 h-4" />
-                        عرض التفاصيل
-                      </button>
-                    </td>
-                  </tr>
-                  )
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
           {filteredUsers.map((user) => (
-            (console.log('[Admin UsersPage] Pending user card', {
-              path: `branches/${selectedBranchId}/users/${user.id}`,
-              verificationStatus: user?.verificationStatus,
-              status: user?.status,
-              doc: user,
-            }),
-            <div key={user.id} className="bg-white rounded-lg shadow-md overflow-hidden hover:shadow-lg transition-shadow">
-              <div className="p-6">
-                <div className="flex items-start gap-4 mb-4">
-                  {user.photoUrl ? (
-                    <button onClick={() => openImageModal(user.photoUrl, 'الصورة الشخصية')} className="relative group flex-shrink-0">
-                      <img src={getImageUrl(user.photoUrl)} alt="الصورة الشخصية" className="w-20 h-20 object-cover rounded-full border-2 border-gray-200 hover:border-primary transition-colors cursor-pointer" onError={(e) => { e.target.style.display = 'none'; }} />
-                      <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-20 rounded-full transition-opacity flex items-center justify-center">
-                        <Eye className="w-5 h-5 text-white opacity-0 group-hover:opacity-100" />
-                      </div>
-                    </button>
-                  ) : (
-                    <div className="w-20 h-20 rounded-full bg-gray-200 flex items-center justify-center">
-                      <UserCheck className="w-10 h-10 text-gray-400" />
-                    </div>
-                  )}
-                  <div className="flex-1">
-                    <h3 className="text-xl font-bold text-gray-900 mb-1">{user.fullName || 'غير محدد'}</h3>
-                    <p className="text-sm text-gray-600">{user.email || '—'}</p>
-                    <p className="text-sm text-gray-500">{user.registrationNumber || '—'}</p>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between mb-4">
-                  <span className="text-sm text-gray-600">حالة التحقق:</span>
-                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-yellow-100 text-yellow-800 text-xs font-medium">
-                    <Clock className="w-3 h-3" />قيد المراجعة
-                  </span>
-                </div>
-                {user.idCardUrl && (
-                  <div className="mb-4">
-                    <label className="block text-sm font-medium text-gray-700 mb-2">بطاقة الهوية:</label>
-                    <button onClick={() => openImageModal(user.idCardUrl, 'صورة بطاقة الهوية')} className="relative group w-full">
-                      <img src={getImageUrl(user.idCardUrl)} alt="صورة بطاقة الهوية" className="w-full h-32 object-cover rounded-lg border-2 border-gray-200 hover:border-primary transition-colors cursor-pointer" onError={(e) => { e.target.style.display = 'none'; }} />
-                      <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-30 rounded-lg transition-opacity flex items-center justify-center">
-                        <ImageIcon className="w-8 h-8 text-white opacity-0 group-hover:opacity-100" />
-                      </div>
-                    </button>
-                  </div>
-                )}
-                <button onClick={() => openDetailsModal(user)} className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-700 transition-colors text-sm font-medium">
-                  <Eye className="w-4 h-4" />عرض التفاصيل الكاملة
-                </button>
-              </div>
-            </div>
-            )
+            <UserCard
+              key={user.id}
+              user={user}
+              onDecision={handleDecision}
+              processing={processing}
+              onViewImage={openImage}
+            />
           ))}
-        </div>
-      )}
-
-      {modalOpen && selectedUser && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50" onClick={closeModal}>
-          <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()} dir="rtl">
-            <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between z-10">
-              <h2 className="text-2xl font-bold text-gray-900">تفاصيل المستخدم</h2>
-              <button onClick={closeModal} className="text-gray-400 hover:text-gray-600 transition-colors">
-                <CloseIcon className="w-6 h-6" />
-              </button>
-            </div>
-            <div className="p-6 space-y-6">
-              <div className="p-4 bg-gray-50 rounded-lg">
-                <h3 className="font-semibold text-gray-900 mb-2 flex items-center gap-2">
-                  <UserCheck className="w-5 h-5" />حالة التحقق
-                </h3>
-                <span className="inline-flex items-center gap-1 text-yellow-700 mb-3">
-                  <Clock className="w-5 h-5" /><span className="font-medium">⏳ قيد المراجعة</span>
-                </span>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <button
-                    onClick={() => handleDecision(selectedUser.id, true, selectedUser.branchId)}
-                    disabled={processing[`decision-${selectedUser.id}`]}
-                    className="w-full px-4 py-2 text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium bg-green-600 hover:bg-green-700"
-                  >
-                    {processing[`decision-${selectedUser.id}`] ? 'جاري المعالجة...' : 'قبول الحساب'}
-                  </button>
-                  <button
-                    onClick={() => handleDecision(selectedUser.id, false, selectedUser.branchId)}
-                    disabled={processing[`decision-${selectedUser.id}`]}
-                    className="w-full px-4 py-2 text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium bg-red-600 hover:bg-red-700"
-                  >
-                    {processing[`decision-${selectedUser.id}`] ? 'جاري المعالجة...' : 'رفض الحساب'}
-                  </button>
-                </div>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {selectedUser.photoUrl && (
-                  <div>
-                    <h3 className="font-semibold text-gray-900 mb-2">الصورة الشخصية</h3>
-                    <button onClick={() => openImageModal(selectedUser.photoUrl, 'الصورة الشخصية')} className="relative group w-full">
-                      <img src={getImageUrl(selectedUser.photoUrl)} alt="الصورة الشخصية" className="w-full h-64 object-cover rounded-lg border-2 border-gray-200 hover:border-primary transition-colors cursor-pointer" onError={(e) => { e.target.style.display = 'none'; }} />
-                      <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-30 rounded-lg transition-opacity flex items-center justify-center">
-                        <Eye className="w-8 h-8 text-white opacity-0 group-hover:opacity-100" />
-                      </div>
-                    </button>
-                  </div>
-                )}
-                {selectedUser.idCardUrl && (
-                  <div>
-                    <h3 className="font-semibold text-gray-900 mb-2">صورة بطاقة الهوية</h3>
-                    <button onClick={() => openImageModal(selectedUser.idCardUrl, 'صورة بطاقة الهوية')} className="relative group w-full">
-                      <img src={getImageUrl(selectedUser.idCardUrl)} alt="صورة بطاقة الهوية" className="w-full h-64 object-cover rounded-lg border-2 border-gray-200 hover:border-primary transition-colors cursor-pointer" onError={(e) => { e.target.style.display = 'none'; }} />
-                      <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-30 rounded-lg transition-opacity flex items-center justify-center">
-                        <Eye className="w-8 h-8 text-white opacity-0 group-hover:opacity-100" />
-                      </div>
-                    </button>
-                  </div>
-                )}
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">الاسم الكامل</label>
-                  <div className="p-3 bg-gray-50 rounded-lg text-gray-900">{selectedUser.fullName || '—'}</div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">رقم التسجيل</label>
-                  <div className="p-3 bg-gray-50 rounded-lg text-gray-900">{selectedUser.registrationNumber || '—'}</div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">تاريخ الازدياد</label>
-                  <div className="p-3 bg-gray-50 rounded-lg text-gray-900">{formatDate(selectedUser.birthDate) || '—'}</div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">مكان الازدياد</label>
-                  <div className="p-3 bg-gray-50 rounded-lg text-gray-900">{selectedUser.birthPlace || '—'}</div>
-                </div>
-                <div className="md:col-span-2">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">العنوان</label>
-                  <div className="p-3 bg-gray-50 rounded-lg text-gray-900">{selectedUser.address || '—'}</div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">رقم الهاتف</label>
-                  <div className="p-3 bg-gray-50 rounded-lg text-gray-900">{selectedUser.phone || selectedUser.phoneNumber || '—'}</div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">البريد الإلكتروني</label>
-                  <div className="p-3 bg-gray-50 rounded-lg text-gray-900">{selectedUser.email || '—'}</div>
-                </div>
-              </div>
-            </div>
-            <div className="sticky bottom-0 bg-gray-50 border-t px-6 py-4 flex justify-end">
-              <button onClick={closeModal} className="px-6 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 transition-colors font-medium">
-                إغلاق
-              </button>
-            </div>
-          </div>
         </div>
       )}
 
       {imageModal.open && imageModal.url && (
         <FileViewerModal
           url={imageModal.url}
-          onClose={() => setImageModal({ open: false, url: null, title: '' })}
+          onClose={() => setImageModal({ open: false, url: null })}
+        />
+      )}
+
+      {showCreateModal && (
+        <AdminCreateStudentModal
+          branchId={selectedBranchId}
+          onClose={() => setShowCreateModal(false)}
+          onSuccess={() => {
+            setShowCreateModal(false);
+            // Reload user list after creation
+            if (currentUser && selectedBranchId) {
+              setLoading(true);
+              getUsersByBranch(selectedBranchId)
+                .then((data) => setUsers(data))
+                .catch(() => {})
+                .finally(() => setLoading(false));
+            }
+          }}
         />
       )}
     </div>

@@ -1,397 +1,447 @@
-import React, { useEffect, useState } from 'react';
-import { collection, onSnapshot, query, orderBy, doc, getDoc } from 'firebase/firestore';
+// AnnualFees — FINANCIAL ARCHIVE of verified (paid) annual fees.
+//
+// This page answers "which students have paid their annual fees (after
+// verification)?" — a financial tracking / archive view, NOT a verification
+// queue. Verifying & rejecting annual-fee payments is handled entirely on the
+// Payments Verification page. This page therefore shows ONLY records whose
+// status === 'verified' and exposes view / print (no approve/reject, no delete —
+// financial records are never destroyed from here).
+//
+// Branch isolation: reads branches/{selectedBranchId}/annualPayments only;
+// getUsersByIds is branch-scoped. Early-return when no branch is selected.
+
+import React, { useEffect, useMemo, useState } from 'react';
+import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
 import { db } from '../../firebase';
+import {
+  Wallet, Users, CalendarPlus, TrendingUp, Download,
+  Eye, Printer, CreditCard, User, BookOpen, BadgeCheck,
+} from 'lucide-react';
 import { useBranch } from '../../contexts/BranchContext';
-import { useAuth } from '../../contexts/AuthContext';
-import { getAnnualPayments, verifyAnnualPayment, rejectAnnualPayment } from '../../services/firestoreService';
-import { CheckCircle, XCircle, Calendar, Eye, CreditCard, User, BookOpen } from 'lucide-react';
+import { getUsersByIds } from '../../services/firestoreService';
+import { exportToCsv, generateFilename } from '../../utils/csvExport';
+import { printRecord } from '../../utils/printRecord';
+import AdminModal from '../components/AdminModal';
+import FileViewerModal from '../components/FileViewerModal';
+import { useToast } from '../components/ToastNotifications';
+import {
+  StatCard, PageHeader, SearchInput, EmptyState, ArchiveSkeleton, SELECT_CLASS,
+  DATE_RANGES, inDateRange, isThisMonth, fmtDate, fmtDateTime, formatMoney,
+} from '../components/archive/ArchiveKit';
 
-const AnnualFees = () => {
-  const { selectedBranchId } = useBranch();
-  const { user } = useAuth();
-  const [annualFees, setAnnualFees] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [selectedFee, setSelectedFee] = useState(null);
-  const [showModal, setShowModal] = useState(false);
-  const [userData, setUserData] = useState(null);
+const amountOf = (f) => Number(f.amount ?? f.totalAmount ?? 0) || 0;
 
-  useEffect(() => {
-    if (!selectedBranchId) {
-      setAnnualFees([]);
-      setLoading(false);
-      return;
-    }
+const PaidBadge = () => (
+  <span className="inline-flex items-center gap-1 rounded-full border border-success-200 bg-success-50 px-2.5 py-0.5 text-xs font-semibold text-success-700">
+    <BadgeCheck className="h-3.5 w-3.5" /> مدفوع
+  </span>
+);
 
-    setLoading(true);
-    // Read from annualPayments collection (new structure)
-    const q = query(collection(db, 'branches', selectedBranchId, 'annualPayments'), orderBy('createdAt', 'desc'));
-    const unsubscribe = onSnapshot(q, (snap) => {
-      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      setAnnualFees(list);
-      setLoading(false);
-    }, (error) => {
-      console.error('Error loading annual payments:', error);
-      setLoading(false);
-    });
-
-    return () => unsubscribe();
-  }, [selectedBranchId]);
-
-  const formatDate = (ts) => {
-    const d = ts?.toDate ? ts.toDate() : (ts ? new Date(ts) : null);
-    return d ? d.toLocaleDateString('ar-DZ') : 'غير محدد';
-  };
-
-  const fetchUserData = async (userId) => {
-    if (!userId) return null;
-    if (!selectedBranchId) return null;
-    
-    try {
-      const userDocRef = doc(db, 'branches', selectedBranchId, 'users', userId);
-      const userDoc = await getDoc(userDocRef);
-      
-      if (userDoc.exists()) {
-        return userDoc.data();
-      }
-    } catch (error) {
-      console.error('Error fetching user data:', error);
-    }
-    
-    return null;
-  };
-
-  const handleOpenModal = async (fee) => {
-    setSelectedFee(fee);
-    setUserData(null); // Reset user data
-    
-    // Fetch user data when opening modal
-    if (fee.userId) {
-      const data = await fetchUserData(fee.userId);
-      setUserData(data);
-    }
-    
-    setShowModal(true);
-  };
-
-  const approveFee = async (fee) => {
-    if (!user) {
-      alert('يجب تسجيل الدخول كمسؤول');
-      return;
-    }
-
-    try {
-      const adminInfo = {
-        uid: user.uid,
-        email: user.email || ''
-      };
-
-      await verifyAnnualPayment(selectedBranchId, fee.id, adminInfo);
-
-      alert('تم التحقق من الرسوم السنوية بنجاح. تم تفعيل حساب المستخدم.');
-      setShowModal(false);
-    } catch (e) {
-      console.error('Error approving fee:', e);
-      alert('تعذر التحقق من الرسوم السنوية: ' + e.message);
-    }
-  };
-
-  const rejectFee = async (fee) => {
-    try {
-      const notes = prompt('أدخل سبب الرفض (اختياري):');
-      await rejectAnnualPayment(selectedBranchId, fee.id, notes || null);
-
-      alert('تم رفض الرسوم السنوية');
-      setShowModal(false);
-    } catch (e) {
-      console.error('Error rejecting fee:', e);
-      alert('تعذر رفض الرسوم السنوية: ' + e.message);
-    }
-  };
-
-  if (!selectedBranchId) {
-    return <div className="text-center py-12 text-gray-600">يرجى اختيار فرع.</div>;
-  }
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-4xl font-bold text-primary mb-2">الرسوم السنوية</h1>
-          <p className="text-xl text-gray-600">إدارة طلبات الرسوم السنوية</p>
-        </div>
-        <div className="grid grid-cols-3 gap-4 text-center">
-          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-            <div className="text-2xl font-bold text-yellow-600">
-              {annualFees.filter(f => f.status === 'pending').length}
-            </div>
-            <div className="text-sm text-yellow-700">قيد المراجعة</div>
-          </div>
-          <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-            <div className="text-2xl font-bold text-green-600">
-              {annualFees.filter(f => f.status === 'verified').length}
-            </div>
-            <div className="text-sm text-green-700">تم التحقق</div>
-          </div>
-          <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-            <div className="text-2xl font-bold text-red-600">
-              {annualFees.filter(f => f.status === 'rejected').length}
-            </div>
-            <div className="text-sm text-red-700">مرفوضة</div>
-          </div>
+// ── Detail modal ─────────────────────────────────────────────────────────────────
+const DetailModal = ({ fee, onClose, onPrint, onViewImage }) => (
+  <AdminModal
+    open
+    onClose={onClose}
+    size="lg"
+    icon={CreditCard}
+    title="تفاصيل الرسوم السنوية"
+    badge={<PaidBadge />}
+    footer={(
+      <button
+        onClick={() => onPrint(fee)}
+        className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-primary/90"
+      >
+        <Printer className="h-4 w-4" /> طباعة الإيصال
+      </button>
+    )}
+  >
+    <div className="space-y-5">
+      {/* Student */}
+      <div className="rounded-xl bg-gray-50 p-4">
+        <h3 className="mb-3 flex items-center gap-2 font-semibold text-gray-800">
+          <User className="h-4 w-4 text-primary" /> معلومات الطالب
+        </h3>
+        <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+          <div><span className="text-xs text-gray-500">اسم الطالب</span><p className="font-medium text-gray-900">{fee._name || '—'}</p></div>
+          <div><span className="text-xs text-gray-500">هاتف الولي</span><p className="font-medium text-gray-900">{fee.guardianPhone || '—'}</p></div>
+          <div><span className="text-xs text-gray-500">هاتف الطالب</span><p className="font-medium text-gray-900">{fee.studentPhone || '—'}</p></div>
+          {fee._email && <div><span className="text-xs text-gray-500">البريد الإلكتروني</span><p className="font-medium text-gray-900">{fee._email}</p></div>}
         </div>
       </div>
 
-      <div className="admin-table-container rounded-xl">
-        <div className="admin-table-scroll p-6">
-          {annualFees.length === 0 ? (
-            <div className="text-center py-12 text-gray-500">لا توجد طلبات رسوم سنوية</div>
-          ) : (
-            <table className="admin-table">
-              <thead>
-                <tr>
-                  <th>المستوى</th>
-                  <th>المدرسة</th>
-                  <th>المواد</th>
-                  <th>المبلغ</th>
-                  <th>طريقة الدفع</th>
-                  <th>الحالة</th>
-                  <th>التاريخ</th>
-                  <th>إجراءات</th>
-                </tr>
-              </thead>
-              <tbody>
-                {annualFees.map((fee) => (
-                  <tr key={fee.id} className="border-b border-gray-100 hover:bg-gray-50">
-                    <td>
-                      <div className="font-semibold text-gray-800">{fee.level || '—'}</div>
-                      {fee.year && <div className="text-sm text-gray-600">السنة: {fee.year}</div>}
-                      {fee.stream && <div className="text-sm text-gray-600">الشعبة: {fee.stream}</div>}
-                    </td>
-                    <td className="text-sm">{fee.school || '—'}</td>
-                    <td>
-                      <div className="flex flex-wrap gap-1">
-                        {fee.subjects?.slice(0, 2).map((subject, i) => (
-                          <span key={i} className="px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded-full">
-                            {subject}
-                          </span>
-                        ))}
-                        {fee.subjects?.length > 2 && (
-                          <span className="px-2 py-1 text-xs bg-gray-100 text-gray-600 rounded-full">
-                            +{fee.subjects.length - 2}
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td>
-                      <span className="font-semibold text-green-600">{fee.totalAmount || fee.amount || 0} دج</span>
-                    </td>
-                    <td className="text-sm">{fee.paymentMethod || '—'}</td>
-                    <td>
-                      {fee.status === 'verified' ? (
-                        <span className="px-2 py-1 text-xs bg-green-100 text-green-800 rounded-full">تم التحقق</span>
-                      ) : fee.status === 'rejected' ? (
-                        <span className="px-2 py-1 text-xs bg-red-100 text-red-800 rounded-full">مرفوض</span>
-                      ) : (
-                        <span className="px-2 py-1 text-xs bg-yellow-100 text-yellow-800 rounded-full">قيد المراجعة</span>
-                      )}
-                    </td>
-                    <td className="text-sm text-gray-600 flex items-center gap-1 whitespace-nowrap">
-                      <Calendar className="w-4 h-4" />
-                      {formatDate(fee.createdAt)}
-                    </td>
-                    <td className="admin-table-actions">
-                      <div className="flex flex-wrap gap-2">
-                        <button 
-                          onClick={() => handleOpenModal(fee)} 
-                          className="btn btn-outline-primary btn-sm"
-                        >
-                          <Eye className="w-4 h-4 ml-1" /> عرض
-                        </button>
-                        {fee.status === 'pending' && (
-                          <>
-                            <button onClick={() => approveFee(fee)} className="btn btn-success btn-sm">
-                              <CheckCircle className="w-4 h-4 ml-1" /> تحقق
-                            </button>
-                            <button onClick={() => rejectFee(fee)} className="btn btn-danger btn-sm">
-                              <XCircle className="w-4 h-4 ml-1" /> رفض
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
+      {/* Education */}
+      <div className="rounded-xl bg-gray-50 p-4">
+        <h3 className="mb-3 flex items-center gap-2 font-semibold text-gray-800">
+          <BookOpen className="h-4 w-4 text-primary" /> معلومات الدراسة
+        </h3>
+        <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+          <div><span className="text-xs text-gray-500">المستوى</span><p className="font-medium text-gray-900">{fee.level || '—'}</p></div>
+          <div><span className="text-xs text-gray-500">السنة الدراسية</span><p className="font-medium text-gray-900">{fee.year || '—'}</p></div>
+          {fee.stream && <div><span className="text-xs text-gray-500">الشعبة</span><p className="font-medium text-gray-900">{fee.stream}</p></div>}
+          <div className="sm:col-span-2"><span className="text-xs text-gray-500">المؤسسة التعليمية</span><p className="font-medium text-gray-900">{fee.school || '—'}</p></div>
+          {fee.subjects.length > 0 && (
+            <div className="sm:col-span-2">
+              <span className="text-xs text-gray-500">المواد المختارة</span>
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {fee.subjects.map((s, i) => (
+                  <span key={i} className="rounded-full bg-secondary-100 px-2.5 py-1 text-xs font-medium text-secondary-800">{s}</span>
                 ))}
-              </tbody>
-            </table>
+              </div>
+            </div>
           )}
         </div>
       </div>
 
-      {/* Modal for viewing fee details */}
-      {showModal && selectedFee && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="p-6 border-b border-gray-200 flex items-center justify-between">
-              <h2 className="text-2xl font-bold text-primary">تفاصيل الرسوم السنوية</h2>
-              <button onClick={() => setShowModal(false)} className="text-2xl leading-none">×</button>
-            </div>
-            
-            <div className="p-6 space-y-6">
-              {/* Student Info */}
-              <div className="bg-gray-50 rounded-lg p-4">
-                <h3 className="font-semibold text-lg mb-3 flex items-center gap-2">
-                  <User className="w-5 h-5" />
-                  معلومات الطالب
-                </h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <span className="text-sm text-gray-600">اسم الطالب:</span>
-                    <div className="font-medium">
-                      {userData?.displayName || userData?.username || selectedFee.userName || selectedFee.studentName || '—'}
-                    </div>
-                  </div>
-                  <div>
-                    <span className="text-sm text-gray-600">رقم هاتف الولي:</span>
-                    <div className="font-medium">{selectedFee.userPhone || selectedFee.guardianPhone || '—'}</div>
-                  </div>
-                  <div>
-                    <span className="text-sm text-gray-600">رقم هاتف التلميذ:</span>
-                    <div className="font-medium">{selectedFee.studentPhone || '—'}</div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Education Info */}
-              <div className="bg-gray-50 rounded-lg p-4">
-                <h3 className="font-semibold text-lg mb-3 flex items-center gap-2">
-                  <BookOpen className="w-5 h-5" />
-                  معلومات الدراسة
-                </h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <span className="text-sm text-gray-600">المستوى:</span>
-                    <div className="font-medium">{selectedFee.level || '—'}</div>
-                  </div>
-                  <div>
-                    <span className="text-sm text-gray-600">السنة الدراسية:</span>
-                    <div className="font-medium">{selectedFee.year || '—'}</div>
-                  </div>
-                  {selectedFee.stream && (
-                    <div>
-                      <span className="text-sm text-gray-600">الشعبة:</span>
-                      <div className="font-medium">{selectedFee.stream}</div>
-                    </div>
-                  )}
-                  <div className="col-span-2">
-                    <span className="text-sm text-gray-600">المؤسسة التعليمية:</span>
-                    <div className="font-medium">{selectedFee.school || '—'}</div>
-                  </div>
-                  <div className="col-span-2">
-                    <span className="text-sm text-gray-600">المواد المختارة:</span>
-                    <div className="flex flex-wrap gap-2 mt-2">
-                      {selectedFee.subjects?.map((subject, i) => (
-                        <span key={i} className="px-3 py-1 text-sm bg-blue-100 text-blue-800 rounded-full">
-                          {subject}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Payment Info */}
-              <div className="bg-gray-50 rounded-lg p-4">
-                <h3 className="font-semibold text-lg mb-3 flex items-center gap-2">
-                  <CreditCard className="w-5 h-5" />
-                  معلومات الدفع
-                </h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <span className="text-sm text-gray-600">الرسوم السنوية الأساسية:</span>
-                    <div className="font-medium text-gray-800">{selectedFee.annualFee || selectedFee.baseAnnualFee || 1000} دج</div>
-                  </div>
-                  <div>
-                    <span className="text-sm text-gray-600">المبلغ الإجمالي:</span>
-                    <div className="font-medium text-green-600">{selectedFee.amount || selectedFee.totalAmount || 0} دج</div>
-                  </div>
-                  {selectedFee.subjectPrices && Object.keys(selectedFee.subjectPrices).length > 0 && (
-                    <div className="col-span-2">
-                      <span className="text-sm text-gray-600">أسعار المواد:</span>
-                      <div className="mt-2 space-y-1">
-                        {Object.entries(selectedFee.subjectPrices).map(([subject, price]) => (
-                          <div key={subject} className="text-sm text-gray-700">
-                            {subject}: {price} دج/شهر
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  <div>
-                    <span className="text-sm text-gray-600">طريقة الدفع:</span>
-                    <div className="font-medium">{selectedFee.paymentMethod || '—'}</div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Receipt Image */}
-              {(selectedFee.receiptUrl || selectedFee.screenshotUrl) && (
-                <div>
-                  <h3 className="font-semibold text-lg mb-3">إيصال الدفع</h3>
-                  <div className="border rounded-lg p-4 bg-gray-50">
-                    <img 
-                      src={selectedFee.receiptUrl || selectedFee.screenshotUrl} 
-                      alt="Receipt" 
-                      className="max-w-full h-auto rounded-lg cursor-pointer hover:shadow-lg transition-shadow"
-                      onClick={() => window.open(selectedFee.receiptUrl || selectedFee.screenshotUrl, '_blank')}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* Actions */}
-              {selectedFee.status === 'pending' && (
-                <div className="flex justify-end space-x-4 space-x-reverse pt-4 border-t border-gray-200">
-                  <button onClick={() => rejectFee(selectedFee)} className="btn btn-danger">
-                    <XCircle className="w-4 h-4 ml-2" />
-                    رفض
-                  </button>
-                  <button onClick={() => approveFee(selectedFee)} className="btn btn-success">
-                    <CheckCircle className="w-4 h-4 ml-2" />
-                    تحقق
-                  </button>
-                </div>
-              )}
-              {selectedFee.status === 'verified' && (
-                <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                  <div className="flex items-center gap-2 text-green-800">
-                    <CheckCircle className="w-5 h-5" />
-                    <span className="font-medium">تم التحقق من هذا الطلب</span>
-                  </div>
-                  <p className="text-sm text-green-700 mt-2">
-                    تم تفعيل حساب المستخدم ويمكنه الآن التسجيل في دروس الدعم.
-                  </p>
-                </div>
-              )}
+      {/* Payment */}
+      <div className="rounded-xl bg-gray-50 p-4">
+        <h3 className="mb-3 flex items-center gap-2 font-semibold text-gray-800">
+          <CreditCard className="h-4 w-4 text-primary" /> معلومات الدفع
+        </h3>
+        <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+          {fee.baseFee != null && <div><span className="text-xs text-gray-500">الرسوم الأساسية</span><p className="font-medium text-gray-900">{formatMoney(fee.baseFee)}</p></div>}
+          <div><span className="text-xs text-gray-500">المبلغ الإجمالي</span><p className="text-base font-semibold text-success-600">{formatMoney(amountOf(fee)) || '0 دج'}</p></div>
+          <div><span className="text-xs text-gray-500">طريقة الدفع</span><p className="font-medium text-gray-900">{fee.paymentMethod || '—'}</p></div>
+          <div><span className="text-xs text-gray-500">تاريخ الدفع</span><p className="font-medium text-gray-900">{fmtDateTime(fee.createdAt)}</p></div>
+        </div>
+        {fee.subjectPrices && Object.keys(fee.subjectPrices).length > 0 && (
+          <div className="mt-3">
+            <span className="text-xs text-gray-500">أسعار المواد</span>
+            <div className="mt-1 space-y-0.5">
+              {Object.entries(fee.subjectPrices).map(([s, p]) => (
+                <div key={s} className="text-xs text-gray-700">{s}: {p} دج/شهر</div>
+              ))}
             </div>
           </div>
+        )}
+      </div>
+
+      {/* Receipt */}
+      {fee.receiptUrl && (
+        <div>
+          <h3 className="mb-2 text-sm font-semibold text-gray-800">إيصال الدفع</h3>
+          <button
+            type="button"
+            onClick={() => onViewImage(fee.receiptUrl)}
+            className="group relative block w-full overflow-hidden rounded-xl border border-gray-200"
+          >
+            <img src={fee.receiptUrl} alt="إيصال الدفع" className="max-h-72 w-full object-contain transition-opacity group-hover:opacity-90" />
+            <span className="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/20">
+              <Eye className="h-8 w-8 text-white opacity-0 drop-shadow-lg transition-opacity group-hover:opacity-100" />
+            </span>
+          </button>
         </div>
+      )}
+
+      <div className="flex items-center gap-3 rounded-xl border border-success-200 bg-success-50 p-4">
+        <BadgeCheck className="h-5 w-5 flex-shrink-0 text-success-600" />
+        <div>
+          <p className="text-sm font-semibold text-success-800">تم تأكيد دفع الرسوم السنوية</p>
+          <p className="mt-0.5 text-xs text-success-700">الطالب مفعّل ويمكنه التسجيل في الخدمات.</p>
+        </div>
+      </div>
+    </div>
+  </AdminModal>
+);
+
+// ── Main component ────────────────────────────────────────────────────────────────
+const AnnualFees = () => {
+  const { selectedBranchId } = useBranch();
+  const { show: showToast } = useToast();
+
+  const [raw, setRaw] = useState([]);
+  const [profiles, setProfiles] = useState(new Map());
+  const [loading, setLoading] = useState(true);
+
+  const [search, setSearch] = useState('');
+  const [levelFilter, setLevelFilter] = useState('all');
+  const [dateFilter, setDateFilter] = useState('all');
+
+  const [selectedFee, setSelectedFee] = useState(null);
+  const [lightbox, setLightbox] = useState(null);
+
+  // Real-time stream of annual payments (branch-scoped); keep only VERIFIED.
+  useEffect(() => {
+    if (!selectedBranchId) {
+      setRaw([]);
+      setLoading(false);
+      return undefined;
+    }
+    setLoading(true);
+    const q = query(
+      collection(db, 'branches', selectedBranchId, 'annualPayments'),
+      orderBy('createdAt', 'desc')
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const verified = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .filter((f) => String(f.status || '').toLowerCase() === 'verified');
+      setRaw(verified);
+      setLoading(false);
+    }, (err) => {
+      console.error('Error loading annual payments:', err);
+      setLoading(false);
+    });
+    return () => unsub();
+  }, [selectedBranchId]);
+
+  // Resolve student names for records lacking a denormalized name.
+  useEffect(() => {
+    let mounted = true;
+    if (!selectedBranchId || raw.length === 0) { setProfiles(new Map()); return undefined; }
+    const ids = [...new Set(raw.map((f) => f.userId).filter(Boolean))];
+    if (ids.length === 0) return undefined;
+    getUsersByIds(selectedBranchId, ids)
+      .then((map) => { if (mounted) setProfiles(new Map(map)); })
+      .catch(() => { if (mounted) setProfiles(new Map()); });
+    return () => { mounted = false; };
+  }, [raw, selectedBranchId]);
+
+  // Normalize + merge profile data.
+  const fees = useMemo(() => raw.map((f) => {
+    const p = f.userId ? profiles.get(f.userId) : null;
+    return {
+      id:            f.id,
+      userId:        f.userId || '',
+      _name:         f.userName || f.studentName || p?.fullName || p?.name || 'طالب غير مسمى',
+      _email:        f.userEmail || f.studentEmail || p?.email || '',
+      studentPhone:  f.studentPhone || '',
+      guardianPhone: f.userPhone || f.guardianPhone || p?.phoneNumber || p?.phone || '',
+      level:         f.level || '',
+      year:          f.year || '',
+      stream:        f.stream || '',
+      school:        f.school || '',
+      subjects:      Array.isArray(f.subjects) ? f.subjects : [],
+      subjectPrices: f.subjectPrices || null,
+      amount:        f.amount,
+      totalAmount:   f.totalAmount,
+      baseFee:       f.annualFee ?? f.baseAnnualFee ?? null,
+      paymentMethod: f.paymentMethod || '',
+      receiptUrl:    f.receiptUrl || f.screenshotUrl || '',
+      createdAt:     f.createdAt || null,
+    };
+  }), [raw, profiles]);
+
+  // ── Stats (accurate — verified only) ────────────────────────────────────────
+  const stats = useMemo(() => {
+    const collected = fees.reduce((sum, f) => sum + amountOf(f), 0);
+    const count = fees.length;
+    return {
+      collected,
+      paid: count,
+      thisMonth: fees.filter((f) => isThisMonth(f.createdAt)).length,
+      avg: count ? Math.round(collected / count) : 0,
+    };
+  }, [fees]);
+
+  const levelOptions = useMemo(
+    () => [...new Set(fees.map((f) => f.level).filter(Boolean))].sort(),
+    [fees]
+  );
+
+  const rows = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return fees.filter((f) => {
+      if (levelFilter !== 'all' && f.level !== levelFilter) return false;
+      if (!inDateRange(f.createdAt, dateFilter)) return false;
+      if (term) {
+        const hay = `${f._name} ${f.guardianPhone} ${f.studentPhone} ${f._email} ${f.school}`.toLowerCase();
+        if (!hay.includes(term)) return false;
+      }
+      return true;
+    });
+  }, [fees, search, levelFilter, dateFilter]);
+
+  // ── Actions ───────────────────────────────────────────────────────────────
+  const handlePrint = (fee) => {
+    const ok = printRecord({
+      title: 'إيصال دفع — الرسوم السنوية',
+      student: fee._name,
+      badge: { label: 'مدفوع', tone: 'green' },
+      sections: [
+        { heading: 'معلومات الطالب', rows: [
+          ['اسم الطالب', fee._name],
+          ['هاتف الولي', fee.guardianPhone],
+          ['هاتف الطالب', fee.studentPhone],
+        ]},
+        { heading: 'معلومات الدراسة', rows: [
+          ['المستوى', fee.level],
+          ['السنة الدراسية', fee.year],
+          ['الشعبة', fee.stream],
+          ['المؤسسة التعليمية', fee.school],
+          ['المواد', fee.subjects.join('، ')],
+        ]},
+        { heading: 'معلومات الدفع', rows: [
+          ['الرسوم الأساسية', formatMoney(fee.baseFee)],
+          ['المبلغ الإجمالي', formatMoney(amountOf(fee))],
+          ['طريقة الدفع', fee.paymentMethod],
+          ['تاريخ الدفع', fmtDateTime(fee.createdAt)],
+        ]},
+      ],
+    });
+    if (!ok) showToast('warning', 'يرجى السماح بالنوافذ المنبثقة للطباعة.');
+  };
+
+  const handleExport = () => {
+    if (rows.length === 0) { showToast('warning', 'لا توجد بيانات للتصدير.'); return; }
+    const data = rows.map((f) => ({
+      studentName: f._name, guardianPhone: f.guardianPhone, level: f.level,
+      year: f.year, school: f.school, amount: amountOf(f),
+      paymentMethod: f.paymentMethod, createdAt: f.createdAt,
+    }));
+    exportToCsv(data, [
+      { key: 'studentName',   header: 'اسم الطالب' },
+      { key: 'guardianPhone', header: 'هاتف الولي' },
+      { key: 'level',         header: 'المستوى' },
+      { key: 'year',          header: 'السنة الدراسية' },
+      { key: 'school',        header: 'المؤسسة' },
+      { key: 'amount',        header: 'المبلغ المدفوع' },
+      { key: 'paymentMethod', header: 'طريقة الدفع' },
+      { key: 'createdAt',     header: 'تاريخ الدفع', type: 'date' },
+    ], generateFilename('annual-fees-paid', 'csv'));
+  };
+
+  // ── Guard ─────────────────────────────────────────────────────────────────
+  if (!selectedBranchId) {
+    return <div className="p-6 text-center text-gray-500" dir="rtl">يرجى اختيار الفرع لعرض الرسوم السنوية.</div>;
+  }
+
+  return (
+    <div className="space-y-5" dir="rtl">
+      {/* Overlays */}
+      {selectedFee && (
+        <DetailModal
+          fee={selectedFee}
+          onClose={() => setSelectedFee(null)}
+          onPrint={handlePrint}
+          onViewImage={setLightbox}
+        />
+      )}
+      <FileViewerModal url={lightbox} onClose={() => setLightbox(null)} />
+
+      {/* Header */}
+      <PageHeader
+        title="الرسوم السنوية"
+        description="عرض حالة الرسوم السنوية للطلاب بعد التحقق والموافقة."
+      >
+        <button
+          onClick={handleExport}
+          className="inline-flex items-center gap-1.5 rounded-xl border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+        >
+          <Download className="h-4 w-4" /> تصدير CSV
+        </button>
+      </PageHeader>
+
+      {loading ? (
+        <ArchiveSkeleton statCount={4} cols={6} />
+      ) : (
+        <>
+          {/* Financial stats */}
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <StatCard icon={Wallet}       tone="green"   label="إجمالي المبلغ المحصّل" value={formatMoney(stats.collected) || '0 دج'} />
+            <StatCard icon={Users}        tone="primary" label="عدد الطلاب المدفوعين" value={stats.paid} />
+            <StatCard icon={CalendarPlus} tone="blue"    label="مدفوعات هذا الشهر" value={stats.thisMonth} />
+            <StatCard icon={TrendingUp}   tone="indigo"  label="متوسط الدفعة" value={formatMoney(stats.avg) || '0 دج'} />
+          </div>
+
+          {/* Filters */}
+          <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
+            <SearchInput value={search} onChange={setSearch} placeholder="ابحث بالاسم أو الهاتف أو المؤسسة..." />
+            <select value={levelFilter} onChange={(e) => setLevelFilter(e.target.value)} className={SELECT_CLASS}>
+              <option value="all">جميع المستويات</option>
+              {levelOptions.map((l) => <option key={l} value={l}>{l}</option>)}
+            </select>
+            <select value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} className={SELECT_CLASS}>
+              {DATE_RANGES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+            </select>
+          </div>
+
+          {/* Content */}
+          {rows.length === 0 ? (
+            <EmptyState
+              icon={CreditCard}
+              title={fees.length === 0 ? 'لا توجد رسوم مدفوعة بعد' : 'لا توجد نتائج مطابقة'}
+              subtitle={fees.length === 0
+                ? 'سيظهر هنا الطلاب بعد التحقق من دفع الرسوم السنوية والموافقة عليها.'
+                : 'جرّب تعديل البحث أو الفلاتر.'}
+            />
+          ) : (
+            <>
+              {/* Desktop table — sticky header */}
+              <div className="hidden max-h-[70vh] overflow-auto rounded-2xl border border-gray-100 bg-white shadow-sm sm:block">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 z-10">
+                    <tr className="border-b border-gray-100 bg-gray-50">
+                      {['الطالب', 'المستوى / السنة', 'المؤسسة', 'المبلغ', 'تاريخ الدفع', 'الحالة', 'الإجراءات'].map((h) => (
+                        <th key={h} className="px-4 py-3 text-start text-xs font-semibold uppercase tracking-wide text-gray-500">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {rows.map((f) => (
+                      <tr key={f.id} className="transition-colors hover:bg-gray-50/70">
+                        <td className="px-4 py-3.5">
+                          <p className="font-semibold text-gray-900">{f._name}</p>
+                          {f.guardianPhone && <p className="mt-0.5 text-xs text-gray-400">{f.guardianPhone}</p>}
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <p className="font-medium text-gray-700">{f.level || '—'}</p>
+                          {f.year && <p className="mt-0.5 text-xs text-gray-500">{f.year}</p>}
+                        </td>
+                        <td className="px-4 py-3.5 text-gray-600">{f.school || '—'}</td>
+                        <td className="whitespace-nowrap px-4 py-3.5 font-semibold text-success-600">{formatMoney(amountOf(f)) || '0 دج'}</td>
+                        <td className="whitespace-nowrap px-4 py-3.5 text-xs text-gray-500">{fmtDate(f.createdAt)}</td>
+                        <td className="px-4 py-3.5"><PaidBadge /></td>
+                        <td className="px-4 py-3.5">
+                          <div className="flex items-center gap-1.5">
+                            <button onClick={() => setSelectedFee(f)} className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50">
+                              <Eye className="h-3.5 w-3.5" /> عرض
+                            </button>
+                            <button onClick={() => handlePrint(f)} aria-label="طباعة" title="طباعة" className="inline-flex items-center justify-center rounded-lg border border-gray-200 p-1.5 text-gray-500 transition-colors hover:bg-gray-50 hover:text-primary">
+                              <Printer className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Mobile cards */}
+              <div className="space-y-3 sm:hidden">
+                {rows.map((f) => (
+                  <div key={f.id} className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="font-semibold text-gray-900">{f._name}</p>
+                        <p className="mt-0.5 text-sm text-gray-600">{[f.level, f.year].filter(Boolean).join(' · ') || '—'}</p>
+                        {f.school && <p className="mt-0.5 text-xs text-gray-400">{f.school}</p>}
+                      </div>
+                      <PaidBadge />
+                    </div>
+                    <div className="mt-2 flex items-center justify-between text-sm">
+                      <span className="font-semibold text-success-600">{formatMoney(amountOf(f)) || '0 دج'}</span>
+                      <span className="text-xs text-gray-400">{fmtDate(f.createdAt)}</span>
+                    </div>
+                    <div className="mt-3 flex gap-2 border-t border-gray-100 pt-3">
+                      <button onClick={() => setSelectedFee(f)} className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-gray-200 py-2 text-sm font-medium text-gray-600">
+                        <Eye className="h-4 w-4" /> عرض التفاصيل
+                      </button>
+                      <button onClick={() => handlePrint(f)} className="inline-flex items-center justify-center rounded-xl border border-gray-200 px-3 py-2 text-gray-500">
+                        <Printer className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <p className="px-1 text-xs text-gray-400">عرض {rows.length} من {fees.length} دفعة مؤكدة</p>
+            </>
+          )}
+        </>
       )}
     </div>
   );
 };
 
 export default AnnualFees;
-
-
-
-
-
-

@@ -1,9 +1,20 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function isMainAdmin() {
-      return request.auth != null &&
-             request.auth.token.email == "marouabenzaoui48@gmail.com";
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    function getAdminBranchId() {
+      return get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.branchId;
+    }
+
+    function isAdmin() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function isBranchAdmin(branchId) {
+      return isAdmin() && getAdminBranchId() == branchId;
     }
 
     function isAuthenticated() {
@@ -14,26 +25,27 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
-    function isBranchAdmin(branchId) {
-      return isAuthenticated() && (
-        isMainAdmin()
-        || (
-          exists(/databases/$(database)/documents/branches/$(branchId)/users/$(request.auth.uid))
-          && get(/databases/$(database)/documents/branches/$(branchId)/users/$(request.auth.uid)).data.role == 'admin'
-        )
-        || (
-          exists(/databases/$(database)/documents/branches/$(branchId)/meta/info)
-          && get(/databases/$(database)/documents/branches/$(branchId)/meta/info).data.adminEmails.hasAny([request.auth.token.email])
-        )
-      );
+    // ── Privilege / payment integrity guard ───────────────────────────────────
+    // Clients may NEVER self-assign a verified/approved/paid/admin state on create.
+    // These fields are server-controlled (branch admin / backend Admin SDK) only.
+    function noPrivilegedStatus() {
+      return (!('verified' in request.resource.data)        || request.resource.data.verified == false)
+        && (!('accountVerified' in request.resource.data)   || request.resource.data.accountVerified == false)
+        && (!('paymentVerified' in request.resource.data)   || request.resource.data.paymentVerified == false)
+        && (!('yearlyFeePaid' in request.resource.data)     || request.resource.data.yearlyFeePaid == false)
+        && (!('feePaid' in request.resource.data)           || request.resource.data.feePaid == false)
+        && (!('isAdmin' in request.resource.data)           || request.resource.data.isAdmin == false)
+        && (!('paymentStatus' in request.resource.data)     || request.resource.data.paymentStatus == 'pending')
+        && (!('status' in request.resource.data)
+            || !(request.resource.data.status in ['verified', 'approved', 'paid', 'active', 'registered']));
     }
 
+    // Self-update may not change role/isAdmin or any verification/payment flag.
     function isSafeUserSelfUpdate() {
-      // Students can update their own profile BUT cannot change access-control fields.
-      // These fields must only be changed by admins/backends.
       return !(('role' in request.resource.data) && request.resource.data.role != resource.data.role)
-        && !(('studyYear' in request.resource.data) && request.resource.data.studyYear != resource.data.studyYear)
-        && !(('schoolLevel' in request.resource.data) && request.resource.data.schoolLevel != resource.data.schoolLevel)
+        && !(('isAdmin' in request.resource.data) && request.resource.data.isAdmin != resource.data.isAdmin)
+        && !(('studyYear' in request.resource.data) && request.resource.data.studyYear != resource.data.studyYear && resource.data.studyYear != null)
+        && !(('schoolLevel' in request.resource.data) && request.resource.data.schoolLevel != resource.data.schoolLevel && resource.data.schoolLevel != null)
         && !(('yearlyFeePaid' in request.resource.data) && request.resource.data.yearlyFeePaid != resource.data.yearlyFeePaid)
         && !(('paymentVerified' in request.resource.data) && request.resource.data.paymentVerified != resource.data.paymentVerified)
         && !(('accountVerified' in request.resource.data) && request.resource.data.accountVerified != resource.data.accountVerified)
@@ -41,59 +53,274 @@ service cloud.firestore {
         && !(('verificationStatus' in request.resource.data) && request.resource.data.verificationStatus != resource.data.verificationStatus);
     }
 
-    match /users/{userId} {
-      allow read: if true;
-      allow create: if true;
-      allow update: if isMainAdmin() || (isSelf(userId) && isSafeUserSelfUpdate());
-      allow delete: if isMainAdmin();
+    // Self-registration: a brand-new user may ONLY create a 'student' profile with
+    // every privileged/verification flag in its safe default state. Admin-created
+    // students are written by the backend Admin SDK and bypass these rules.
+    function isSafeUserCreate(userId) {
+      return isSelf(userId)
+        && request.resource.data.role == 'student'
+        && (!('isAdmin' in request.resource.data)           || request.resource.data.isAdmin == false)
+        && (!('verified' in request.resource.data)          || request.resource.data.verified == false)
+        && (!('accountVerified' in request.resource.data)   || request.resource.data.accountVerified == false)
+        && (!('paymentVerified' in request.resource.data)   || request.resource.data.paymentVerified == false)
+        && (!('yearlyFeePaid' in request.resource.data)     || request.resource.data.yearlyFeePaid == false)
+        && request.resource.data.get('verificationStatus', 'unverified') in ['unverified', 'pending'];
     }
 
-    // Global monthly support lesson registrations must be server-created (via callable function)
+    // Allows the one-way registration-completion transition only:
+    //   completedProfile: false → true
+    //   verificationStatus: 'unverified' → 'pending'
+    // Cannot be used to self-promote to 'verified' or re-open a pending account.
+    function isCompletingRegistration() {
+      return resource.data.get('completedProfile', false) == false
+        && request.resource.data.completedProfile == true
+        && resource.data.get('verificationStatus', 'unverified') == 'unverified'
+        && request.resource.data.verificationStatus == 'pending'
+        // The completion transition must not smuggle in any privilege/payment escalation.
+        && !(('role' in request.resource.data) && request.resource.data.role != resource.data.role)
+        && !(('isAdmin' in request.resource.data) && request.resource.data.isAdmin != resource.data.isAdmin)
+        && !(('yearlyFeePaid' in request.resource.data) && request.resource.data.yearlyFeePaid != resource.data.yearlyFeePaid)
+        && !(('paymentVerified' in request.resource.data) && request.resource.data.paymentVerified != resource.data.paymentVerified)
+        && !(('accountVerified' in request.resource.data) && request.resource.data.accountVerified != resource.data.accountVerified)
+        && !(('verified' in request.resource.data) && request.resource.data.verified != resource.data.verified);
+    }
+
+    // ── Admins collection ─────────────────────────────────────────────────────
+    // CRITICAL: admin documents are provisioned ONLY via the Admin SDK (backend
+    // script) or the Firebase Console. NO client may ever write here — a client
+    // write would be an instant privilege escalation to global admin.
+    match /admins/{uid} {
+      allow read:  if isSelf(uid);
+      allow write: if false;
+    }
+
+    // ── Legacy root users collection ──────────────────────────────────────────
+    match /users/{userId} {
+      allow read:   if isAdmin() || isSelf(userId);
+      allow create: if isAdmin() || isSafeUserCreate(userId);
+      allow update: if isAdmin() || (isSelf(userId) && isSafeUserSelfUpdate());
+      allow delete: if isAdmin();
+    }
+
+    // ── Global support lesson registrations ───────────────────────────────────
+    // Written only by the Express backend (Admin SDK); clients may only read.
     match /supportLessonRegistrations/{registrationId} {
-      allow read: if isMainAdmin()
-        || (isAuthenticated() && resource.data.userId == request.auth.uid)
-        || isBranchAdmin(resource.data.branchId);
+      allow read: if isAdmin()
+        || (isAuthenticated() && resource.data.userId == request.auth.uid);
       allow create, update, delete: if false;
     }
 
-    match /branches/{branchId} {
-      allow read: if true;
-      allow create, update, delete: if isMainAdmin();
+    // ── In-app notifications ──────────────────────────────────────────────────
+    match /notifications/{notificationId} {
+      allow read: if isAuthenticated()
+        && (resource.data.target == 'all' || resource.data.target == request.auth.uid);
+      allow write: if false;
+    }
 
-      // Support lessons are public readable; only admins can write.
+    // ── Branches ──────────────────────────────────────────────────────────────
+    match /branches/{branchId} {
+      // Branch documents are public — required for the branch selection page
+      // and for BranchContext to populate the branches list.
+      allow read: if true;
+      allow write: if isBranchAdmin(branchId);
+
+      // Student profiles — admin sees all in their branch; students see only themselves.
+      // Self-create is locked to a safe 'student' profile: no role/isAdmin/verified
+      // injection. Admin-created students go through the Express backend (Admin SDK),
+      // which bypasses these rules, so pre-verified enrollment is unaffected.
+      match /users/{uid} {
+        allow read:   if isBranchAdmin(branchId) || isSelf(uid);
+        allow create: if isBranchAdmin(branchId) || isSafeUserCreate(uid);
+        allow update: if isBranchAdmin(branchId)
+          || (isSelf(uid) && isSafeUserSelfUpdate())
+          || (isSelf(uid) && isCompletingRegistration());
+        allow delete: if isBranchAdmin(branchId);
+      }
+
+      // Support lessons and courses — public catalog, readable by anyone.
       match /supportLessons/{lessonId} {
         allow read: if true;
         allow create, update, delete: if isBranchAdmin(branchId);
       }
 
-      match /annualPayments/{paymentId} {
+      match /supportCourses/{document} {
         allow read: if true;
-        allow create: if true;
+        allow write: if isBranchAdmin(branchId);
+      }
+
+      // Annual payments — admin sees all; students see their own.
+      // Students may ONLY create their own 'pending' payment; verification is
+      // server-side (branch admin / backend Admin SDK) via update.
+      match /annualPayments/{paymentId} {
+        allow read: if isBranchAdmin(branchId)
+          || (isAuthenticated() && resource.data.userId == request.auth.uid);
+        allow create: if isBranchAdmin(branchId)
+          || (isAuthenticated()
+              && request.resource.data.userId == request.auth.uid
+              && request.resource.data.get('status', 'pending') == 'pending');
         allow update, delete: if isBranchAdmin(branchId);
       }
 
-      // Branch user profiles: allow create (signup), allow self update with restrictions.
-      match /users/{userId} {
-        allow read: if true;
-        allow create: if true;
-        allow update: if isBranchAdmin(branchId) || (isSelf(userId) && isSafeUserSelfUpdate());
-        allow delete: if isBranchAdmin(branchId);
+      // Meta — admin only.
+      match /meta/{document} {
+        allow read, write: if isBranchAdmin(branchId);
       }
 
-      // Keep legacy permissive behavior for other branch collections (existing app flows).
-      match /{collection}/{docId} {
+      // Languages and trainings — public catalog, readable by anyone.
+      match /languages/{document} {
         allow read: if true;
-        allow create: if true;
-        allow update, delete: if isMainAdmin();
+        allow write: if isBranchAdmin(branchId);
+      }
+
+      match /trainings/{document} {
+        allow read: if true;
+        allow write: if isBranchAdmin(branchId);
+      }
+
+      // Signups — students create their own (non-privileged); admin manages all.
+      // Update is admin-only: a student must not flip their own signup to approved.
+      match /signups/{document} {
+        allow read: if isBranchAdmin(branchId)
+          || (isAuthenticated() && resource.data.userId == request.auth.uid);
+        allow create: if isAuthenticated()
+          && request.resource.data.userId == request.auth.uid
+          && noPrivilegedStatus();
+        allow update, delete: if isBranchAdmin(branchId);
+      }
+
+      // Training requests — students submit (non-privileged); admin manages.
+      match /trainingRequests/{document} {
+        allow read: if isBranchAdmin(branchId)
+          || (isAuthenticated() && resource.data.userId == request.auth.uid);
+        allow create: if isAuthenticated()
+          && request.resource.data.userId == request.auth.uid
+          && noPrivilegedStatus();
+        allow update, delete: if isBranchAdmin(branchId);
+      }
+
+      // Payments — admin sees all; students see their own. Server-write only.
+      match /payments/{document} {
+        allow read: if isBranchAdmin(branchId)
+          || (isAuthenticated() && resource.data.userId == request.auth.uid);
+        allow write: if isBranchAdmin(branchId);
+      }
+
+      // Annual fees — admin sees all; students see their own. Server-write only.
+      match /annualFees/{document} {
+        allow read: if isBranchAdmin(branchId)
+          || (isAuthenticated() && resource.data.userId == request.auth.uid);
+        allow write: if isBranchAdmin(branchId);
+      }
+
+      // Announcements — any authenticated user reads; only branch admin writes.
+      match /announcements/{announcementId} {
+        allow read: if isAuthenticated();
+        allow create, update, delete: if isBranchAdmin(branchId);
+      }
+
+      // Language registration forms — container doc ID IS the student's Firebase UID.
+      // Ownership is the path segment {userId}. Entries are created by the owner with
+      // a non-privileged status; only the admin may verify them (update/delete).
+      match /languagesForms/{userId} {
+        allow read, write: if isBranchAdmin(branchId) || isSelf(userId);
+        match /languageFormEntries/{entryId} {
+          allow read:   if isBranchAdmin(branchId) || isSelf(userId);
+          allow create: if isSelf(userId) && noPrivilegedStatus();
+          allow update, delete: if isBranchAdmin(branchId);
+        }
+      }
+
+      // Training registration forms — same path-based pattern as languagesForms.
+      match /trainingsForms/{userId} {
+        allow read, write: if isBranchAdmin(branchId) || isSelf(userId);
+        match /trainingFormEntries/{entryId} {
+          allow read:   if isBranchAdmin(branchId) || isSelf(userId);
+          allow create: if isSelf(userId) && noPrivilegedStatus();
+          allow update, delete: if isBranchAdmin(branchId);
+        }
+      }
+
+      // Approved language registrations — the "approved" archive is written ONLY
+      // by the branch admin during the approval flow. Students never self-approve.
+      match /languagesRegistered/{document} {
+        allow read: if isBranchAdmin(branchId)
+          || (isAuthenticated() && resource.data.userId == request.auth.uid);
+        allow create, update, delete: if isBranchAdmin(branchId);
+      }
+
+      // Approved training registrations — admin-write only (see above).
+      match /trainingsRegistered/{document} {
+        allow read: if isBranchAdmin(branchId)
+          || (isAuthenticated() && resource.data.userId == request.auth.uid);
+        allow create, update, delete: if isBranchAdmin(branchId);
+      }
+
+      // Support lesson summary records (branches/.../registrations).
+      // resource == null check is required because getDoc on a non-existent document
+      // sets resource = null in Firestore rules.
+      match /registrations/{document} {
+        allow read: if isBranchAdmin(branchId)
+          || (isAuthenticated() && (resource == null || resource.data.userId == request.auth.uid));
+        allow create: if isAuthenticated()
+          && request.resource.data.userId == request.auth.uid
+          && noPrivilegedStatus();
+        allow update, delete: if isBranchAdmin(branchId);
+      }
+
+      // Subjects & Classes (unified academic catalog). Public read; admin write.
+      // These blocks MUST precede the catch-all below (they carry no userId).
+      match /subjects/{subjectId} {
+        allow read: if true;
+        allow create, update, delete: if isBranchAdmin(branchId);
+      }
+
+      match /classes/{classId} {
+        allow read: if true;
+        // enrollmentCount is bumped by the Express backend (Admin SDK), not clients.
+        allow create, update, delete: if isBranchAdmin(branchId);
+      }
+
+      // Teachers catalog — public read (names shown to students), branch-admin write.
+      match /teachers/{teacherId} {
+        allow read: if true;
+        allow create, update, delete: if isBranchAdmin(branchId);
+      }
+
+      // Catch-all for any other branch subcollections.
+      // Create is restricted to the document owner AND a non-privileged status,
+      // preventing injection of admin/verified/paid records into arbitrary paths.
+      match /{collection}/{docId} {
+        allow read: if isBranchAdmin(branchId)
+          || (isAuthenticated() && resource.data.userId == request.auth.uid);
+        allow create: if isAuthenticated()
+          && request.resource.data.userId == request.auth.uid
+          && noPrivilegedStatus();
+        allow update, delete: if isBranchAdmin(branchId);
 
         match /{subcollection}/{subDocId} {
-          allow read: if true;
-          allow create: if true;
-          allow update, delete: if isMainAdmin();
+          allow read: if isBranchAdmin(branchId)
+            || (isAuthenticated() && resource.data.userId == request.auth.uid);
+          allow create: if isAuthenticated()
+            && request.resource.data.userId == request.auth.uid
+            && noPrivilegedStatus();
+          allow update, delete: if isBranchAdmin(branchId);
         }
       }
     }
 
+    // ── Collection-group aggregate (count) query access ──────────────────────
+    // getCountFromServer(collectionGroup(...)) is evaluated at the query-plan
+    // level where {branchId} is unbound; these wildcard rules (no path variables)
+    // let admins run aggregate queries. Branch scoping is enforced at the query
+    // level (where('branchId','==',…)). isAdmin() uses no path variables.
+    match /{path=**}/languageFormEntries/{entryId} {
+      allow read: if isAdmin();
+    }
+    match /{path=**}/trainingFormEntries/{entryId} {
+      allow read: if isAdmin();
+    }
+
+    // ── Deny everything else ──────────────────────────────────────────────────
     match /{document=**} {
       allow read, write: if false;
     }

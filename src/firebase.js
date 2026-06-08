@@ -1,35 +1,21 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAnalytics, isSupported } from "firebase/analytics";
 import { getFirestore } from "firebase/firestore";
-import { getAuth } from "firebase/auth";
+import { getAuth, GoogleAuthProvider } from "firebase/auth";
 import { getStorage } from "firebase/storage";
-import { getFunctions } from "firebase/functions";
-
-// Debug: Log environment variables (using REACT_APP_ prefix for Create React App)
-console.log('Environment variables:', {
-  apiKey: process.env.REACT_APP_FIREBASE_API_KEY ? 'Set' : 'Missing',
-  authDomain: process.env.REACT_APP_FIREBASE_AUTH_DOMAIN ? 'Set' : 'Missing',
-  projectId: process.env.REACT_APP_FIREBASE_PROJECT_ID ? 'Set' : 'Missing',
-  storageBucket: process.env.REACT_APP_FIREBASE_STORAGE_BUCKET ? 'Set' : 'Missing',
-  messagingSenderId: process.env.REACT_APP_FIREBASE_MESSAGING_SENDER_ID ? 'Set' : 'Missing',
-  appId: process.env.REACT_APP_FIREBASE_APP_ID ? 'Set' : 'Missing',
-  measurementId: process.env.REACT_APP_FIREBASE_MEASUREMENT_ID ? 'Set' : 'Missing',
-});
 
 const firebaseConfig = {
-  apiKey: process.env.REACT_APP_FIREBASE_API_KEY || "AIzaSyD8mLBRnnuflkQ3lKTHVxxYji0ffPVE780",
-  authDomain: process.env.REACT_APP_FIREBASE_AUTH_DOMAIN || "trust-school.firebaseapp.com",
-  projectId: process.env.REACT_APP_FIREBASE_PROJECT_ID || "trust-school",
-  storageBucket: process.env.REACT_APP_FIREBASE_STORAGE_BUCKET || "trust-school.appspot.com",
-  messagingSenderId: process.env.REACT_APP_FIREBASE_MESSAGING_SENDER_ID || "488208060844",
-  appId: process.env.REACT_APP_FIREBASE_APP_ID || "1:488208060844:web:a6b2e9e65d154b3cddaa09",
-  measurementId: process.env.REACT_APP_FIREBASE_MEASUREMENT_ID || "G-BKGJLY224G",
+  apiKey: process.env.REACT_APP_FIREBASE_API_KEY,
+  authDomain: process.env.REACT_APP_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.REACT_APP_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.REACT_APP_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.REACT_APP_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.REACT_APP_FIREBASE_APP_ID,
+  measurementId: process.env.REACT_APP_FIREBASE_MEASUREMENT_ID,
 };
 
-// Validate that all required config values are present
 if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
-  console.error('Missing required Firebase configuration. Please check your environment variables.');
-  throw new Error('Firebase configuration is incomplete');
+  throw new Error('Firebase configuration is incomplete. Check your .env file for REACT_APP_FIREBASE_* variables.');
 }
 
 // Initialize Firebase (only once)
@@ -45,12 +31,15 @@ isSupported().then((yes) => {
     console.log("Analytics not supported in this environment");
   }
 });
-// Export auth, firestore, storage and functions so other files can import them
+// Export auth, firestore, and storage
 export const auth = getAuth(app);
 export const db = getFirestore(app);
 export const storage = getStorage(app);
-export const functions = getFunctions(app);
 export { analytics };
+
+// Pre-configured Google provider — imported once, reused everywhere.
+export const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({ prompt: 'select_account' });
 
 // Optional: helper to clear local persistence if a client-side cache becomes corrupted.
 // Note: This is safe but should be invoked manually from a recovery flow if needed.

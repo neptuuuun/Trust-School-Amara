@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { formatWeekdayDate } from '../utils/dateUtils';
 
 const Clock = ({ 
   format = '24-hour', 
@@ -35,15 +36,6 @@ const Clock = ({
     }
   };
 
-  const formatDate = (date) => {
-    return date.toLocaleDateString('ar-DZ', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
-    });
-  };
-
   const sizeClasses = {
     small: 'text-xs',
     medium: 'text-sm',
@@ -56,7 +48,7 @@ const Clock = ({
         <div>{formatTime(time)}</div>
         {showDate && (
           <div className="text-xs text-gray-500 mt-1">
-            {formatDate(time)}
+            {formatWeekdayDate(time)}
           </div>
         )}
       </div>

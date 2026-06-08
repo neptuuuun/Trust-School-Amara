@@ -223,10 +223,10 @@ const UnifiedRegistrationForm = ({
                         </button>
                         {isYearlyFeeIssue ? (
                             <button
-                                onClick={() => { window.location.href = '/annual-fee'; }}
+                                onClick={() => { window.location.href = '/support-lessons'; }}
                                 className="flex-1 bg-primary text-white px-6 py-3 rounded-lg hover:bg-primary-600 transition-colors"
                             >
-                                دفع الرسوم السنوية
+                                التسجيل في دروس الدعم
                             </button>
                         ) : (
                             <button
@@ -400,14 +400,14 @@ const UnifiedRegistrationForm = ({
                                             <span className="font-medium text-gray-700">رقم BaridiMob:</span>
                                             <button
                                                 type="button"
-                                                onClick={() => navigator.clipboard.writeText('00799999004038547094')}
+                                                onClick={() => navigator.clipboard.writeText('00799999000023614177')}
                                                 className="flex items-center gap-1 text-blue-600 hover:text-blue-800 text-sm"
                                             >
                                                 <Copy className="w-4 h-4" />
                                                 نسخ
                                             </button>
                                         </div>
-                                        <p className="text-lg font-mono bg-gray-100 p-2 rounded text-center">00799999004038547094</p>
+                                        <p className="text-lg font-mono bg-gray-100 p-2 rounded text-center">00799999000023614177</p>
                                     </div>
                                 )}
                 
@@ -417,27 +417,27 @@ const UnifiedRegistrationForm = ({
                                             <span className="font-medium text-gray-700">رقم CCP:</span>
                                             <button
                                                 type="button"
-                                                onClick={() => navigator.clipboard.writeText('0040385470')}
+                                                onClick={() => navigator.clipboard.writeText('0000236141')}
                                                 className="flex items-center gap-1 text-blue-600 hover:text-blue-800 text-sm"
                                             >
                                                 <Copy className="w-4 h-4" />
                                                 نسخ
                                             </button>
                                         </div>
-                                        <p className="text-lg font-mono bg-gray-100 p-2 rounded text-center">0040385470</p>
+                                        <p className="text-lg font-mono bg-gray-100 p-2 rounded text-center">0000236141</p>
                                         
                                         <div className="flex items-center justify-between">
                                             <span className="font-medium text-gray-700">المفتاح:</span>
                                             <button
                                                 type="button"
-                                                onClick={() => navigator.clipboard.writeText('94')}
+                                                onClick={() => navigator.clipboard.writeText('77')}
                                                 className="flex items-center gap-1 text-blue-600 hover:text-blue-800 text-sm"
                                             >
                                                 <Copy className="w-4 h-4" />
                                                 نسخ
                                             </button>
                                         </div>
-                                        <p className="text-lg font-mono bg-gray-100 p-2 rounded text-center">94</p>
+                                        <p className="text-lg font-mono bg-gray-100 p-2 rounded text-center">77</p>
                                         
                                         <div className="text-center">
                                             <span className="font-medium text-gray-700">الاسم: </span>

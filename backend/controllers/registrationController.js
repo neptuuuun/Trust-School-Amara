@@ -257,16 +257,29 @@ const createSupportLessonRegistration = async (req, res, next) => {
     // Allow when already paid this year OR when this request includes the fee.
     const includesAnnualFee = req.body.includesAnnualFee === true;
     const feePaidThisYear   = await isAnnualFeePaidThisYear(branchId, uid);
-    // A concurrent 2nd registration may proceed (monthly-only) while the first
-    // registration's bundled annual fee is still pending approval.
-    const pendingBundle = (!feePaidThisYear && !includesAnnualFee)
-      ? await hasPendingAnnualFeeBundle(branchId, uid)
-      : false;
-    if (!feePaidThisYear && !includesAnnualFee && !pendingBundle)
-      return res.status(403).json({
-        code:    'yearly-fee-required',
-        message: 'Yearly fee is required.',
-      });
+
+    if (!feePaidThisYear) {
+      // Duplicate bundle guard: a pending registration already bundles the annual
+      // fee for this year. A second registration that also includes the fee would
+      // create a duplicate annual payment when the admin verifies it.
+      const pendingBundleExists = await hasPendingAnnualFeeBundle(branchId, uid);
+
+      if (includesAnnualFee && pendingBundleExists) {
+        return res.status(409).json({
+          code:    'duplicate-annual-fee-bundle',
+          message: 'الرسوم السنوية قيد المراجعة بالفعل في طلب آخر. يرجى الانتظار حتى يتم اعتمادها.',
+        });
+      }
+
+      // Monthly-only submission requires either a verified annual fee or a
+      // pending bundle that will cover it once approved.
+      if (!includesAnnualFee && !pendingBundleExists) {
+        return res.status(403).json({
+          code:    'yearly-fee-required',
+          message: 'Yearly fee is required.',
+        });
+      }
+    }
 
     // ── Capacity gate (server-enforced; approved registrations only) ─────────
     const capacity = Number(lessonData.capacity) || 0;

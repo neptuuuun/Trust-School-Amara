@@ -13,7 +13,7 @@
  */
 
 const admin = require('firebase-admin');
-const serviceAccount = require('../path/to/your/serviceAccountKey.json'); // Update this path
+const serviceAccount = require(process.env.GOOGLE_APPLICATION_CREDENTIALS); // Update this path
 
 // Initialize Firebase Admin
 if (!admin.apps.length) {

@@ -22,7 +22,7 @@ function getArgValues(prefix) {
 async function initAdmin() {
   const credPath =
     process.env.GOOGLE_APPLICATION_CREDENTIALS ||
-    path.resolve(process.cwd(), 'serviceAccountKey.json');
+    path.resolve(process.env.GOOGLE_APPLICATION_CREDENTIALS);
 
   const raw = fs.readFileSync(credPath, 'utf8');
   const sa = JSON.parse(raw);

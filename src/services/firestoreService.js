@@ -892,12 +892,16 @@ export const verifyLanguageRegistration = async (branchId, studentId, formId, ad
     updatedAt: serverTimestamp()
   });
 
-  await batch.commit();
-
-  // Maintain the class's approved-enrollment counter (best-effort).
+  // Increment the class enrollment counter atomically with the registration
+  // write so the Firestore rule capacity check stays consistent.
   if (registrationData.classId) {
-    await adjustClassEnrollment(branchId, registrationData.classId, 1);
+    batch.update(getBranchDoc(branchId, CLASSES_COLLECTION, registrationData.classId), {
+      enrollmentCount: increment(1),
+      updatedAt: serverTimestamp(),
+    });
   }
+
+  await batch.commit();
 
   // Best-effort receipt cleanup (never throws). Approved payments keep zero
   // long-term storage — spec §5.
@@ -2154,12 +2158,16 @@ export const verifyTrainingRegistration = async (branchId, studentId, entryId, a
     });
   }
 
-  await batch.commit();
-
-  // Maintain the class's approved-enrollment counter (best-effort).
+  // Increment the class enrollment counter atomically with the registration
+  // write so the Firestore rule capacity check stays consistent.
   if (registrationData.classId) {
-    await adjustClassEnrollment(branchId, registrationData.classId, 1);
+    batch.update(getBranchDoc(branchId, CLASSES_COLLECTION, registrationData.classId), {
+      enrollmentCount: increment(1),
+      updatedAt: serverTimestamp(),
+    });
   }
+
+  await batch.commit();
 
   // Approved payments keep zero long-term storage — spec §5.
   await cleanupPaymentReceipt(

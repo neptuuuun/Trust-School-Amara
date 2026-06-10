@@ -361,4 +361,67 @@ const rejectAnnualPayment = async (req, res, next) => {
   }
 };
 
-module.exports = { createStudent, verifyAnnualPayment, rejectAnnualPayment };
+// ── Delete student ────────────────────────────────────────────────────────────
+/**
+ * POST /api/admin/delete-student
+ *
+ * Permanently removes a student from Firebase Auth AND Firestore.
+ * Returns the student's Supabase file URLs so the caller can clean up
+ * storage client-side (best-effort; does not block the response).
+ *
+ * Body: { branchId, userId }
+ * Response 200: { success: true, photoUrl, idCardUrl }
+ */
+const deleteStudent = async (req, res, next) => {
+  const { branchId, userId } = req.body;
+
+  try {
+    if (!branchId)
+      return res.status(400).json({ code: 'invalid-argument', message: 'branchId is required.' });
+    if (!userId)
+      return res.status(400).json({ code: 'invalid-argument', message: 'userId is required.' });
+
+    const userRef  = db.collection('branches').doc(branchId).collection('users').doc(userId);
+    const userSnap = await userRef.get();
+
+    // If the Firestore doc is already gone, still attempt to remove the Auth account.
+    if (!userSnap.exists) {
+      await auth.deleteUser(userId).catch((e) => {
+        if (e.code !== 'auth/user-not-found') throw e;
+      });
+      return res.status(200).json({ success: true, photoUrl: null, idCardUrl: null });
+    }
+
+    const userData      = userSnap.data() || {};
+    const studentBranch = userData.branchId || userData.branch;
+
+    // Ownership guard: the student must belong to the admin's branch.
+    if (studentBranch && studentBranch !== branchId) {
+      return res.status(403).json({
+        code:    'permission-denied',
+        message: 'Student does not belong to your branch.',
+      });
+    }
+
+    // 1. Delete Firebase Auth account — this is the core of the fix.
+    //    If the Auth user no longer exists (e.g., the student deleted their own
+    //    account) we still proceed to clean up the Firestore document.
+    await auth.deleteUser(userId).catch((e) => {
+      if (e.code !== 'auth/user-not-found') throw e;
+    });
+
+    // 2. Delete the Firestore profile.
+    await userRef.delete();
+
+    // Return file URLs so the frontend can clean up Supabase storage.
+    return res.status(200).json({
+      success:   true,
+      photoUrl:  userData.photoUrl   || null,
+      idCardUrl: userData.idCardUrl  || null,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = { createStudent, verifyAnnualPayment, rejectAnnualPayment, deleteStudent };

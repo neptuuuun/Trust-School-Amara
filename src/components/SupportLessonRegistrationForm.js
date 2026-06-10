@@ -233,12 +233,18 @@ const SupportLessonRegistrationForm = () => {
       setError('');
       const fileInput = document.getElementById('payment-proof');
       if (fileInput) fileInput.value = '';
+      // Refresh annual fee status so the form reflects the new 'pending' state
+      // and prevents a stale 'unpaid' status from triggering a duplicate bundle.
+      loadData();
     } catch (err) {
       console.error('Error submitting registration:', err);
       if (err?.code === 'class-full') {
         setError('المجموعة مكتملة. لم يعد بالإمكان التسجيل في هذه المجموعة.');
       } else if (err?.code === 'yearly-fee-required') {
         setError('الرسوم السنوية مطلوبة للتسجيل في دروس الدعم.');
+      } else if (err?.code === 'duplicate-annual-fee-bundle') {
+        setError('الرسوم السنوية قيد المراجعة بالفعل. لا يمكن إرسال طلب آخر يتضمنها في انتظار اعتماد الطلب الأول.');
+        loadData(); // refresh so the UI switches to the 'pending' warning state
       } else if (err?.code === 'study-year-mismatch') {
         setError('غير متاح لهذا المستوى (سنتك الدراسية لا تطابق سنة المجموعة).');
       } else {

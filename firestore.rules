@@ -25,6 +25,18 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
+    // ── Capacity guard ────────────────────────────────────────────────────────
+    // Returns true when a class still has room (or has no capacity limit).
+    // Used on languagesRegistered / trainingsRegistered creates to prevent a
+    // client writing directly to Firestore from bypassing the app-level check.
+    // No-op when the class document doesn't exist (graceful degradation).
+    function classHasCapacity(branchId, classId) {
+      let clsPath = /databases/$(database)/documents/branches/$(branchId)/classes/$(classId);
+      return !exists(clsPath)
+        || get(clsPath).data.get('capacity', 0) == 0
+        || get(clsPath).data.enrollmentCount < get(clsPath).data.capacity;
+    }
+
     // ── Privilege / payment integrity guard ───────────────────────────────────
     // Clients may NEVER self-assign a verified/approved/paid/admin state on create.
     // These fields are server-controlled (branch admin / backend Admin SDK) only.
@@ -242,17 +254,26 @@ service cloud.firestore {
 
       // Approved language registrations — the "approved" archive is written ONLY
       // by the branch admin during the approval flow. Students never self-approve.
+      // create additionally enforces capacity so a direct SDK write cannot
+      // exceed the class limit even when the app-layer check is bypassed.
       match /languagesRegistered/{document} {
         allow read: if isBranchAdmin(branchId)
           || (isAuthenticated() && resource.data.userId == request.auth.uid);
-        allow create, update, delete: if isBranchAdmin(branchId);
+        allow create: if isBranchAdmin(branchId)
+          && (!('classId' in request.resource.data)
+              || classHasCapacity(branchId, request.resource.data.classId));
+        allow update, delete: if isBranchAdmin(branchId);
       }
 
       // Approved training registrations — admin-write only (see above).
+      // Same capacity gate as languagesRegistered.
       match /trainingsRegistered/{document} {
         allow read: if isBranchAdmin(branchId)
           || (isAuthenticated() && resource.data.userId == request.auth.uid);
-        allow create, update, delete: if isBranchAdmin(branchId);
+        allow create: if isBranchAdmin(branchId)
+          && (!('classId' in request.resource.data)
+              || classHasCapacity(branchId, request.resource.data.classId));
+        allow update, delete: if isBranchAdmin(branchId);
       }
 
       // Support lesson summary records (branches/.../registrations).

@@ -17,6 +17,7 @@ import {
   Building2,
   Users,
   UserPlus,
+  Trash2,
 } from 'lucide-react';
 import Breadcrumb from '../components/Breadcrumb';
 import FileViewerModal from '../components/FileViewerModal';
@@ -71,11 +72,12 @@ const Field = ({ icon: Icon, label, value }) => (
 
 // ─── Single user card ────────────────────────────────────────────────────────
 
-const UserCard = ({ user, onDecision, processing, onViewImage }) => {
-  const photoUrl  = getImageUrl(user.photoUrl);
-  const idCardUrl = getImageUrl(user.idCardUrl);
-  const busy      = processing[`decision-${user.id}`];
-  const status    = getStatusConfig(user);
+const UserCard = ({ user, onDecision, onDelete, processing, onViewImage }) => {
+  const photoUrl   = getImageUrl(user.photoUrl);
+  const idCardUrl  = getImageUrl(user.idCardUrl);
+  const busy       = processing[`decision-${user.id}`];
+  const deleteBusy = processing[`delete-${user.id}`];
+  const status     = getStatusConfig(user);
   const StatusIcon = status.icon;
   const isPending = String(user?.verificationStatus || '').toLowerCase() === 'pending';
 
@@ -150,13 +152,13 @@ const UserCard = ({ user, onDecision, processing, onViewImage }) => {
 
       {/* Accept / Reject — only for pending users */}
       {isPending && (
-        <div className="px-4 pb-4 grid grid-cols-2 gap-2">
+        <div className="px-4 pb-3 grid grid-cols-2 gap-2">
           <Button
             variant="success"
             size="sm"
             fullWidth
             onClick={() => onDecision(user.id, true, user.branchId)}
-            disabled={busy}
+            disabled={busy || deleteBusy}
           >
             <CheckCircle className="w-4 h-4" />
             {busy ? 'جاري...' : 'قبول'}
@@ -166,13 +168,28 @@ const UserCard = ({ user, onDecision, processing, onViewImage }) => {
             size="sm"
             fullWidth
             onClick={() => onDecision(user.id, false, user.branchId)}
-            disabled={busy}
+            disabled={busy || deleteBusy}
           >
             <XCircle className="w-4 h-4" />
             {busy ? 'جاري...' : 'رفض'}
           </Button>
         </div>
       )}
+
+      {/* Permanent delete — shown for all users */}
+      <div className="px-4 pb-4">
+        <Button
+          variant="ghost"
+          size="sm"
+          fullWidth
+          onClick={() => onDelete(user.id, user.branchId)}
+          disabled={busy || deleteBusy}
+          className="text-red-600 hover:text-red-700 hover:bg-red-50 border border-red-200 w-full"
+        >
+          <Trash2 className="w-4 h-4" />
+          {deleteBusy ? 'جاري الحذف...' : 'حذف الطالب نهائياً'}
+        </Button>
+      </div>
     </div>
   );
 };
@@ -197,6 +214,7 @@ const UsersPage = () => {
   const [showCreateModal,     setShowCreateModal]     = useState(false);
   const [currentUser,         setCurrentUser]         = useState(null);
   const [rejectDialog,        setRejectDialog]        = useState({ open: false, userId: null, branchId: null, userName: '' });
+  const [deleteDialog,        setDeleteDialog]        = useState({ open: false, userId: null, branchId: null, userName: '' });
   const { selectedBranchId } = useBranch();
   const { show: showToast } = useToast();
 
@@ -357,6 +375,44 @@ const UsersPage = () => {
     executeDecision(userId, false, branchId);
   };
 
+  const handleDeleteStudent = (userId, branchId) => {
+    const targetUser = users.find((u) => u.id === userId);
+    setDeleteDialog({
+      open:     true,
+      userId,
+      branchId,
+      userName: targetUser?.fullName || targetUser?.name || 'هذا الطالب',
+    });
+  };
+
+  const executeDeleteStudent = async () => {
+    const { userId, branchId, userName } = deleteDialog;
+    setDeleteDialog({ open: false, userId: null, branchId: null, userName: '' });
+
+    const targetUser = users.find((u) => u.id === userId);
+    setProcessing((prev) => ({ ...prev, [`delete-${userId}`]: true }));
+    try {
+      const res = await apiCall('/api/admin/delete-student', {
+        method: 'POST',
+        body: JSON.stringify({ branchId, userId }),
+      });
+
+      // Best-effort: remove the student's uploaded files from Supabase Storage.
+      await cleanupRejectedRegistration({
+        photoUrl:  res.photoUrl,
+        idCardUrl: res.idCardUrl,
+        documents: targetUser?.uploadedDocs || [],
+      });
+
+      setUsers((prev) => prev.filter((u) => u.id !== userId));
+      showToast('success', `تم حذف حساب "${userName}" نهائياً`);
+    } catch (err) {
+      showToast('error', 'فشل حذف الحساب: ' + err.message);
+    } finally {
+      setProcessing((prev) => ({ ...prev, [`delete-${userId}`]: false }));
+    }
+  };
+
   const openImage = (urlValue, title) => {
     const url = getImageUrl(urlValue);
     if (url) setImageModal({ open: true, url, title });
@@ -377,6 +433,17 @@ const UsersPage = () => {
         danger={true}
         onConfirm={confirmRejectUser}
         onCancel={() => setRejectDialog({ open: false, userId: null, branchId: null, userName: '' })}
+      />
+
+      {/* Delete confirmation dialog */}
+      <AdminConfirmDialog
+        open={deleteDialog.open}
+        title="حذف الطالب نهائياً"
+        message={`هل أنت متأكد من حذف حساب "${deleteDialog.userName}" بشكل نهائي؟ سيتم حذف حسابه من Firebase وجميع بياناته. لا يمكن التراجع عن هذا الإجراء.`}
+        confirmLabel="حذف نهائياً"
+        danger={true}
+        onConfirm={executeDeleteStudent}
+        onCancel={() => setDeleteDialog({ open: false, userId: null, branchId: null, userName: '' })}
       />
 
       <Breadcrumb trail={['المستخدمون']} />
@@ -452,6 +519,7 @@ const UsersPage = () => {
               key={user.id}
               user={user}
               onDecision={handleDecision}
+              onDelete={handleDeleteStudent}
               processing={processing}
               onViewImage={openImage}
             />

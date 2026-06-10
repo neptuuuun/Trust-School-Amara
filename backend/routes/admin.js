@@ -5,6 +5,7 @@ const {
   createStudent,
   verifyAnnualPayment,
   rejectAnnualPayment,
+  deleteStudent,
 } = require('../controllers/adminController');
 
 // POST /api/admin/create-student
@@ -16,5 +17,10 @@ router.post('/verify-annual-payment', verifyToken, requireAdmin, verifyAnnualPay
 
 // POST /api/admin/reject-annual-payment
 router.post('/reject-annual-payment', verifyToken, requireAdmin, rejectAnnualPayment);
+
+// POST /api/admin/delete-student
+// Deletes Firebase Auth account + Firestore profile.
+// Returns photoUrl/idCardUrl so the frontend can clean up Supabase storage.
+router.post('/delete-student', verifyToken, requireAdmin, deleteStudent);
 
 module.exports = router;

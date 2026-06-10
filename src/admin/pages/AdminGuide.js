@@ -145,7 +145,7 @@ const AdminGuide = () => {
 
           <SubSection title="كيف يصل طلب التسجيل إليك">
             <p className="text-gray-700">
-              عندما يسجل طالب من خلال الموقع، يظهر حسابه في صفحة <strong>المستخدمون</strong>
+              عندما يسجل طالب من خلال الموقع، يظهر حسابه في صفحة <strong> المستخدمون</strong>
               بحالة <span className="font-semibold text-warning-700">«قيد المراجعة»</span>.
               مهمتك مراجعة بياناته ثم القبول أو الرفض.
             </p>

@@ -36,7 +36,7 @@ app.use(bodyParser.urlencoded({ extended: true }));
 
 // Initialize Firebase Admin
 try {
-  const serviceAccount = require('./serviceAccountKey.json');
+  const serviceAccount = require(process.env.GOOGLE_APPLICATION_CREDENTIALS);
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount)
   });

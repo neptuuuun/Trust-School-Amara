@@ -17,6 +17,9 @@ const firebaseConfig = {
 if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
   throw new Error('Firebase configuration is incomplete. Check your .env file for REACT_APP_FIREBASE_* variables.');
 }
+if (firebaseConfig.apiKey.startsWith('your_') || firebaseConfig.apiKey === 'your_firebase_api_key_here') {
+  throw new Error('Firebase API key is still a placeholder. Copy .env.example to .env and set real values.');
+}
 
 // Initialize Firebase (only once)
 const app = getApps().length ? getApp() : initializeApp(firebaseConfig);

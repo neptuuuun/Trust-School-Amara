@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import ServiceCard from '../components/ServiceCard';
+import heroBg from '../assets/images/home.jpg';
 import { Book, Globe, GraduationCap, Users, BarChart3, Target, Play, Phone } from 'lucide-react';
 import { useBranch } from '../contexts/BranchContext';
 import { buttonClasses } from '../components/ui/button';
@@ -68,8 +69,11 @@ const HomePage = () => {
     return (
         <div className="home-page">
             {/* Hero Section */}
-            <section className="relative flex min-h-[calc(100vh-5rem)] items-center overflow-hidden bg-gradient-hero text-white">
-                <div className="absolute inset-0 bg-primary-900/40" aria-hidden="true"></div>
+            <section
+                className="relative flex min-h-[calc(100vh-5rem)] items-center overflow-hidden text-white"
+                style={{ backgroundImage: `url(${heroBg})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
+            >
+                <div className="absolute inset-0 bg-primary-900/60" aria-hidden="true"></div>
                 <div className="container relative mx-auto px-6 py-20 text-center" dir="rtl">
                     <h1 className="mb-6 text-4xl font-extrabold leading-tight md:text-5xl lg:text-6xl">
                         مرحباً بكم في Trust School Amara

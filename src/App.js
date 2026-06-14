@@ -153,7 +153,7 @@ function EmailVerificationScreen({ resendVerificationEmail }) {
 
   return (
     <BlockedScreen>
-      <p className="text-gray-800 font-semibold mb-3">يرجى تأكيد البريد الإلكتروني للمتابعة.</p>
+      <p className="text-gray-800 font-semibold mb-3">يرجى الدخول للبريد الالكتروني لتأكيد الطلب</p>
       <p className="text-gray-700 text-sm leading-6 mb-3">
         في حال لم تجد رسالة التأكيد، يرجى التحقق من مجلد الرسائل غير المرغوب فيها (Spam / Junk).
       </p>

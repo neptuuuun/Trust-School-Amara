@@ -183,14 +183,24 @@ const SupportLessonRegistrationForm = () => {
         // Optimize (resize → WebP → compress) before upload. Falls back to original.
         const optimizedProof = await optimizeImage(paymentProof);
 
+        // Convert to ArrayBuffer to avoid Chrome's ERR_HTTP2_PROTOCOL_ERROR which
+        // occurs when the browser tries to stream a File/Blob body over HTTP/2.
+        const proofBuffer = await optimizedProof.arrayBuffer();
+        const proofContentType = optimizedProof.type || 'image/webp';
+
         const filePath = `support-lessons/${user.uid}/${Date.now()}.webp`;
         const { error: uploadError } = await supabase.storage
           .from('support-lesson-payments')
-          .upload(filePath, optimizedProof, {
-            contentType: optimizedProof.type || 'image/webp',
+          .upload(filePath, proofBuffer, {
+            contentType: proofContentType,
+            upsert: false,
+            cacheControl: '3600',
           });
 
-        if (uploadError) throw new Error('تعذر رفع صورة الإيصال. يرجى المحاولة مرة أخرى.');
+        if (uploadError) {
+          console.error('Supabase upload error:', uploadError);
+          throw new Error('تعذر رفع صورة الإيصال. يرجى المحاولة مرة أخرى.');
+        }
 
         const { data: publicUrlData } = supabase.storage
           .from('support-lesson-payments')

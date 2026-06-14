@@ -97,6 +97,23 @@ service cloud.firestore {
         && !(('verified' in request.resource.data) && request.resource.data.verified != resource.data.verified);
     }
 
+    // Allows a student with a verified email to submit (or resubmit) verification
+    // documents. The only locked field changing is verificationStatus
+    // ('unverified'|'rejected' → 'pending'). Presence of 'verificationRequest'
+    // in the incoming data proves an actual upload event occurred.
+    function isSubmittingVerificationRequest() {
+      return request.auth.token.email_verified == true
+        && resource.data.get('verificationStatus', 'unverified') in ['unverified', 'rejected']
+        && request.resource.data.verificationStatus == 'pending'
+        && ('verificationRequest' in request.resource.data)
+        && !(('role' in request.resource.data)            && request.resource.data.role != resource.data.role)
+        && !(('isAdmin' in request.resource.data)         && request.resource.data.isAdmin != resource.data.isAdmin)
+        && !(('verified' in request.resource.data)        && request.resource.data.verified == true)
+        && !(('accountVerified' in request.resource.data) && request.resource.data.accountVerified == true)
+        && !(('paymentVerified' in request.resource.data) && request.resource.data.paymentVerified == true)
+        && !(('yearlyFeePaid' in request.resource.data)   && request.resource.data.yearlyFeePaid == true);
+    }
+
     // ── Admins collection ─────────────────────────────────────────────────────
     // CRITICAL: admin documents are provisioned ONLY via the Admin SDK (backend
     // script) or the Firebase Console. NO client may ever write here — a client
@@ -145,7 +162,8 @@ service cloud.firestore {
         allow create: if isBranchAdmin(branchId) || isSafeUserCreate(uid);
         allow update: if isBranchAdmin(branchId)
           || (isSelf(uid) && isSafeUserSelfUpdate())
-          || (isSelf(uid) && isCompletingRegistration());
+          || (isSelf(uid) && isCompletingRegistration())
+          || (isSelf(uid) && isSubmittingVerificationRequest());
         allow delete: if isBranchAdmin(branchId);
       }
 

@@ -63,8 +63,18 @@ export const AuthProvider = ({ children }) => {
     if (!uid || !email) return null;
     try {
       const adminDoc = await getAdminByUid(uid);
+      console.log('[ADMIN DEBUG] ADMIN USER:', { uid, email });
+      console.log('[ADMIN DEBUG] ADMIN DOC from Firestore admins/', uid, ':', adminDoc);
       if (adminDoc && adminDoc.role === 'admin') {
         console.log('👑 User is admin for branch:', adminDoc.branchId);
+        const VALID_BRANCHES = ['boumerdes', 'bordj_menaiel'];
+        if (!VALID_BRANCHES.includes(adminDoc.branchId)) {
+          console.error(
+            '[ADMIN DEBUG] *** CRITICAL: admin branchId "' + adminDoc.branchId + '" is NOT a valid branch. ' +
+            'Expected one of: ' + VALID_BRANCHES.join(', ') + '. ' +
+            'Fix the branchId field in Firestore: admins/' + uid
+          );
+        }
         return adminDoc;
       }
       return null;
@@ -342,9 +352,13 @@ export const AuthProvider = ({ children }) => {
     if (data?.status === 'email_pending') {
       setEmailVerificationSyncing(true);
       try {
+        // Only transition status and emailVerified here.
+        // verificationStatus ('unverified' → 'pending') is set later by
+        // submitVerificationRequest when the student uploads their documents.
+        // isSafeUserSelfUpdate blocks client writes to verificationStatus.
         await setDoc(
           userRef,
-          { emailVerified: true, status: 'active', verificationStatus: 'pending', updatedAt: serverTimestamp() },
+          { emailVerified: true, status: 'active', updatedAt: serverTimestamp() },
           { merge: true }
         );
         setAccountStatus('active');

@@ -93,19 +93,19 @@ Students can register for:
 
 ---
 
-## Daily Workflow — What Happens Each Day
+## Workflow 
 
-### Morning (Admin Side)
+### Admin Side
 1. Admin logs in and checks the dashboard
 2. Reviews new student registrations → approves or rejects
 3. Reviews uploaded payment receipts → verifies or requests correction
 
-### During the Day (Student Side)
-4. Students see approval notifications
+### Student Side
+4. Students see approval notificatio
 5. Students who are approved can enroll in courses
 6. Students upload payment proofs for courses they want to join
 
-### End of Day (Admin Side)
+### Admin Side
 7. Admin approves course enrollments
 8. Admin sends announcements if needed
 9. Admin checks class capacity (is any class too full?)
@@ -168,9 +168,8 @@ Announcements can be targeted to specific pages of the website.
 1. **No automatic payment processing** — Students upload proof photos; admins verify manually
 2. **No automatic enrollment** — Admin must approve every registration
 3. **No attendance tracking** — Attendance must be tracked separately
-4. **No grade management** — Grades are not part of this system
-5. **No parent portal** — Parents access through the student's account
-6. **No mobile app** — Web browser only (works on phones but no dedicated app)
+4. **No parent portal** — Parents access through the student's account
+5. **No mobile app** — Web browser only (works on phones but no dedicated app)
 
 ---
 
@@ -180,8 +179,7 @@ Announcements can be targeted to specific pages of the website.
 |---|---|
 | Annual fee | 1,000 DZD |
 | Branches | 2 (Boumerdes, Bordj Menaiel) |
-| Firebase project name | trust-school |
-| Backend server port | 3001 |
+
 
 ---
 

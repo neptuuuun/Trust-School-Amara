@@ -812,6 +812,11 @@ const StudentDashboard = () => {
     normalizedVerificationStatus === 'rejected' ||
     normalizedVerificationStatus === 'unverified' ||
     normalizedVerificationStatus === '';
+  // Students awaiting email confirmation cannot submit documents yet.
+  const isEmailPending = String(studentData?.status || '').toLowerCase() === 'email_pending';
+  // Show upload section only when student hasn't submitted docs yet or was rejected.
+  // When docs are under review (pending), show a review-in-progress banner instead.
+  const showDocumentUpload = !isStudentVerified && !isStudentVerificationPending && !isEmailPending;
 
   const handleResubmitVerification = async () => {
     if (!user?.uid || !selectedBranchId) return;
@@ -1195,14 +1200,30 @@ const StudentDashboard = () => {
             </div>
           )}
 
-          {isStudentRejectedOrUnverified && !isStudentVerified && (
+          {isStudentVerificationPending && (
+            <div className="bg-yellow-50 border-2 border-yellow-200 rounded-xl p-6">
+              <div className="flex items-start gap-4">
+                <Clock className="w-8 h-8 text-yellow-600 flex-shrink-0 mt-1" aria-hidden="true" />
+                <div>
+                  <h3 className="text-xl font-bold text-yellow-800 mb-2">وثائقك قيد المراجعة</h3>
+                  <p className="text-yellow-700">تم استلام وثائقك وهي قيد المراجعة من طرف الإدارة. سيتم إعلامك بالنتيجة قريباً.</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {showDocumentUpload && (
             <div className="bg-white border-2 border-gray-200 rounded-xl p-6">
               <div className="flex items-start gap-4">
                 <AlertTriangle className="w-8 h-8 text-gray-700 flex-shrink-0 mt-1" />
                 <div className="flex-1">
-                  <h3 className="text-xl font-bold text-gray-900 mb-2">التحقق غير مكتمل</h3>
+                  <h3 className="text-xl font-bold text-gray-900 mb-2">
+                    {normalizedVerificationStatus === 'rejected' ? 'تم رفض طلب التحقق' : 'رفع وثائق التحقق'}
+                  </h3>
                   <p className="text-gray-700 mb-4">
-                    يمكنك إعادة رفع الوثائق لإرسال طلب تحقق جديد.
+                    {normalizedVerificationStatus === 'rejected'
+                      ? 'تم رفض طلبك السابق. يمكنك إعادة رفع الوثائق لإرسال طلب تحقق جديد.'
+                      : 'يرجى رفع الصورة الشخصية وصورة بطاقة الهوية حتى تتمكن الإدارة من مراجعة ملفك.'}
                   </p>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
@@ -1241,7 +1262,8 @@ const StudentDashboard = () => {
                     disabled={verificationSubmitting}
                     className="mt-4 px-6 py-3 bg-primary text-white rounded-lg hover:bg-primary-600 transition-colors font-semibold disabled:opacity-50"
                   >
-                    {verificationSubmitting ? 'جاري الإرسال...' : 'إرسال طلب تحقق جديد'}
+                    {verificationSubmitting ? 'جاري الإرسال...' :
+                      normalizedVerificationStatus === 'rejected' ? 'إعادة إرسال طلب التحقق' : 'إرسال طلب التحقق'}
                   </button>
                 </div>
               </div>

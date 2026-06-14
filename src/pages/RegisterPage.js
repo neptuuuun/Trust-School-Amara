@@ -2,10 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useBranch } from '../contexts/BranchContext';
-import { UserPlus, Mail, Lock, Building2, Camera, Upload, Eye, EyeOff } from 'lucide-react';
-import { registerUser } from '../services/userService';
+import { UserPlus, Mail, Lock, Building2, Eye, EyeOff } from 'lucide-react';
 import GoogleSignInButton from '../components/GoogleSignInButton';
-import { Button, buttonClasses } from '../components/ui/button';
+import { Button } from '../components/ui/button';
 import { Input, Label } from '../components/ui/input';
 import { Alert } from '../components/ui/feedback';
 
@@ -19,8 +18,6 @@ const RegisterPage = () => {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [branchId, setBranchId] = useState('');
-  const [profilePic, setProfilePic] = useState(null);
-  const [idCard, setIdCard] = useState(null);
   const [birthDate, setBirthDate] = useState('');
   const [birthPlace, setBirthPlace] = useState('');
   const [address, setAddress] = useState('');
@@ -154,29 +151,17 @@ const RegisterPage = () => {
       return;
     }
 
-    if (!profilePic) {
-      setError('الرجاء رفع صورة شخصية');
-      return;
-    }
-
-    if (!idCard) {
-      setError('الرجاء رفع صورة بطاقة الهوية');
-      return;
-    }
-
     setSubmitting(true);
-    
+
     try {
-      // Get branch info
       const branch = branches.find(b => b.id === currentBranchId) || selectedBranch;
-      
-      // Determine branchName
-      const finalBranchName = branch?.name || 
-        (currentBranchId === 'boumerdes' ? 'بومرداس' : 
+      const finalBranchName = branch?.name ||
+        (currentBranchId === 'boumerdes' ? 'بومرداس' :
          currentBranchId === 'bordj_menaiel' ? 'برج منايل' : currentBranchId);
-      
-      // Step 1: Create Firebase Auth user with COMPLETE data
-      const createdUser = await signup(email, password, {
+
+      // Create Firebase Auth account + initial Firestore document.
+      // Document uploads happen after the student reaches the dashboard.
+      await signup(email, password, {
         fullName,
         name: fullName,
         branchId: currentBranchId,
@@ -189,37 +174,11 @@ const RegisterPage = () => {
         phoneNumber,
       });
 
-      const userId = createdUser.uid;
-
-      // Step 2: Upload photos and complete user profile in Firestore
-      await registerUser(
-        {
-          fullName,
-          email,
-          birthDate,
-          birthPlace,
-          address,
-          phoneNumber,
-          branchId: currentBranchId,
-          branchName: finalBranchName,
-          registrationNumber,
-        },
-        userId,
-        profilePic,
-        idCard
-      );
-
-      // Step 3: Ensure branch is selected
       selectBranch(currentBranchId);
-
-      // Step 4: Clear saved form data
       sessionStorage.removeItem('registerFormData');
-      
-      // Give Firestore a moment to propagate before navigation
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
+
       navigate('/student-dashboard', { replace: true });
-      
+
     } catch (err) {
       console.error('Registration error:', err);
       
@@ -370,116 +329,6 @@ const RegisterPage = () => {
 
           <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm text-gray-700">
             <span className="font-medium">رقم التسجيل:</span> <span className="ms-2">{registrationNumber}</span>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              <Camera className="w-4 h-4 inline me-1" />
-              الصورة الشخصية *
-            </label>
-            <div className="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center hover:border-primary transition-colors">
-              {profilePic ? (
-                <div>
-                  <img
-                    src={URL.createObjectURL(profilePic)}
-                    alt="Profile"
-                    className="max-w-full h-32 object-cover mx-auto mb-4 rounded"
-                  />
-                  <p className="text-success-600 font-medium">{profilePic.name}</p>
-                  <button
-                    type="button"
-                    onClick={() => setProfilePic(null)}
-                    className="text-danger hover:text-danger-700 text-sm mt-2 hover:underline"
-                  >
-                    إزالة الصورة
-                  </button>
-                </div>
-              ) : (
-                <div>
-                  <Camera className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                  <p className="text-gray-600 mb-2">اضغط لرفع الصورة الشخصية</p>
-                  <p className="text-sm text-gray-500">JPG, PNG أقل من 5MB</p>
-                </div>
-              )}
-              <input
-                type="file"
-                accept="image/*"
-                onChange={(e) => {
-                  const file = e.target.files[0];
-                  if (!file) return;
-                  if (file.size > 5 * 1024 * 1024) {
-                    setError('حجم الصورة الشخصية يجب أن يكون أقل من 5 ميجابايت');
-                    e.target.value = '';
-                    return;
-                  }
-                  setProfilePic(file);
-                }}
-                className="hidden"
-                id="profile-pic-upload"
-              />
-              <label
-                htmlFor="profile-pic-upload"
-                className={buttonClasses({ size: 'sm', className: 'mt-4 cursor-pointer' })}
-              >
-                <Upload className="w-4 h-4" aria-hidden="true" />
-                اختيار صورة
-              </label>
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              <Upload className="w-4 h-4 inline me-1" />
-              صورة بطاقة الهوية *
-            </label>
-            <div className="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center hover:border-primary transition-colors">
-              {idCard ? (
-                <div>
-                  <img
-                    src={URL.createObjectURL(idCard)}
-                    alt="ID Card"
-                    className="max-w-full h-32 object-cover mx-auto mb-4 rounded"
-                  />
-                  <p className="text-success-600 font-medium">{idCard.name}</p>
-                  <button
-                    type="button"
-                    onClick={() => setIdCard(null)}
-                    className="text-danger hover:text-danger-700 text-sm mt-2 hover:underline"
-                  >
-                    إزالة الصورة
-                  </button>
-                </div>
-              ) : (
-                <div>
-                  <Upload className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                  <p className="text-gray-600 mb-2">اضغط لرفع صورة بطاقة الهوية</p>
-                  <p className="text-sm text-gray-500">JPG, PNG أقل من 5MB</p>
-                </div>
-              )}
-              <input
-                type="file"
-                accept="image/*"
-                onChange={(e) => {
-                  const file = e.target.files[0];
-                  if (!file) return;
-                  if (file.size > 5 * 1024 * 1024) {
-                    setError('حجم صورة البطاقة يجب أن يكون أقل من 5 ميجابايت');
-                    e.target.value = '';
-                    return;
-                  }
-                  setIdCard(file);
-                }}
-                className="hidden"
-                id="id-card-upload"
-              />
-              <label
-                htmlFor="id-card-upload"
-                className={buttonClasses({ size: 'sm', className: 'mt-4 cursor-pointer' })}
-              >
-                <Upload className="w-4 h-4" aria-hidden="true" />
-                اختيار صورة
-              </label>
-            </div>
           </div>
 
           <div className="flex items-start gap-2 mt-4">

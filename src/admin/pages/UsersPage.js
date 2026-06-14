@@ -47,15 +47,22 @@ const getImageUrl = (v) => {
 
 
 const STATUS_CONFIG = {
-  pending:  { label: 'قيد المراجعة', color: 'bg-warning-100 text-warning-800', icon: Clock },
-  verified: { label: 'مقبول',        color: 'bg-success-100 text-success-800', icon: CheckCircle },
-  active:   { label: 'مقبول',        color: 'bg-success-100 text-success-800', icon: CheckCircle },
-  rejected: { label: 'مرفوض',        color: 'bg-danger-100  text-danger-800',  icon: XCircle },
+  pending:       { label: 'قيد المراجعة',       color: 'bg-warning-100 text-warning-800', icon: Clock },
+  verified:      { label: 'مقبول',               color: 'bg-success-100 text-success-800', icon: CheckCircle },
+  active:        { label: 'مقبول',               color: 'bg-success-100 text-success-800', icon: CheckCircle },
+  rejected:      { label: 'مرفوض',               color: 'bg-danger-100  text-danger-800',  icon: XCircle },
+  email_pending: { label: 'في انتظار التأكيد',   color: 'bg-gray-100 text-gray-600',       icon: Clock },
+  unverified:    { label: 'غير مؤكد',            color: 'bg-gray-100 text-gray-600',       icon: Clock },
 };
 
 const getStatusConfig = (user) => {
-  const raw = String(user?.verificationStatus || user?.status || '').toLowerCase();
-  return STATUS_CONFIG[raw] || { label: raw || 'غير محدد', color: 'bg-gray-100 text-gray-700', icon: Clock };
+  const vs = String(user?.verificationStatus || '').toLowerCase();
+  const st = String(user?.status || '').toLowerCase();
+  // email not yet confirmed → email_pending badge regardless of verificationStatus
+  if (st === 'email_pending') return STATUS_CONFIG['email_pending'];
+  // use verificationStatus as primary source of truth
+  const key = vs || 'unverified';
+  return STATUS_CONFIG[key] || { label: key, color: 'bg-gray-100 text-gray-700', icon: Clock };
 };
 
 // ─── Field row inside card ───────────────────────────────────────────────────
@@ -197,10 +204,11 @@ const UserCard = ({ user, onDecision, onDelete, processing, onViewImage }) => {
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 const STATUS_FILTERS = [
-  { value: 'all',      label: 'الكل' },
-  { value: 'pending',  label: 'قيد المراجعة' },
-  { value: 'verified', label: 'مقبول' },
-  { value: 'rejected', label: 'مرفوض' },
+  { value: 'all',           label: 'الكل' },
+  { value: 'email_pending', label: 'ينتظر تأكيد البريد' },
+  { value: 'pending',       label: 'قيد المراجعة' },
+  { value: 'verified',      label: 'مقبول' },
+  { value: 'rejected',      label: 'مرفوض' },
 ];
 
 const UsersPage = () => {
@@ -241,7 +249,14 @@ const UsersPage = () => {
       // destroys any in-progress form data the admin may have typed.
       if (isFirstLoad) setLoading(true);
       try {
+        console.log('[ADMIN DEBUG] ADMIN USER:', currentUser?.uid, currentUser?.email);
+        console.log('[ADMIN DEBUG] ADMIN BRANCH ID:', selectedBranchId);
         const data = await getUsersByBranch(selectedBranchId);
+        console.log('[ADMIN DEBUG] RAW USERS returned to UsersPage:', data.length);
+        const TARGET_UID = 'gZ7QAUB3t8NAl1rivLyMWrz5kUk2';
+        const pendingUsers = data.filter(u => String(u?.verificationStatus || '').toLowerCase() === 'pending');
+        console.log('[ADMIN DEBUG] PENDING USERS:', pendingUsers.length);
+        console.log('[ADMIN DEBUG] STUDENT IN PENDING:', pendingUsers.find(u => u.id === TARGET_UID || u.uid === TARGET_UID) || 'NOT FOUND');
         setUsers(data);
         setError('');
       } catch (err) {
@@ -269,9 +284,12 @@ const UsersPage = () => {
     // Status filter
     if (statusFilter !== 'all') {
       list = list.filter((u) => {
-        const vs = String(u?.verificationStatus || u?.status || '').toLowerCase();
-        if (statusFilter === 'verified') return vs === 'verified' || vs === 'active';
-        return vs === statusFilter;
+        const vs  = String(u?.verificationStatus || '').toLowerCase();
+        const st  = String(u?.status || '').toLowerCase();
+        if (statusFilter === 'verified')      return vs === 'verified';
+        if (statusFilter === 'email_pending') return st === 'email_pending';
+        if (statusFilter === 'pending')       return vs === 'pending' && st !== 'email_pending';
+        return vs === statusFilter || st === statusFilter;
       });
     }
 
@@ -280,13 +298,13 @@ const UsersPage = () => {
     if (q) {
       list = list.filter(
         (u) =>
-          (u.fullName         || '').toLowerCase().includes(q) ||
-          (u.email            || '').toLowerCase().includes(q) ||
-          (u.registrationNumber||'').toLowerCase().includes(q) ||
-          (u.phone            || '').toLowerCase().includes(q) ||
-          (u.phoneNumber      || '').toLowerCase().includes(q) ||
-          (u.address          || '').toLowerCase().includes(q) ||
-          (u.birthPlace       || '').toLowerCase().includes(q)
+          (u.fullName          || '').toLowerCase().includes(q) ||
+          (u.email             || '').toLowerCase().includes(q) ||
+          (u.registrationNumber|| '').toLowerCase().includes(q) ||
+          (u.phone             || '').toLowerCase().includes(q) ||
+          (u.phoneNumber       || '').toLowerCase().includes(q) ||
+          (u.address           || '').toLowerCase().includes(q) ||
+          (u.birthPlace        || '').toLowerCase().includes(q)
       );
     }
 
@@ -295,12 +313,14 @@ const UsersPage = () => {
 
   // Counts per status for the filter pills
   const counts = useMemo(() => {
-    const c = { all: users.length, pending: 0, verified: 0, rejected: 0 };
+    const c = { all: users.length, email_pending: 0, pending: 0, verified: 0, rejected: 0 };
     users.forEach((u) => {
-      const vs = String(u?.verificationStatus || u?.status || '').toLowerCase();
-      if (vs === 'pending')              c.pending++;
-      else if (vs === 'verified' || vs === 'active') c.verified++;
-      else if (vs === 'rejected')        c.rejected++;
+      const vs = String(u?.verificationStatus || '').toLowerCase();
+      const st = String(u?.status || '').toLowerCase();
+      if (st === 'email_pending')                       c.email_pending++;
+      else if (vs === 'pending')                        c.pending++;
+      else if (vs === 'verified') c.verified++;
+      else if (vs === 'rejected')                       c.rejected++;
     });
     return c;
   }, [users]);

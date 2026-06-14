@@ -3,7 +3,7 @@
  * Centralized service for user management with Supabase storage and Firebase Firestore
  */
 
-import { db } from '../firebase';
+import { db, auth } from '../firebase';
 import { collection, doc, getDoc, getDocs, setDoc, updateDoc, query, where, orderBy, serverTimestamp } from 'firebase/firestore';
 import { supabase } from '../supabase';
 import { recordUserActivity, USER_STATUS } from './userLifecycleService';
@@ -392,9 +392,9 @@ export const getAllUsers = async () => {
         branchId: branchId,
         ...doc.data()
       }));
-      allUsers.push(
-        ...branchUsers.filter((user) => user?.emailVerified !== false && user?.status !== 'email_pending')
-      );
+      // Include all students — admin should see all registrations including
+      // those awaiting email verification (status: email_pending).
+      allUsers.push(...branchUsers);
     } catch (error) {
       console.error(`Error fetching users from branch ${branchId}:`, error);
     }
@@ -564,6 +564,13 @@ export const submitVerificationRequest = async (branchId, userId, profilePicFile
   if (!profilePicFile) throw new Error('profilePicFile is required');
   if (!idCardFile) throw new Error('idCardFile is required');
 
+  // Force-refresh the ID token so Firestore rules see email_verified: true in the JWT.
+  // currentUser.reload() updates local state only; without getIdToken(true) the JWT
+  // claim can still be false for up to 1 hour after email verification.
+  if (auth.currentUser) {
+    await auth.currentUser.getIdToken(true);
+  }
+
   const { photoUrl, idCardUrl } = await uploadUserFiles(userId, profilePicFile, idCardFile);
 
   const userRef = doc(db, `branches/${branchId}/users`, userId);
@@ -589,13 +596,25 @@ export const submitVerificationRequest = async (branchId, userId, profilePicFile
  */
 export const getUsersByBranch = async (branchId) => {
   if (!branchId) {
+    console.warn('getUsersByBranch: no branchId provided — returning []');
     return [];
   }
+
+  const VALID_BRANCHES = ['boumerdes', 'bordj_menaiel'];
+  if (!VALID_BRANCHES.includes(branchId)) {
+    console.error(
+      `[ADMIN DEBUG] getUsersByBranch called with INVALID branchId: "${branchId}".` +
+      ` Valid values: ${VALID_BRANCHES.join(', ')}.` +
+      ` This usually means the admins/{uid}.branchId field in Firestore has a typo.`
+    );
+  }
+
+  console.log(`[ADMIN DEBUG] QUERY BRANCH: "${branchId}"`);
 
   try {
     const usersRef = collection(db, `branches/${branchId}/users`);
     let qRef;
-    
+
     try {
       qRef = query(usersRef, orderBy('createdAt', 'desc'));
     } catch (e) {
@@ -604,15 +623,35 @@ export const getUsersByBranch = async (branchId) => {
     }
 
     const snapshot = await getDocs(qRef);
-    return snapshot.docs
-      .map(doc => ({
-        id: doc.id,
-        branchId: branchId,
-        ...doc.data()
-      }))
-      .filter((user) => user?.emailVerified !== false && user?.status !== 'email_pending');
+    // Return all students — admin sees every registration including those
+    // awaiting email verification (status: email_pending).
+    const users = snapshot.docs.map(doc => ({
+      id: doc.id,
+      branchId: branchId,
+      ...doc.data()
+    }));
+
+    console.log(`[ADMIN DEBUG] RAW USERS FROM FIRESTORE (branch="${branchId}"):`, users.length, 'docs');
+    console.log('[ADMIN DEBUG] RAW USERS FROM FIRESTORE:', users);
+    const TARGET_UID = 'gZ7QAUB3t8NAl1rivLyMWrz5kUk2';
+    console.log(
+      '[ADMIN DEBUG] MATCHING STUDENT (uid=' + TARGET_UID + '):',
+      users.find(u => u.id === TARGET_UID || u.uid === TARGET_UID) || 'NOT FOUND'
+    );
+
+    return users;
   } catch (error) {
-    console.error(`Error fetching users from branch ${branchId}:`, error);
+    console.error(
+      `[ADMIN DEBUG] getUsersByBranch FAILED for branch="${branchId}":`,
+      error.code, error.message
+    );
+    if (error.code === 'permission-denied') {
+      console.error(
+        '[ADMIN DEBUG] permission-denied — this means isBranchAdmin() returned false in Firestore rules.' +
+        ' The most likely cause: admins/{uid}.branchId in Firestore does NOT match the queried path "' + branchId + '".' +
+        ' Check the Firestore admins collection and verify the branchId field.'
+      );
+    }
     return [];
   }
 };

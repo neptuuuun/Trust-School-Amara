@@ -215,16 +215,10 @@ function RequireStudent() {
     return <EmailVerificationScreen resendVerificationEmail={resendVerificationEmail} />;
   }
 
-  const normalizedVerificationStatus = String(verificationStatus || '').toLowerCase();
-
-  if (normalizedVerificationStatus === 'pending') {
-    return (
-      <BlockedScreen>
-        <p className="text-gray-800 font-semibold mb-2">تم تأكيد البريد الإلكتروني بنجاح.</p>
-        <p className="text-gray-800 font-semibold">حسابك قيد المراجعة من طرف الإدارة.</p>
-      </BlockedScreen>
-    );
-  }
+  // Admin approval is NOT required for dashboard access.
+  // verificationStatus ('pending', 'verified', 'rejected') only affects
+  // enrollment / document status displayed inside the dashboard.
+  // A student who verified their email has immediate dashboard access.
 
   if (emailVerificationSyncing === true) {
     return (

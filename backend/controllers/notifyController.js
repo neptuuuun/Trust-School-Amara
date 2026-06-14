@@ -25,8 +25,8 @@ async function userDecision(req, res) {
 
       // Email to student
       if (email) {
-        const { subject, html } = templates.accountApproved(name);
-        await sendEmail(email, subject, html);
+        const { subject, html, text } = templates.accountApproved(name);
+        await sendEmail(email, subject, html, text, { refId: `acct-approved:${userId}` });
       }
 
       // Notify branch admins (so other admins are aware)
@@ -37,8 +37,8 @@ async function userDecision(req, res) {
 
       // Email to student
       if (email) {
-        const { subject, html } = templates.accountRejected(name);
-        await sendEmail(email, subject, html);
+        const { subject, html, text } = templates.accountRejected(name);
+        await sendEmail(email, subject, html, text, { refId: `acct-rejected:${userId}` });
       }
     }
   } catch (err) {
@@ -74,8 +74,8 @@ async function paymentEvent(req, res) {
       await createNotification(studentId, title, body, { branchId, paymentId, paymentType: type });
 
       if (email) {
-        const { subject, html } = templates.courseApproved(name, course);
-        await sendEmail(email, subject, html);
+        const { subject, html, text } = templates.courseApproved(name, course);
+        await sendEmail(email, subject, html, text, { refId: `course-approved:${paymentId || studentId}` });
       }
     } else {
       const title = 'تحديث حول طلبك';
@@ -83,8 +83,8 @@ async function paymentEvent(req, res) {
       await createNotification(studentId, title, body, { branchId, paymentId, paymentType: type });
 
       if (email && (type === 'language' || type === 'training')) {
-        const { subject, html } = templates.courseRejected(name, course);
-        await sendEmail(email, subject, html);
+        const { subject, html, text } = templates.courseRejected(name, course);
+        await sendEmail(email, subject, html, text, { refId: `course-rejected:${paymentId || studentId}` });
       }
     }
   } catch (err) {

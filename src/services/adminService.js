@@ -79,9 +79,9 @@ export const initializeAdminAccounts = async () => {
       role: 'admin'
     },
     {
-      uid: 'PLACEHOLDER_UID_BORDJ_MNAIEL', // Will be replaced with actual UID after user creation
+      uid: 'PLACEHOLDER_UID_BORDJ_MENAIEL', // Will be replaced with actual UID after user creation
       email: 'trustschoolamara@gmail.com',
-      branchId: 'bordj_mnaiel',
+      branchId: 'bordj_menaiel',
       role: 'admin'
     }
   ];

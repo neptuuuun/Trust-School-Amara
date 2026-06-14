@@ -23,7 +23,7 @@ functions/node_modules/
 .env.production
 .env.production.local
 .env.staging
-
+.vercel.env
 # Firebase service account keys — contain admin-level credentials
 serviceAccountKey.json
 serviceAccountKey*.json

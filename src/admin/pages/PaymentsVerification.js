@@ -199,6 +199,20 @@ const saveCounters = (branchId, c) => {
   try { localStorage.setItem(counterKey(branchId), JSON.stringify(c)); } catch { /* ignore */ }
 };
 
+// Prorated-billing breakdown for support lessons. A student who enrolls mid-cycle
+// only pays for the sessions left in the month, so the backend stores the proration
+// inputs on the registration. Returns null when those fields are absent (older/legacy
+// registrations) so callers fall back to the plain amount with no proration line.
+const getSupportProration = (d = {}) => {
+  const proratedAmount   = toNumber(d.proratedAmount);
+  const pricePerSession  = toNumber(d.pricePerSession);
+  const sessionsPerMonth = toNumber(d.sessionsPerMonth);
+  const remaining        = toNumber(d.remainingSessionsAtEnrollment);
+  if (proratedAmount == null || pricePerSession == null
+      || sessionsPerMonth == null || remaining == null) return null;
+  return { proratedAmount, pricePerSession, sessionsPerMonth, remaining };
+};
+
 // Registration detail rows per payment type.
 const registrationRows = (p) => {
   const d = p.data || {};
@@ -229,7 +243,11 @@ const registrationRows = (p) => {
               .join('، ')
           : ''],
       ];
-    case 'supportLesson':
+    case 'supportLesson': {
+      // Mid-cycle enrollments are billed pro rata; surface the calculation so an
+      // admin can reconcile the receipt against the expected amount. Absent on
+      // legacy registrations → proration is null and these rows are omitted.
+      const proration = getSupportProration(d);
       return [
         ['المادة', d.subjectName || d.lessonName],
         ['المجموعة', d.groupName],
@@ -242,11 +260,18 @@ const registrationRows = (p) => {
               .join('، ')
           : ''],
         ['عدد الأشهر', d.durationInMonths ?? (Array.isArray(d.selectedMonths) ? d.selectedMonths.length : null)],
-        ['السعر الشهري', d.monthlyPrice != null ? formatMoney(d.monthlyPrice) : null],
+        // Full monthly price — labelled "الكامل" only when a prorated amount sits
+        // beside it; legacy rows keep the plain "السعر الشهري" label and amount.
+        [proration ? 'السعر الشهري الكامل' : 'السعر الشهري', d.monthlyPrice != null ? formatMoney(d.monthlyPrice) : null],
+        // Prorated amount due = remaining sessions × price per session.
+        ['المبلغ التناسبي المستحق', proration
+          ? `${proration.remaining} من ${proration.sessionsPerMonth} حصة متبقية × ${formatMoney(proration.pricePerSession)} = ${formatMoney(proration.proratedAmount)}`
+          : null],
         ['الرسوم السنوية مضمّنة', d.includesAnnualFee ? 'نعم' : 'لا'],
         ['الرسوم السنوية', d.includesAnnualFee && d.annualFeeAmount != null ? formatMoney(d.annualFeeAmount) : null],
         ['الإجمالي (شامل الرسوم)', d.includesAnnualFee && d.totalAmount != null ? formatMoney(d.totalAmount) : null],
       ];
+    }
     case 'annual':
       return [
         ['المستوى', d.level],

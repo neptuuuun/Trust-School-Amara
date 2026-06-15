@@ -24,7 +24,10 @@ const AddEditLanguageModal = ({ branchId, registration, onClose, onSuccess }) =>
   const [searchQuery,  setSearchQuery]  = useState('');
   const [showDropdown, setShowDropdown] = useState(false);
   const [selectedUser, setSelectedUser] = useState(null);
+  const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const searchRef = useRef(null);
+  const optionRefs = useRef([]);
+  const listboxId = 'language-student-listbox';
 
   // ── Language / level selector ────────────────────────────────────────────────
   const [allLanguages,     setAllLanguages]     = useState([]);
@@ -79,6 +82,18 @@ const AddEditLanguageModal = ({ branchId, registration, onClose, onSuccess }) =>
     return () => document.removeEventListener('mousedown', h);
   }, []);
 
+  // Reset highlight when the query changes or the dropdown visibility toggles
+  useEffect(() => {
+    setHighlightedIndex(-1);
+  }, [searchQuery, showDropdown]);
+
+  // Keep the highlighted option scrolled into view
+  useEffect(() => {
+    if (showDropdown && highlightedIndex >= 0 && optionRefs.current[highlightedIndex]) {
+      optionRefs.current[highlightedIndex].scrollIntoView({ block: 'nearest' });
+    }
+  }, [highlightedIndex, showDropdown]);
+
   const filteredUsers = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return allUsers.slice(0, 8);
@@ -105,6 +120,33 @@ const AddEditLanguageModal = ({ branchId, registration, onClose, onSuccess }) =>
       setExistingRegs([]);
     } finally {
       setLoadingExisting(false);
+    }
+  };
+
+  // Keyboard navigation for the search dropdown
+  const handleKeyDown = (e) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (!showDropdown) { setShowDropdown(true); return; }
+      setHighlightedIndex((i) => (i < filteredUsers.length - 1 ? i + 1 : 0));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!showDropdown) { setShowDropdown(true); return; }
+      setHighlightedIndex((i) => (i > 0 ? i - 1 : filteredUsers.length - 1));
+    } else if (e.key === 'Enter') {
+      // Never let Enter submit the form while choosing from the list
+      if (showDropdown && filteredUsers.length > 0) {
+        e.preventDefault();
+        if (highlightedIndex >= 0) handleSelectUser(filteredUsers[highlightedIndex]);
+      }
+    } else if (e.key === 'Escape') {
+      // Close only the dropdown, not the surrounding modal
+      if (showDropdown) {
+        e.stopPropagation();
+        setShowDropdown(false);
+      }
+    } else if (e.key === 'Tab') {
+      setShowDropdown(false);
     }
   };
 
@@ -255,27 +297,46 @@ const AddEditLanguageModal = ({ branchId, registration, onClose, onSuccess }) =>
                   value={searchQuery}
                   onChange={(e) => { setSearchQuery(e.target.value); setSelectedUser(null); setShowDropdown(true); }}
                   onFocus={() => setShowDropdown(true)}
+                  onKeyDown={handleKeyDown}
                   placeholder="ابحث بالاسم أو البريد..."
                   disabled={loadingUsers}
                   className="w-full rounded-lg border border-gray-300 py-2 ps-9 pe-3 text-sm focus:border-primary focus:ring-2 focus:ring-primary/30"
+                  role="combobox"
+                  aria-expanded={showDropdown && filteredUsers.length > 0}
+                  aria-controls={listboxId}
+                  aria-activedescendant={highlightedIndex >= 0 ? `${listboxId}-option-${highlightedIndex}` : undefined}
+                  autoComplete="off"
                 />
                 {loadingUsers && <Loader2 className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-gray-400" />}
               </div>
 
               {showDropdown && !loadingUsers && filteredUsers.length > 0 && (
-                <ul className="absolute z-10 mt-1 max-h-44 w-full overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg">
-                  {filteredUsers.map((u) => (
-                    <li key={u.id}>
-                      <button type="button" onMouseDown={() => handleSelectUser(u)}
-                        className="flex w-full items-center gap-3 px-4 py-2.5 text-start text-sm hover:bg-gray-50">
-                        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10">
-                          <User className="h-3.5 w-3.5 text-primary" />
-                        </div>
-                        <div className="min-w-0">
-                          <p className="truncate font-medium text-gray-900">{u.fullName || u.name || '—'}</p>
-                          <p className="truncate text-xs text-gray-500">{u.email}</p>
-                        </div>
-                      </button>
+                <ul
+                  id={listboxId}
+                  role="listbox"
+                  className="absolute z-10 mt-1 max-h-44 w-full overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg"
+                >
+                  {filteredUsers.map((u, index) => (
+                    <li
+                      key={u.id}
+                      id={`${listboxId}-option-${index}`}
+                      role="option"
+                      aria-selected={highlightedIndex === index}
+                      ref={(el) => (optionRefs.current[index] = el)}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => handleSelectUser(u)}
+                      onMouseEnter={() => setHighlightedIndex(index)}
+                      className={`flex w-full cursor-pointer items-center gap-3 px-4 py-2.5 text-start text-sm ${
+                        highlightedIndex === index ? 'bg-gray-100' : 'hover:bg-gray-50'
+                      }`}
+                    >
+                      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10">
+                        <User className="h-3.5 w-3.5 text-primary" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate font-medium text-gray-900">{u.fullName || u.name || '—'}</p>
+                        <p className="truncate text-xs text-gray-500">{u.email}</p>
+                      </div>
                     </li>
                   ))}
                 </ul>

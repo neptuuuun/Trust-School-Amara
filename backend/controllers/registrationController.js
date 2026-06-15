@@ -44,6 +44,87 @@ function computeExpiryDate(startDate = new Date()) {
 }
 
 
+// ── Prorated-billing helpers (mid-cycle support enrolments) ───────────────────
+// Support lessons are billed per calendar month. A student who enrols partway
+// through the month should only pay for the sessions that still remain, so we
+// snapshot the proration inputs onto the registration for the admin review
+// screen to display. The cycle is the calendar month of the start date.
+
+// Arabic weekday labels (as stored on class schedule rows) → JS Date#getDay()
+// index (0 = Sunday … 6 = Saturday). Tolerates both spellings of "Monday".
+const AR_WEEKDAY_TO_INDEX = {
+  'الأحد': 0,
+  'الاثنين': 1, 'الإثنين': 1,
+  'الثلاثاء': 2,
+  'الأربعاء': 3,
+  'الخميس': 4,
+  'الجمعة': 5,
+  'السبت': 6,
+};
+
+// Count how many times `weekday` falls within [fromDay, toDay] of month/year.
+function countWeekdayOccurrences(year, month, weekday, fromDay, toDay) {
+  let count = 0;
+  for (let day = fromDay; day <= toDay; day++) {
+    if (new Date(year, month, day).getDay() === weekday) count++;
+  }
+  return count;
+}
+
+/**
+ * Compute the prorated-billing snapshot for a support-lesson enrolment.
+ *
+ * @param {Array}  schedules    class weekly schedule rows ({ day, start, end })
+ * @param {number} monthlyPrice authoritative full monthly price (DZD)
+ * @param {Date}   startDate    enrolment / subscription start date
+ * @returns {object|null} proration fields, or null when it can't be computed
+ *          (no schedule, no price, or no datable sessions in the month) so the
+ *          caller omits them and the client falls back to the plain amount.
+ */
+function computeSupportProration(schedules, monthlyPrice, startDate) {
+  const price = Number(monthlyPrice);
+  if (!Array.isArray(schedules) || schedules.length === 0) return null;
+  if (!Number.isFinite(price) || price <= 0) return null;
+  if (!(startDate instanceof Date) || Number.isNaN(startDate.getTime())) return null;
+
+  const year     = startDate.getFullYear();
+  const month    = startDate.getMonth();
+  const startDay = startDate.getDate();
+  const lastDay  = new Date(year, month + 1, 0).getDate();
+
+  // Sessions before the start day are already over (completed); the session on
+  // the start day itself still counts as attendable (remaining).
+  let sessionsPerMonth = 0;
+  let completed        = 0;
+  for (const row of schedules) {
+    const weekday = AR_WEEKDAY_TO_INDEX[String(row?.day || '').trim()];
+    if (weekday === undefined) continue;               // unknown/blank day → skip row
+    sessionsPerMonth += countWeekdayOccurrences(year, month, weekday, 1, lastDay);
+    completed        += countWeekdayOccurrences(year, month, weekday, 1, startDay - 1);
+  }
+
+  if (sessionsPerMonth <= 0) return null;              // no datable sessions → no proration
+
+  const remaining       = sessionsPerMonth - completed;
+  // Per-session price is rounded to the nearest dinar and proratedAmount is then
+  // remaining × pricePerSession, so the breakdown shown to the admin always
+  // multiplies out exactly. (When monthlyPrice isn't evenly divisible by the
+  // session count, a full month can differ from monthlyPrice by a few dinars.)
+  const pricePerSession = Math.round(price / sessionsPerMonth);
+  const proratedAmount  = remaining * pricePerSession;
+  const cycleMonthKey   = `${year}-${String(month + 1).padStart(2, '0')}`;
+
+  return {
+    pricePerSession,
+    sessionsPerMonth,
+    completedSessionsAtEnrollment: completed,
+    remainingSessionsAtEnrollment: remaining,
+    proratedAmount,
+    cycleMonthKey,
+  };
+}
+
+
 // ── Study-year helpers ────────────────────────────────────────────────────────
 
 function normalizeSupportStudyYear(lessonData = {}) {
@@ -308,6 +389,15 @@ const createSupportLessonRegistration = async (req, res, next) => {
     const serverMonthlyPrice = Number(lessonData.price) || 0;
     const serverTotalPrice   = serverMonthlyPrice * durationInMonths;
 
+    // ── Mid-cycle proration snapshot ─────────────────────────────────────────
+    // Null when not computable (no schedule / price / datable sessions) so the
+    // payload simply omits the fields and the admin UI falls back to the amount.
+    const proration = computeSupportProration(
+      Array.isArray(lessonData.schedules) ? lessonData.schedules : [],
+      serverMonthlyPrice,
+      startDateObj,
+    );
+
     // ── Write registration ───────────────────────────────────────────────────
     const payload = {
       branchId,
@@ -339,6 +429,10 @@ const createSupportLessonRegistration = async (req, res, next) => {
       status:         'pending',
       monthlyPrice:   serverMonthlyPrice || null,
       totalPrice:     serverTotalPrice   || null,
+      // Prorated-billing snapshot for mid-cycle enrolments (proratedAmount,
+      // pricePerSession, sessionsPerMonth, completed/remainingSessionsAtEnrollment,
+      // cycleMonthKey). Absent on registrations where it can't be derived.
+      ...(proration || {}),
       // Annual fee bundling — first support registration of the academic year.
       includesAnnualFee,
       annualFeeAmount: includesAnnualFee ? ANNUAL_FEE_DZD : 0,

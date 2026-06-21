@@ -65,7 +65,11 @@ async function resolveAdminBranch(uid, email, requestedBranchId) {
   try {
     const snap = await db.collection('admins').doc(uid).get();
     if (snap.exists) {
-      return snap.data()?.branchId || null;
+      const d = snap.data() || {};
+      // A deactivated employee (active:false) loses all access immediately.
+      // A missing `active` field defaults to active (backward compat).
+      if (d.active === false) return null;
+      return d.branchId || null;
     }
   } catch {}
 
@@ -99,4 +103,29 @@ async function isAdmin(uid, email, branchId) {
   return (await resolveAdminBranch(uid, email, branchId)) === branchId;
 }
 
-module.exports = { verifyToken, requireAdmin, isAdmin };
+/**
+ * After verifyToken: confirm the caller is the cross-branch OWNER.
+ *
+ * Unlike requireAdmin, the owner is NOT bound to a branch — they have read
+ * access to every branch's business data. Owner status is authoritative from the
+ * global `owners` collection (provisioned via Admin SDK only). Attaches the
+ * resolved owner doc to req.owner.
+ */
+const requireOwner = async (req, res, next) => {
+  const uid = req.user?.uid;
+  if (!uid) {
+    return res.status(401).json({ code: 'unauthenticated', message: 'Authentication required.' });
+  }
+  try {
+    const snap = await db.collection('owners').doc(uid).get();
+    if (!snap.exists) {
+      return res.status(403).json({ code: 'permission-denied', message: 'Owner access required.' });
+    }
+    req.owner = { uid, ...snap.data() };
+    next();
+  } catch {
+    return res.status(403).json({ code: 'permission-denied', message: 'Could not verify owner access.' });
+  }
+};
+
+module.exports = { verifyToken, requireAdmin, requireOwner, isAdmin };

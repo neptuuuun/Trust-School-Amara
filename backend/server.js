@@ -7,8 +7,15 @@ const rateLimit    = require('express-rate-limit');
 const adminRoutes    = require('./routes/admin');
 const regRoutes      = require('./routes/registrations');
 const supportLessonRegRoutes = require('./routes/supportLessonRegistrations');
-const correctionRoutes = require('./routes/corrections');
+const supportSessionRoutes = require('./routes/supportSessions');
+const academicRoutes = require('./routes/academic');
+const chargilyRoutes = require('./routes/chargily');
+const ledgerRoutes   = require('./routes/ledger');
+const ownerRoutes    = require('./routes/owner');
 const notifyRoutes   = require('./routes/notify');
+const auditRoutes    = require('./routes/audit');
+const { verifyToken, requireAdmin } = require('./middleware/auth');
+const { logAudit }   = require('./controllers/ledgerController');
 const errorHandler   = require('./middleware/errorHandler');
 const { startCronJobs } = require('./services/cronService');
 
@@ -41,6 +48,11 @@ app.use(cors({
   credentials:     true,
 }));
 
+// ── Webhook raw-body capture (MUST come before express.json) ─────────────────
+// Chargily signature verification requires the untouched raw bytes.
+// express.raw() for this path prevents express.json() from consuming the body.
+app.use('/api/chargily/webhook', express.raw({ type: 'application/json' }));
+
 // ── Body parsing ──────────────────────────────────────────────────────────────
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
@@ -68,10 +80,24 @@ app.use('/api', generalLimiter);
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.use('/api/admin',                       sensitiveLimiter, adminRoutes);
+app.use('/api/academic',                    sensitiveLimiter, academicRoutes);
 app.use('/api/registrations',               sensitiveLimiter, regRoutes);
 app.use('/api/support-lesson-registrations', sensitiveLimiter, supportLessonRegRoutes);
-app.use('/api/corrections',                 sensitiveLimiter, correctionRoutes);
+// Session tracking is high-frequency (an admin marks many sessions; students poll a
+// quote) and low-risk → general limiter only (the global 300/15min on /api applies).
+app.use('/api/support-sessions',            supportSessionRoutes);
+app.use('/api/chargily',                    sensitiveLimiter, chargilyRoutes);
+// Audit logging must capture EVERY admin action — completeness matters more than
+// abuse-throttling — so it runs under the GENERAL limiter (300/15min, applied to
+// all /api above), NOT the strict sensitive cap. Registered before the /api/ledger
+// mount so this handler answers first and the request never reaches sensitiveLimiter.
+app.post('/api/ledger/audit',               verifyToken, requireAdmin, logAudit);
+// Ledger recorder (admin-bound) + owner analytics (owner-only, read).
+app.use('/api/ledger',                      sensitiveLimiter, ledgerRoutes);
+app.use('/api/owner',                       ownerRoutes);
 app.use('/api/notify',                      notifyRoutes);
+// Per-entity audit history (owner = any branch, admin = own branch; enforced in handler).
+app.use('/api/audit',                       auditRoutes);
 
 // ── 404 + global error handler ────────────────────────────────────────────────
 app.use((_req, res) =>

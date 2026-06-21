@@ -4,8 +4,14 @@ service cloud.firestore {
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
+    // The caller's admin document. Firestore caches identical get() calls within a
+    // single rule evaluation, so the repeated reads below count as one access.
+    function adminDoc() {
+      return get(/databases/$(database)/documents/admins/$(request.auth.uid)).data;
+    }
+
     function getAdminBranchId() {
-      return get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.branchId;
+      return adminDoc().branchId;
     }
 
     function isAdmin() {
@@ -13,8 +19,25 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
     }
 
+    // An admin whose account has not been deactivated. A missing `active` field
+    // defaults to true so legacy admin docs (provisioned before this field existed)
+    // keep working without a migration. Deactivating an employee (active:false)
+    // revokes their Firestore access immediately.
+    function isActiveAdmin() {
+      return isAdmin() && adminDoc().get('active', true) != false;
+    }
+
     function isBranchAdmin(branchId) {
-      return isAdmin() && getAdminBranchId() == branchId;
+      return isActiveAdmin() && getAdminBranchId() == branchId;
+    }
+
+    // Owner — cross-branch, read-only business-intelligence role. Provisioned ONLY
+    // via the Admin SDK (backend script). An owner can READ every branch's data;
+    // they never write through client rules — all owner-facing mutations go through
+    // the Express backend (Admin SDK), which bypasses these rules entirely.
+    function isOwner() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/owners/$(request.auth.uid));
     }
 
     function isAuthenticated() {
@@ -53,6 +76,10 @@ service cloud.firestore {
     }
 
     // Self-update may not change role/isAdmin or any verification/payment flag.
+    // The support-level fields (distinguishedSubjectsAverage / supportClassification)
+    // are likewise server-controlled: they are written ONLY by the Express backend
+    // (Admin SDK) during the support-enrollment flow or by an admin correction, so a
+    // student can never tamper with their own classification from the console.
     function isSafeUserSelfUpdate() {
       return !(('role' in request.resource.data) && request.resource.data.role != resource.data.role)
         && !(('isAdmin' in request.resource.data) && request.resource.data.isAdmin != resource.data.isAdmin)
@@ -62,7 +89,17 @@ service cloud.firestore {
         && !(('paymentVerified' in request.resource.data) && request.resource.data.paymentVerified != resource.data.paymentVerified)
         && !(('accountVerified' in request.resource.data) && request.resource.data.accountVerified != resource.data.accountVerified)
         && !(('verified' in request.resource.data) && request.resource.data.verified != resource.data.verified)
-        && !(('verificationStatus' in request.resource.data) && request.resource.data.verificationStatus != resource.data.verificationStatus);
+        && !(('verificationStatus' in request.resource.data) && request.resource.data.verificationStatus != resource.data.verificationStatus)
+        && !(('distinguishedSubjectsAverage' in request.resource.data) && request.resource.data.distinguishedSubjectsAverage != resource.data.get('distinguishedSubjectsAverage', null))
+        && !(('supportClassification' in request.resource.data) && request.resource.data.supportClassification != resource.data.get('supportClassification', null))
+        // Educational institution is REQUIRED: a self-update may CHANGE it but never
+        // clear it to an empty/non-string value. Deny only when school is actually
+        // changed to something invalid — an unchanged value (incl. a stub's null that
+        // is filled via isCompletingRegistration) still passes, as do edits that don't
+        // touch school at all.
+        && !(('school' in request.resource.data)
+             && request.resource.data.school != resource.data.get('school', null)
+             && !(request.resource.data.school is string && request.resource.data.school.size() > 0));
     }
 
     // Self-registration: a brand-new user may ONLY create a 'student' profile with
@@ -76,7 +113,12 @@ service cloud.firestore {
         && (!('accountVerified' in request.resource.data)   || request.resource.data.accountVerified == false)
         && (!('paymentVerified' in request.resource.data)   || request.resource.data.paymentVerified == false)
         && (!('yearlyFeePaid' in request.resource.data)     || request.resource.data.yearlyFeePaid == false)
-        && request.resource.data.get('verificationStatus', 'unverified') in ['unverified', 'pending'];
+        && request.resource.data.get('verificationStatus', 'unverified') in ['unverified', 'pending']
+        // Educational institution is REQUIRED on every COMPLETED person record.
+        // Incomplete Google stubs (completedProfile:false) are exempt here — they
+        // collect it later at /complete-registration (see isCompletingRegistration).
+        && (request.resource.data.get('completedProfile', true) == false
+            || (request.resource.data.school is string && request.resource.data.school.size() > 0));
     }
 
     // Allows the one-way registration-completion transition only:
@@ -88,6 +130,8 @@ service cloud.firestore {
         && request.resource.data.completedProfile == true
         && resource.data.get('verificationStatus', 'unverified') == 'unverified'
         && request.resource.data.verificationStatus == 'pending'
+        // Educational institution becomes REQUIRED at completion — the stub had none.
+        && request.resource.data.school is string && request.resource.data.school.size() > 0
         // The completion transition must not smuggle in any privilege/payment escalation.
         && !(('role' in request.resource.data) && request.resource.data.role != resource.data.role)
         && !(('isAdmin' in request.resource.data) && request.resource.data.isAdmin != resource.data.isAdmin)
@@ -119,22 +163,83 @@ service cloud.firestore {
     // script) or the Firebase Console. NO client may ever write here — a client
     // write would be an instant privilege escalation to global admin.
     match /admins/{uid} {
-      allow read:  if isSelf(uid);
+      // Owner may read the admin registry (admin-performance reporting).
+      allow read:  if isSelf(uid) || isOwner();
+      allow write: if false;
+    }
+
+    // ── Owners collection ─────────────────────────────────────────────────────
+    // CRITICAL: owner documents are provisioned ONLY via the Admin SDK (backend
+    // script `provision-owner.js`) or the Firebase Console. NO client may write —
+    // a client write would be an instant privilege escalation to global owner.
+    match /owners/{uid} {
+      allow read:  if isSelf(uid) || isOwner();
+      allow write: if false;
+    }
+
+    // ── Payment orders ────────────────────────────────────────────────────────
+    // Written only by the Express backend (Admin SDK).
+    // Students may read their own orders; admins/owners may read all in their branch.
+    // No client may create, update, or delete — all mutations go through the backend.
+    match /paymentOrders/{orderId} {
+      allow read: if isAuthenticated() && (
+        resource.data.studentId == request.auth.uid
+        || isOwner()
+        || (isActiveAdmin() && resource.data.branchId == getAdminBranchId())
+      );
+      allow create, update, delete: if false;
+    }
+
+    // ── Financial ledger ──────────────────────────────────────────────────────
+    // Append-only, server-authored single source of truth for revenue. Written
+    // ONLY by the Express backend (Admin SDK). Entries are IMMUTABLE — corrections
+    // append a 'reversal'/'adjustment' entry rather than mutating history.
+    //   read  : owner (all branches) or branch admin (own branch only)
+    //   create: Admin SDK only (allow ... if false here)
+    //   update/delete: NEVER (immutability guarantee)
+    match /ledger/{entryId} {
+      allow read:   if isOwner() || (isAuthenticated() && isBranchAdmin(resource.data.branchId));
+      allow create, update, delete: if false;
+    }
+
+    // ── Audit log ─────────────────────────────────────────────────────────────
+    // Permanent audit trail. Written ONLY by the Express backend (Admin SDK).
+    //   read  : owner (all branches) or branch admin (own branch only)
+    //   write : Admin SDK only
+    match /auditLogs/{logId} {
+      allow read:   if isOwner() || (isAuthenticated() && isBranchAdmin(resource.data.branchId));
+      allow write:  if false;
+    }
+
+    // ── Global financial config (e.g. config/finance.annualFeeAmount) ─────────
+    // Owner-controlled policy, broadly READABLE (admins record payments, students
+    // self-pay, the backend snapshots the amount). Writes go ONLY through the
+    // Express backend (Admin SDK) via the owner endpoints — never a client.
+    match /config/{document} {
+      allow read:  if true;
       allow write: if false;
     }
 
     // ── Legacy root users collection ──────────────────────────────────────────
+    // Uses isActiveAdmin() (not isAdmin()) so a deactivated admin loses access
+    // here too. Left un-branch-scoped because these legacy docs predate the
+    // multi-branch model and may carry no branchId; the live model is
+    // /branches/{branchId}/users (already branch-scoped).
     match /users/{userId} {
-      allow read:   if isAdmin() || isSelf(userId);
-      allow create: if isAdmin() || isSafeUserCreate(userId);
-      allow update: if isAdmin() || (isSelf(userId) && isSafeUserSelfUpdate());
-      allow delete: if isAdmin();
+      allow read:   if isActiveAdmin() || isSelf(userId);
+      allow create: if isActiveAdmin() || isSafeUserCreate(userId);
+      allow update: if isActiveAdmin() || (isSelf(userId) && isSafeUserSelfUpdate());
+      allow delete: if isActiveAdmin();
     }
 
     // ── Global support lesson registrations ───────────────────────────────────
     // Written only by the Express backend (Admin SDK); clients may only read.
+    // Admin read is BRANCH-SCOPED (isBranchAdmin folds in the active-admin check),
+    // so a branch admin can never read another branch's registrations and a
+    // deactivated admin loses access immediately. Owner is cross-branch read-only.
     match /supportLessonRegistrations/{registrationId} {
-      allow read: if isAdmin()
+      allow read: if isOwner()
+        || isBranchAdmin(resource.data.branchId)
         || (isAuthenticated() && resource.data.userId == request.auth.uid);
       allow create, update, delete: if false;
     }
@@ -315,8 +420,21 @@ service cloud.firestore {
 
       match /classes/{classId} {
         allow read: if true;
-        // enrollmentCount is bumped by the Express backend (Admin SDK), not clients.
-        allow create, update, delete: if isBranchAdmin(branchId);
+        // Classes are created ONLY by the Express backend (Admin SDK), which runs
+        // the transactional teacher/classroom conflict check — so every class that
+        // exists has been conflict-checked and a client can never inject one.
+        allow create: if false;
+        // A branch admin may update a class directly ONLY when the schedule-defining
+        // fields are unchanged (enrollmentCount bumps, status toggles, subjectName
+        // rename cascade). ANY change to schedules / teacherName / classroom is
+        // rejected here and must go through the backend transactional endpoint,
+        // which enforces conflict detection. This makes it impossible to persist an
+        // overlapping teacher or classroom schedule via a direct client write.
+        allow update: if isBranchAdmin(branchId)
+          && request.resource.data.get('schedules', [])   == resource.data.get('schedules', [])
+          && request.resource.data.get('teacherName', '') == resource.data.get('teacherName', '')
+          && request.resource.data.get('classroom', '')   == resource.data.get('classroom', '');
+        allow delete: if isBranchAdmin(branchId);
       }
 
       // Teachers catalog — public read (names shown to students), branch-admin write.

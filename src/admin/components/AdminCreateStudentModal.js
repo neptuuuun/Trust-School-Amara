@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { UserPlus, Loader2, Eye, EyeOff, AlertCircle, CheckCircle } from 'lucide-react';
 import apiCall from '../../utils/apiClient';
 import { useAuth } from '../../contexts/AuthContext';
-import { adminApproveAnnualFeeManually } from '../../services/firestoreService';
+import { recordAnnualFeePayment } from '../../services/firestoreService';
+import { SCHOOL_HINT_AR, isValidSchool } from '../../utils/personData';
 import AdminModal from './AdminModal';
 
 const ACADEMIC_YEARS = [
@@ -25,6 +26,7 @@ const AdminCreateStudentModal = ({ branchId, onClose, onSuccess }) => {
   const [fullName,          setFullName]          = useState('');
   const [email,             setEmail]             = useState('');
   const [phone,             setPhone]             = useState('');
+  const [school,            setSchool]            = useState('');
   const [password,          setPassword]          = useState('');
   const [showPassword,      setShowPassword]      = useState(false);
   const [markAnnualFee,     setMarkAnnualFee]     = useState(false);
@@ -39,6 +41,8 @@ const AdminCreateStudentModal = ({ branchId, onClose, onSuccess }) => {
     if (!email.trim())      return 'يرجى إدخال البريد الإلكتروني';
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()))
       return 'البريد الإلكتروني غير صالح';
+    if (!isValidSchool(school))
+      return 'يرجى إدخال المؤسسة التعليمية (اكتب «حر» إن لم يكن منتسباً إلى مدرسة)';
     if (!password)          return 'يرجى إدخال كلمة مرور مؤقتة';
     if (password.length < 6) return 'كلمة المرور يجب أن تكون 6 أحرف على الأقل';
     if (markAnnualFee && !selectedAcademicYear)
@@ -63,6 +67,7 @@ const AdminCreateStudentModal = ({ branchId, onClose, onSuccess }) => {
           fullName:  fullName.trim(),
           email:     email.trim().toLowerCase(),
           phone:     phone.trim(),
+          school:    school.trim(),
           password,
           adminUid:  adminUser?.uid ?? null,
         }),
@@ -70,18 +75,16 @@ const AdminCreateStudentModal = ({ branchId, onClose, onSuccess }) => {
 
       const newUserId = result?.userId;
 
-      // Optionally mark the annual fee as paid for this student
+      // Optionally record the annual fee as paid for this student. Routes through
+      // the SAME centralized endpoint the Annual Fees page uses — so the record is
+      // a standalone financial entry (amount from owner config, ledger + audit +
+      // flags), identical to a self-registered student's. Not a side effect of
+      // account creation beyond this explicit, opt-in call.
       if (markAnnualFee && newUserId) {
-        await adminApproveAnnualFeeManually(
-          branchId,
-          newUserId,
-          { uid: adminUser?.uid ?? null },
-          {
-            name: fullName.trim(),
-            phone: phone.trim(),
-            academicYear: selectedAcademicYear || null,
-          }
-        );
+        await recordAnnualFeePayment(branchId, newUserId, {
+          studyYear: selectedAcademicYear || null,
+          notes: 'تم تسجيل الرسوم السنوية عند إنشاء الحساب',
+        });
       }
 
       const yearLabel = ACADEMIC_YEARS.find(y => y.id === selectedAcademicYear)?.label || '';
@@ -136,7 +139,7 @@ const AdminCreateStudentModal = ({ branchId, onClose, onSuccess }) => {
 
   return (
     <AdminModal open onClose={onClose} size="md" icon={UserPlus} title="إنشاء حساب طالب" footer={footer}>
-      <form id="admin-create-student-form" onSubmit={handleSubmit} className="space-y-5">
+      <form id="admin-create-student-form" onSubmit={handleSubmit} className="space-y-5" autoComplete="off">
         {error && (
           <div className="flex gap-2.5 rounded-lg border border-danger-200 bg-danger-50 px-4 py-3 text-sm text-danger-700">
             <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
@@ -152,11 +155,14 @@ const AdminCreateStudentModal = ({ branchId, onClose, onSuccess }) => {
 
         {/* Full name */}
         <div>
-          <label className="mb-1.5 block text-sm font-medium text-gray-700">
+          <label htmlFor="acs-fullname" className="mb-1.5 block text-sm font-medium text-gray-700">
             الاسم الكامل <span className="text-danger-500">*</span>
           </label>
           <input
             type="text"
+            id="acs-fullname"
+            name="acs-fullname"
+            autoComplete="off"
             value={fullName}
             onChange={(e) => setFullName(e.target.value)}
             placeholder="مثال: أحمد بن علي"
@@ -167,11 +173,14 @@ const AdminCreateStudentModal = ({ branchId, onClose, onSuccess }) => {
 
         {/* Email */}
         <div>
-          <label className="mb-1.5 block text-sm font-medium text-gray-700">
+          <label htmlFor="acs-email" className="mb-1.5 block text-sm font-medium text-gray-700">
             البريد الإلكتروني <span className="text-danger-500">*</span>
           </label>
           <input
             type="email"
+            id="acs-email"
+            name="acs-email"
+            autoComplete="off"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="student@example.com"
@@ -183,11 +192,14 @@ const AdminCreateStudentModal = ({ branchId, onClose, onSuccess }) => {
 
         {/* Phone */}
         <div>
-          <label className="mb-1.5 block text-sm font-medium text-gray-700">
+          <label htmlFor="acs-phone" className="mb-1.5 block text-sm font-medium text-gray-700">
             رقم الهاتف
           </label>
           <input
             type="tel"
+            id="acs-phone"
+            name="acs-phone"
+            autoComplete="off"
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
             placeholder="0555 000 000"
@@ -196,14 +208,36 @@ const AdminCreateStudentModal = ({ branchId, onClose, onSuccess }) => {
           />
         </div>
 
+        {/* Educational institution / school */}
+        <div>
+          <label htmlFor="acs-school" className="mb-1.5 block text-sm font-medium text-gray-700">
+            المؤسسة التعليمية / المدرسة <span className="text-danger-500">*</span>
+          </label>
+          <input
+            type="text"
+            id="acs-school"
+            name="acs-school"
+            autoComplete="off"
+            value={school}
+            onChange={(e) => setSchool(e.target.value)}
+            placeholder="اسم المؤسسة التعليمية"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
+            required
+          />
+          <p className="mt-1 text-xs text-gray-500">{SCHOOL_HINT_AR}</p>
+        </div>
+
         {/* Temporary password */}
         <div>
-          <label className="mb-1.5 block text-sm font-medium text-gray-700">
+          <label htmlFor="acs-temp-password" className="mb-1.5 block text-sm font-medium text-gray-700">
             كلمة مرور مؤقتة <span className="text-danger-500">*</span>
           </label>
           <div className="relative">
             <input
               type={showPassword ? 'text' : 'password'}
+              id="acs-temp-password"
+              name="acs-temp-password"
+              autoComplete="new-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="6 أحرف على الأقل"

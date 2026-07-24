@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { signInWithEmailAndPassword, onAuthStateChanged } from 'firebase/auth';
+import { signInWithEmailAndPassword, onAuthStateChanged, sendPasswordResetEmail } from 'firebase/auth';
 import { auth } from '../firebase';
 import { useNavigate } from 'react-router-dom';
 import { Eye, EyeOff, Lock, Mail } from 'lucide-react';
@@ -15,6 +15,7 @@ const AdminLogin = () => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
+  const [resetSent, setResetSent] = useState(false);
 
   const navigate = useNavigate();
   const navigateRef = useRef(navigate); // ✅ stable ref — never causes re-runs
@@ -29,7 +30,7 @@ const AdminLogin = () => {
       if (user) {
         try {
           const adminInfo = await getAdminByUid(user.uid);
-          if (adminInfo && adminInfo.role === 'admin') {
+          if (adminInfo && adminInfo.role === 'admin' && adminInfo.active !== false) {
             navigateRef.current(`/admin/${adminInfo.branchId}`, { replace: true });
             return; // leave before setting authLoading — we're navigating away
           }
@@ -54,6 +55,23 @@ const AdminLogin = () => {
     );
   }
 
+  // Send a Firebase password-reset email to the address typed in the form.
+  // Resets are account-level, so this works for any admin account.
+  const handlePasswordReset = async () => {
+    setError('');
+    setResetSent(false);
+    if (!email) {
+      setError('أدخل بريدك الإلكتروني أولاً لإعادة تعيين كلمة المرور.');
+      return;
+    }
+    try {
+      await sendPasswordResetEmail(auth, email);
+      setResetSent(true);
+    } catch (err) {
+      setError('تعذر إرسال رابط إعادة التعيين. تأكد من صحة البريد الإلكتروني.');
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
@@ -69,6 +87,12 @@ const AdminLogin = () => {
         if (!adminInfo || adminInfo.role !== 'admin') {
           await auth.signOut();
           setError('غير مصرح لك بالوصول إلى لوحة الإدارة');
+          setLoading(false);
+          return;
+        }
+        if (adminInfo.active === false) {
+          await auth.signOut();
+          setError('تم تعطيل هذا الحساب. يرجى التواصل مع الإدارة.');
           setLoading(false);
           return;
         }
@@ -130,6 +154,7 @@ const AdminLogin = () => {
 
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
           {error && <Alert variant="danger">{error}</Alert>}
+          {resetSent && <Alert variant="success">تم إرسال رابط إعادة تعيين كلمة المرور إلى بريدك الإلكتروني.</Alert>}
 
           <div className="space-y-4">
             <div>
@@ -173,6 +198,17 @@ const AdminLogin = () => {
                   </button>
                 }
               />
+            </div>
+
+            <div className="text-start">
+              <button
+                type="button"
+                onClick={handlePasswordReset}
+                disabled={loading}
+                className="text-sm text-primary hover:text-primary-600 hover:underline disabled:opacity-50"
+              >
+                نسيت كلمة المرور؟
+              </button>
             </div>
           </div>
 

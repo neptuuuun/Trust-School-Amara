@@ -1,4 +1,4 @@
-import { User, Mail, Phone, Calendar, MapPin, AlertTriangle, ExternalLink } from 'lucide-react';
+import { User, Mail, Phone, Calendar, MapPin, GraduationCap, AlertTriangle, ExternalLink } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useUserProfile } from '../hooks/useUserProfile';
 
@@ -16,6 +16,7 @@ const MISSING_LABEL = {
   name: 'الاسم الكامل',
   birthDate: 'تاريخ الميلاد',
   birthPlace: 'مكان الميلاد',
+  school: 'المؤسسة التعليمية',
   guardianPhone: 'رقم الهاتف',
 };
 
@@ -73,6 +74,7 @@ export const EnrollmentProfileCard = () => {
         <Field icon={Phone}    label="هاتف الطالب"     value={profile?.studentPhone} />
         <Field icon={Calendar} label="تاريخ الميلاد"   value={profile?.birthDate} />
         <Field icon={MapPin}   label="مكان الميلاد"    value={profile?.birthPlace} />
+        <Field icon={GraduationCap} label="المؤسسة التعليمية" value={profile?.school} />
       </div>
 
       {/* Incomplete warning */}

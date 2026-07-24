@@ -1,10 +1,11 @@
-// LanguageRegisteredPage — ARCHIVE of approved language registrations.
+// LanguageRegisteredPage — the roll of students enrolled in language programs.
 //
-// This page answers "who is already registered in language programs?" — it is a
-// management/archive view, NOT a verification queue. Approval (verify/reject) is
-// handled entirely on the Payments Verification page. This page therefore reads
-// ONLY the approved records (branches/{b}/languagesRegistered) and offers
-// management actions: view details, print, delete.
+// There is no approval step to model here: after the Chargily migration a
+// languagesRegistered document only exists because money was captured (the
+// online webhook, or an admin recording an in-person payment), so every record
+// on this page is by construction paid and active. The page therefore reads
+// branches/{b}/languagesRegistered and offers management actions only:
+// view details, print, delete.
 //
 // Branch isolation: streamRegisteredLanguages is branchId-scoped; we early-return
 // when no branch is selected. No cross-branch data is ever fetched.
@@ -24,7 +25,6 @@ import { printRecord } from '../../utils/printRecord';
 import AddEditLanguageModal from '../components/AddEditLanguageModal';
 import AdminModal from '../components/AdminModal';
 import AdminConfirmDialog from '../components/AdminConfirmDialog';
-import FileViewerModal from '../components/FileViewerModal';
 import { useToast } from '../components/ToastNotifications';
 import {
   StatCard, PageHeader, SearchInput, EmptyState, ArchiveSkeleton,
@@ -58,7 +58,6 @@ const norm = (e) => ({
   teacherName:   e.teacherName || '',
   languagePrice: e.languagePrice ?? e.price ?? null,
   paymentMethod: e.paymentMethod || '',
-  paymentProof:  e.receiptUrl || e.paymentProof || '',
   registeredAt:  e.registeredAt || e.verifiedAt || e.createdAt || null,
   verifiedBy:    e.verifiedBy || null,
   notes:         e.notes || e.note || '',
@@ -73,7 +72,7 @@ const RegisteredBadge = () => (
 );
 
 // ── Detail drawer ────────────────────────────────────────────────────────────────
-const DetailDrawer = ({ entry, onClose, onPrint, onDelete, onViewImage }) => (
+const DetailDrawer = ({ entry, onClose, onPrint, onDelete }) => (
   <AdminModal
     open
     onClose={onClose}
@@ -124,24 +123,6 @@ const DetailDrawer = ({ entry, onClose, onPrint, onDelete, onViewImage }) => (
           <p className="py-2.5 text-sm text-gray-700">{entry.notes}</p>
         </DetailSection>
       )}
-
-      <section>
-        <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400">إيصال الدفع</p>
-        {entry.paymentProof ? (
-          <button
-            type="button"
-            onClick={() => onViewImage(entry.paymentProof)}
-            className="group relative block w-full overflow-hidden rounded-xl border border-gray-200"
-          >
-            <img src={entry.paymentProof} alt="إيصال الدفع" className="max-h-52 w-full object-contain transition-opacity group-hover:opacity-90" />
-            <span className="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/20">
-              <Eye className="h-8 w-8 text-white opacity-0 drop-shadow-lg transition-opacity group-hover:opacity-100" />
-            </span>
-          </button>
-        ) : (
-          <p className="rounded-xl border border-dashed border-gray-200 px-4 py-3 text-sm italic text-gray-400">لا يوجد إيصال مرفق</p>
-        )}
-      </section>
     </div>
   </AdminModal>
 );
@@ -160,7 +141,6 @@ const LanguageRegisteredPage = () => {
   const [dateFilter, setDateFilter] = useState('all');
 
   const [drawer, setDrawer] = useState(null);
-  const [lightbox, setLightbox] = useState(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState({ open: false, entry: null });
   const [deleting, setDeleting] = useState(false);
@@ -292,10 +272,8 @@ const LanguageRegisteredPage = () => {
           onClose={() => setDrawer(null)}
           onPrint={handlePrint}
           onDelete={askDelete}
-          onViewImage={setLightbox}
         />
       )}
-      <FileViewerModal url={lightbox} onClose={() => setLightbox(null)} />
       {showAddModal && (
         <AddEditLanguageModal
           branchId={selectedBranchId}

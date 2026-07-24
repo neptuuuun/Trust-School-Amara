@@ -88,6 +88,9 @@ export const createGoogleUserStub = async (branchId, googleUser) => {
     birthDate:         null,
     birthPlace:        null,
     address:           null,
+    // Educational institution — REQUIRED, but collected later at
+    // /complete-registration (this is an incomplete stub: completedProfile=false).
+    school:            null,
     phoneNumber:       null,
     phone:             null,
     registrationNumber:null,

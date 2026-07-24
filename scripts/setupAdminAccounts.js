@@ -2,19 +2,29 @@ import { doc, setDoc } from 'firebase/firestore';
 import { db } from '../src/firebase';
 
 /**
- * One-time script to set up admin accounts in Firestore.
- * Run manually after creating the Firebase Auth users.
+ * DEPRECATED — admins/{uid} is now `allow write: if false` in firestore.rules, so
+ * this client-SDK script can no longer write admin documents. Provision admins via
+ * the Admin SDK instead:
+ *
+ *   cd backend
+ *   node scripts/provision-admin.js --email a@b.com --name "Full Name" --branch boumerdes --password "secret"
+ *
+ * This file is kept only as a reference for the canonical admin document shape.
  */
+
+const BRANCH_NAMES = { boumerdes: 'بومرداس', bordj_menaiel: 'برج منايل' };
 
 const adminAccounts = [
   {
     email: 'trustschoolamarabmrds@gmail.com',
+    name: 'Boumerdes Admin',
     branchId: 'boumerdes',
     role: 'admin'
   },
   {
     email: 'trustschoolamara@gmail.com',
-    branchId: 'bordj_mnaiel',
+    name: 'Bordj Menaiel Admin',
+    branchId: 'bordj_menaiel',
     role: 'admin'
   }
 ];
@@ -38,9 +48,13 @@ export const createAdminDocuments = async (adminUids) => {
     try {
       const adminRef = doc(db, 'admins', uid);
       await setDoc(adminRef, {
+        uid,
         email: admin.email,
+        name: admin.name,
         branchId: admin.branchId,
+        branchName: BRANCH_NAMES[admin.branchId] || admin.branchId,
         role: admin.role,
+        active: true,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       });

@@ -10,6 +10,11 @@
  */
 
 import { formatDate } from './dateUtils';
+import { getCurrentAcademicYear } from './academicYear';
+
+// Re-exported so existing importers keep a single, stable entry point.
+// All academic-year math lives in ./academicYear (1 July → 30 June).
+export { getCurrentAcademicYear, getAcademicYearLabel, isDateInAcademicYear } from './academicYear';
 
 // ---------------------------------------------------------------------------
 // Date helpers
@@ -25,6 +30,20 @@ export const addMonthsKeepingDay = (date, months) => {
   result.setMonth(result.getMonth() + months);
   return result;
 };
+
+/**
+ * Calendar-month cycle helpers for support subscriptions.
+ *
+ * Support lessons are billed by the CALENDAR month: a cycle always starts on the
+ * 1st and ends on the last day of that month, regardless of the day the student
+ * enrolls (joining mid-month only prorates the PRICE, never the coverage window).
+ * Mirrors backend/services/sessionService.js — keep the two in lockstep.
+ */
+export const startOfMonth = (date = new Date()) =>
+  new Date(date.getFullYear(), date.getMonth(), 1, 0, 0, 0, 0);
+
+export const endOfMonth = (date = new Date()) =>
+  new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59, 999);
 
 /** Coerce a Firestore Timestamp, JS Date, or ms number to a JS Date. */
 export const toDate = (value) => {
@@ -43,27 +62,9 @@ export const toDate = (value) => {
 export const ANNUAL_FEE_DZD = 1000;
 
 /**
- * Current academic year, which starts on 1 September (month index 8).
- * Matches the `getAcademicYearLabel` logic used elsewhere.
- * @param {Date} [now]
- * @returns {{ label: string, startYear: number, startMs: number }}
- *   label   — e.g. "2025-2026"
- *   startMs — ms timestamp of 1 Sep of the academic year's start
- */
-export const getCurrentAcademicYear = (now = new Date()) => {
-  const y = now.getFullYear();
-  const startYear = now.getMonth() >= 8 ? y : y - 1; // Sep–Dec → this year; Jan–Aug → previous year
-  return {
-    label: `${startYear}-${startYear + 1}`,
-    startYear,
-    startMs: new Date(startYear, 8, 1, 0, 0, 0, 0).getTime(),
-  };
-};
-
-/**
  * True when a verified annual payment falls inside the CURRENT academic year.
  * Uses the payment's verifiedAt (works for legacy records that predate the
- * academicYear tag → grandfathers existing payers; resets every September).
+ * academicYear tag → grandfathers existing payers; resets every 1 July).
  * @param {object} payment — an annualPayments doc ({ status, verifiedAt, academicYear })
  */
 export const isAnnualPaymentForCurrentYear = (payment, now = new Date()) => {

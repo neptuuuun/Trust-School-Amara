@@ -6,7 +6,6 @@
  *  - handleWebhook   → Chargily notifies us of payment result (signed)
  *  - getOrderStatus  → frontend polls after returning from Chargily
  *  - verifyAndProcess → fallback manual verify if webhook was missed
- *  - recordCashPayment → admin records an in-school cash payment
  *  - listOrders      → admin views payment history
  *
  * All registration creation happens server-side (Admin SDK) — clients never
@@ -43,11 +42,54 @@ const SERVICE_LABELS = {
   annualFee: 'رسوم سنوية',
 };
 
+/** Firestore Timestamp | Date | ms | ISO → epoch ms (0 when unusable). */
+const tsMs = (v) => {
+  if (!v) return 0;
+  if (typeof v.toMillis === 'function') return v.toMillis();
+  if (typeof v.toDate === 'function') { try { return v.toDate().getTime(); } catch { return 0; } }
+  const t = new Date(v).getTime();
+  return Number.isNaN(t) ? 0 : t;
+};
+
+// ─── Duplicate-registration guards ────────────────────────────────────────────
+// A student must never be sent to pay for something they are already enrolled in.
+// The registration factory also refuses duplicates transactionally, but by then the
+// money is already taken — so we pre-check here and refuse the checkout up front.
+// Pure equality filters (userId + classId/…) resolve via single-field indexes; no
+// composite index is required.
+
+async function hasLanguageRegistration(branchId, studentId, sd = {}) {
+  const col = db.collection('branches').doc(branchId).collection('languagesRegistered');
+  if (sd.classId) {
+    const s = await col.where('userId', '==', studentId).where('classId', '==', sd.classId).limit(1).get();
+    if (!s.empty) return true;
+  }
+  const languageId = sd.languageId || sd.subjectId;
+  if (languageId && sd.levelId) {
+    const s = await col.where('userId', '==', studentId)
+      .where('languageId', '==', languageId).where('levelId', '==', sd.levelId).limit(1).get();
+    if (!s.empty) return true;
+  }
+  return false;
+}
+
+async function hasTrainingRegistration(branchId, studentId, sd = {}) {
+  const trainingId = sd.trainingId || sd.subjectId;
+  if (!trainingId) return false;
+  const s = await db.collection('branches').doc(branchId).collection('trainingsRegistered')
+    .where('userId', '==', studentId).where('trainingId', '==', trainingId).limit(1).get();
+  return !s.empty;
+}
+
 // ─── Create Checkout ──────────────────────────────────────────────────────────
 
 async function createCheckout(req, res) {
   try {
-    const { branchId, serviceType, serviceData = {}, amount } = req.body;
+    // NOTE: req.body.amount is deliberately NOT destructured. The client sends one,
+    // but the charge is resolved server-side below and written to the immutable
+    // ledger as revenue truth — binding the client's number to a local here has
+    // only ever been a way for it to get used by accident.
+    const { branchId, serviceType, serviceData = {} } = req.body;
 
     const studentId    = req.user.uid;
     const studentEmail = req.user.email || '';
@@ -71,6 +113,23 @@ async function createCheckout(req, res) {
       }
       chargeAmount = await financeSettings.getAnnualFeeAmount();
     } else {
+      // Refuse a second checkout when the student is already enrolled. Support may
+      // be RENEWED once the previous cycle has ended, so only an ACTIVE (non-expired)
+      // subscription blocks it; language/training enrollments are one-shot.
+      if (serviceType === 'support') {
+        if (serviceData.classId && await hasActiveSupportRegistration(branchId, studentId, serviceData.classId)) {
+          return res.status(409).json({ code: 'already-registered', message: 'أنت مسجّل بالفعل في هذا الدرس.' });
+        }
+      } else if (serviceType === 'language') {
+        if (await hasLanguageRegistration(branchId, studentId, serviceData)) {
+          return res.status(409).json({ code: 'already-registered', message: 'أنت مسجّل بالفعل في هذه الدورة.' });
+        }
+      } else if (serviceType === 'training') {
+        if (await hasTrainingRegistration(branchId, studentId, serviceData)) {
+          return res.status(409).json({ code: 'already-registered', message: 'أنت مسجّل بالفعل في هذه الدورة.' });
+        }
+      }
+
       const classId = serviceData.classId;
       let cls = null;
       if (classId) {
@@ -138,7 +197,8 @@ async function createCheckout(req, res) {
     const serviceName = serviceData.serviceName || serviceData.subjectName || serviceData.trainingName || '';
     const checkout = await chargilyService.createCheckout({
       amount: chargeAmount,
-      currency:        'DZD',
+      currency:        'dzd', // Chargily v2 requires the lowercase ISO code; 'DZD' → 422.
+
       description:     `${SERVICE_LABELS[serviceType] || serviceType}${serviceName ? ` — ${serviceName}` : ''}`,
       metadata:        { orderId, studentId, branchId, serviceType },
       successUrl:      `${FRONTEND_URL}/payment/status?orderId=${orderId}&result=success`,
@@ -196,30 +256,78 @@ async function processWebhookEvent(event) {
     return;
   }
 
-  const orderRef  = db.collection('paymentOrders').doc(orderId);
-  const orderSnap = await orderRef.get();
+  await finalizePaidOrder(db.collection('paymentOrders').doc(orderId), orderId, checkout);
+}
 
-  if (!orderSnap.exists) {
-    console.warn('[chargily] webhook: paymentOrder not found:', orderId);
-    return;
-  }
+// ─── Shared Confirmation Primitive ────────────────────────────────────────────
+// The single place a Chargily payment is turned into a paid order + a real
+// registration. Used by BOTH the webhook and the verify fallback so the two paths
+// can never diverge. The order is claimed inside a transaction, so a re-fired
+// webhook or a concurrent verify call is a guaranteed no-op (requirement 5).
 
-  const order = orderSnap.data();
+/**
+ * Resolve the checkout id and the payment/transaction id from a Chargily checkout
+ * object. Chargily's `checkout.paid` webhook and GET /checkouts/:id return the same
+ * shape; the payment id field name has varied across API revisions, so we accept a
+ * few aliases and fall back to the checkout id when no distinct payment id exists.
+ */
+function resolvePaymentIds(checkout = {}) {
+  const checkoutId = checkout.id || null;
+  const paymentId =
+    checkout.payment_id || checkout.paymentId ||
+    checkout.invoice_id || checkout.invoiceId ||
+    (Array.isArray(checkout.payments) && checkout.payments[0] && checkout.payments[0].id) ||
+    checkoutId;
+  return { checkoutId, paymentId };
+}
 
-  // Idempotency guard — webhook may fire more than once.
-  if (order.status === 'paid' || order.processedAt) return;
+/**
+ * Idempotently flip a pending order to paid and create its registration.
+ * Returns the registrationId (existing one if the order was already processed).
+ */
+async function finalizePaidOrder(orderRef, orderId, checkout = {}) {
+  const { checkoutId, paymentId } = resolvePaymentIds(checkout);
+  const now = admin.firestore.FieldValue.serverTimestamp();
 
-  await orderRef.update({
-    status:             'paid',
-    paidAt:             admin.firestore.FieldValue.serverTimestamp(),
-    processedAt:        admin.firestore.FieldValue.serverTimestamp(),
-    chargilyCheckoutId: checkout.id,
+  // Atomically CLAIM the order: only the first caller flips pending→paid and writes
+  // the canonical payment fields. Any later webhook/verify sees paid and no-ops.
+  const claim = await db.runTransaction(async (t) => {
+    const snap = await t.get(orderRef);
+    if (!snap.exists) return { order: null, alreadyPaid: false };
+    const order = snap.data();
+    if (order.paid === true || order.status === 'paid' || order.processedAt) {
+      return { order, alreadyPaid: true };
+    }
+    t.update(orderRef, {
+      status:             'paid',
+      paid:               true,
+      paymentStatus:      'paid',
+      paymentMethod:      'chargily',
+      paidAt:             now,
+      processedAt:        now,
+      chargilyCheckoutId: checkoutId || order.chargilyCheckoutId || null,
+      chargilyPaymentId:  paymentId  || null,
+    });
+    return { order, alreadyPaid: false };
   });
 
-  const registrationId = await createRegistrationFromOrder(order, orderId);
-  if (registrationId) {
-    await orderRef.update({ registrationId });
+  if (!claim.order) {
+    console.warn('[chargily] finalizePaidOrder: paymentOrder not found:', orderId);
+    return null;
   }
+  if (claim.alreadyPaid) return claim.order.registrationId || null;
+
+  const registrationId = await createRegistrationFromOrder(
+    {
+      ...claim.order,
+      paymentMethod:      'chargily',
+      chargilyCheckoutId: checkoutId || claim.order.chargilyCheckoutId || null,
+      chargilyPaymentId:  paymentId  || null,
+    },
+    orderId
+  );
+  if (registrationId) await orderRef.update({ registrationId });
+  return registrationId;
 }
 
 // ─── Get Order Status ─────────────────────────────────────────────────────────
@@ -243,10 +351,14 @@ async function getOrderStatus(req, res) {
     return res.json({
       orderId,
       status:         order.status,
+      paid:           order.paid === true || order.status === 'paid',
+      paymentStatus:  order.paymentStatus || (order.status === 'paid' ? 'paid' : order.status),
       serviceType:    order.serviceType,
       amount:         order.amount,
       currency:       order.currency,
       paymentMethod:  order.paymentMethod,
+      chargilyCheckoutId: order.chargilyCheckoutId || null,
+      chargilyPaymentId:  order.chargilyPaymentId  || null,
       registrationId: order.registrationId,
       paidAt:         order.paidAt,
       serviceData:    order.serviceData,
@@ -276,7 +388,8 @@ async function verifyAndProcess(req, res) {
       return res.status(403).json({ code: 'forbidden' });
     }
 
-    if (order.status === 'paid') {
+    // Already confirmed (e.g. the webhook won the race) — report paid immediately.
+    if (order.paid === true || order.status === 'paid') {
       return res.json({ status: 'paid', registrationId: order.registrationId });
     }
 
@@ -286,21 +399,14 @@ async function verifyAndProcess(req, res) {
 
     const checkout = await chargilyService.getCheckout(order.chargilyCheckoutId);
 
-    if (checkout.status === 'paid' && order.status !== 'paid') {
-      await orderRef.update({
-        status:      'paid',
-        paidAt:      admin.firestore.FieldValue.serverTimestamp(),
-        processedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-
-      const registrationId = await createRegistrationFromOrder(order, orderId);
-      if (registrationId) await orderRef.update({ registrationId });
-
+    if (checkout.status === 'paid') {
+      // Same atomic, idempotent path as the webhook — races are safe.
+      const registrationId = await finalizePaidOrder(orderRef, orderId, checkout);
       return res.json({ status: 'paid', registrationId });
     }
 
     if (checkout.status === 'failed') {
-      await orderRef.update({ status: 'failed' });
+      await orderRef.update({ status: 'failed', paymentStatus: 'failed' });
       return res.json({ status: 'failed' });
     }
 
@@ -312,99 +418,77 @@ async function verifyAndProcess(req, res) {
   }
 }
 
-// ─── Admin: Record Cash Payment ───────────────────────────────────────────────
-
-async function recordCashPayment(req, res) {
-  try {
-    const {
-      studentId, studentName, studentEmail,
-      branchId, serviceType, serviceData, amount,
-    } = req.body;
-
-    if (!branchId || !studentId || !serviceType || !serviceData || amount == null) {
-      return res.status(400).json({ code: 'missing-fields' });
-    }
-
-    // Educational institution is REQUIRED on every record. Snapshot it from the
-    // student's profile when the caller didn't supply it, so a cash-recorded
-    // registration carries the student's real school (falling back to «حر» only
-    // when the profile itself has none).
-    let enrichedServiceData = serviceData || {};
-    if (!enrichedServiceData.school) {
-      try {
-        const uSnap = await db.collection('branches').doc(branchId).collection('users').doc(studentId).get();
-        if (uSnap.exists) enrichedServiceData = { ...enrichedServiceData, school: normalizeSchool(uSnap.data().school) };
-      } catch { /* reg builders default to «حر» */ }
-    }
-
-    const now      = admin.firestore.FieldValue.serverTimestamp();
-    const orderRef = db.collection('paymentOrders').doc();
-    const orderId  = orderRef.id;
-
-    const orderPayload = {
-      studentId,
-      studentName:  studentName || '',
-      studentEmail: studentEmail || '',
-      branchId,
-      serviceType,
-      serviceData:  enrichedServiceData,
-      amount:       amount || 0,
-      currency:     'DZD',
-      paymentMethod:     'cash',
-      chargilyCheckoutId:  null,
-      chargilyCheckoutUrl: null,
-      status:      'paid',
-      createdAt:   now,
-      paidAt:      now,
-      processedAt: now,
-      registrationId: null,
-      recordedBy: { uid: req.user.uid, email: req.user.email || '' },
-    };
-
-    await orderRef.set(orderPayload);
-
-    const registrationId = await createRegistrationFromOrder(
-      { studentId, studentName, studentEmail, branchId, serviceType, serviceData: enrichedServiceData, amount: amount || 0, paymentMethod: 'cash' },
-      orderId
-    );
-
-    if (registrationId) await orderRef.update({ registrationId });
-
-    return res.json({ orderId, registrationId });
-
-  } catch (err) {
-    console.error('[chargily] recordCashPayment error:', err.message);
-    return res.status(500).json({ code: 'error', message: err.message });
-  }
-}
+// NOTE: POST /api/chargily/cash (recordCashPayment) used to live here. It was a
+// second, never-called implementation of "admin records an in-school payment",
+// parallel to the admin-add / admin-create endpoints the UI actually uses. Two
+// code paths for the same business event is how enforcement rules drift apart,
+// so the unused one is gone. Cash collected at the desk now reaches the payment
+// log from the real admin paths via services/paymentOrderLog.js.
 
 // ─── Admin: List Payment Orders ───────────────────────────────────────────────
 
 async function listOrders(req, res) {
   try {
-    const { branchId, status, limit: lim = 50 } = req.query;
-    const maxResults = Math.min(parseInt(lim) || 50, 200);
-
-    let query = db.collection('paymentOrders')
-      .orderBy('createdAt', 'desc')
-      .limit(maxResults);
+    const { branchId, status, needsAttention, limit: lim = 200 } = req.query;
+    const maxResults = Math.min(parseInt(lim) || 200, 500);
 
     // Branch isolation: an admin may ONLY see their own branch's orders. The
     // client-supplied branchId is ignored — the admin's bound branch (set by
     // requireAdmin) is authoritative, so omitting branchId can't leak other
     // branches. (Falls back to an explicit branchId only if no admin binding,
     // e.g. a future owner route.)
-    if (req.adminBranchId) {
-      query = query.where('branchId', '==', req.adminBranchId);
-    } else if (branchId) {
-      query = query.where('branchId', '==', branchId);
+    const scope = req.adminBranchId || branchId || null;
+
+    let base = db.collection('paymentOrders');
+    if (scope) base = base.where('branchId', '==', scope);
+
+    // `needsAttention` is the paid-but-unseated triage queue; it is intentionally
+    // NOT combined with a status filter (such an order is always `paid`).
+    if (needsAttention === 'true') {
+      base = base.where('needsAttention', '==', true);
+    } else if (status) {
+      base = base.where('status', '==', status);
     }
-    if (status)   query = query.where('status',   '==', status);
 
-    const snap   = await query.get();
-    const orders = snap.docs.map(d => ({ orderId: d.id, ...d.data() }));
+    // Two equality filters PLUS orderBy needs a composite index (branchId+status
+    // +createdAt / branchId+needsAttention+createdAt — both are declared in
+    // firestore.indexes.json). Until those finish building, Firestore answers
+    // FAILED_PRECONDITION and the admin would just see a 500 with a console URL.
+    // Fall back to the same equality-only query without the sort and order in
+    // memory: identical result set, one extra sort, and the page keeps working.
+    let snap;
+    try {
+      snap = await base.orderBy('createdAt', 'desc').limit(maxResults).get();
+    } catch (err) {
+      if (err.code !== 9 /* FAILED_PRECONDITION */) throw err;
+      console.warn('[chargily] listOrders: composite index missing, sorting in memory. Deploy firestore.indexes.json.');
+      snap = await base.limit(maxResults).get();
+    }
 
-    return res.json({ orders });
+    const orders = snap.docs
+      .map(d => ({ orderId: d.id, ...d.data() }))
+      .sort((a, b) => tsMs(b.createdAt) - tsMs(a.createdAt));
+
+    // Summary over the WHOLE branch scope, not just the returned page/filter, so
+    // the UI's headline numbers never contradict the filter the admin picked.
+    // (Aggregation queries stream no documents.)
+    let summary = null;
+    if (scope) {
+      const base = db.collection('paymentOrders').where('branchId', '==', scope);
+      const countOf = async (q) => {
+        try { return (await q.count().get()).data().count || 0; } catch { return 0; }
+      };
+      const [total, paid, pending, failed, attention] = await Promise.all([
+        countOf(base),
+        countOf(base.where('status', '==', 'paid')),
+        countOf(base.where('status', '==', 'pending_payment')),
+        countOf(base.where('status', '==', 'failed')),
+        countOf(base.where('needsAttention', '==', true)),
+      ]);
+      summary = { total, paid, pending, failed, needsAttention: attention };
+    }
+
+    return res.json({ orders, summary, truncated: snap.size >= maxResults });
 
   } catch (err) {
     console.error('[chargily] listOrders error:', err.message);
@@ -415,8 +499,14 @@ async function listOrders(req, res) {
 // ─── Registration Factory ─────────────────────────────────────────────────────
 
 async function createRegistrationFromOrder(order, orderId) {
-  const { studentId, studentName, studentEmail, branchId, serviceType, serviceData, amount, paymentMethod } = order;
-  const ctx = { studentId, studentName, studentEmail, branchId, serviceData: serviceData || {}, amount: amount || 0, orderId, paymentMethod: paymentMethod || 'chargily' };
+  const { studentId, studentName, studentEmail, branchId, serviceType, serviceData, amount, paymentMethod, chargilyCheckoutId, chargilyPaymentId } = order;
+  const ctx = {
+    studentId, studentName, studentEmail, branchId,
+    serviceData: serviceData || {}, amount: amount || 0, orderId,
+    paymentMethod: paymentMethod || 'chargily',
+    chargilyCheckoutId: chargilyCheckoutId || null,
+    chargilyPaymentId:  chargilyPaymentId  || null,
+  };
 
   try {
     switch (serviceType) {
@@ -445,9 +535,23 @@ async function createRegistrationFromOrder(order, orderId) {
   }
 }
 
+// Canonical "this record is paid" fields, stamped on every registration document
+// so the frontend can gate the Pay button off a single, uniform signal
+// (paymentStatus === 'paid' / paid === true) regardless of service type or channel.
+function paymentFields({ paymentMethod, chargilyCheckoutId, chargilyPaymentId, now }) {
+  return {
+    paid:               true,
+    paymentStatus:      'paid',
+    paidAt:             now,
+    paymentMethod:      paymentMethod || 'chargily',
+    chargilyCheckoutId: chargilyCheckoutId || null,
+    chargilyPaymentId:  chargilyPaymentId  || null,
+  };
+}
+
 // ─── Language Registration ────────────────────────────────────────────────────
 
-async function _createLanguageReg({ studentId, studentName, studentEmail, branchId, serviceData: sd, amount, orderId, paymentMethod }) {
+async function _createLanguageReg({ studentId, studentName, studentEmail, branchId, serviceData: sd, amount, orderId, paymentMethod, chargilyCheckoutId, chargilyPaymentId }) {
   const now     = admin.firestore.FieldValue.serverTimestamp();
   const classId = sd.classId || null;
 
@@ -487,7 +591,8 @@ async function _createLanguageReg({ studentId, studentName, studentEmail, branch
     birthDate: sd.birthDate || null, birthPlace: sd.birthPlace || '',
     school: normalizeSchool(sd.school),
     guardianPhone: sd.guardianPhone || '', studentPhone: sd.studentPhone || '',
-    paymentMethod, paymentOrderId: orderId, receiptUrl: null, branchId,
+    paymentMethod, paymentOrderId: orderId, branchId,
+    ...paymentFields({ paymentMethod, chargilyCheckoutId, chargilyPaymentId, now }),
   };
 
   // Transactional capacity + duplicate gate; write the canonical archive, the
@@ -524,7 +629,7 @@ async function _createLanguageReg({ studentId, studentName, studentEmail, branch
 
 // ─── Training Registration ────────────────────────────────────────────────────
 
-async function _createTrainingReg({ studentId, studentName, studentEmail, branchId, serviceData: sd, amount, orderId, paymentMethod }) {
+async function _createTrainingReg({ studentId, studentName, studentEmail, branchId, serviceData: sd, amount, orderId, paymentMethod, chargilyCheckoutId, chargilyPaymentId }) {
   const now        = admin.firestore.FieldValue.serverTimestamp();
   const classId    = sd.classId || null;
   const trainingId = sd.trainingId || sd.subjectId || null;
@@ -559,7 +664,8 @@ async function _createTrainingReg({ studentId, studentName, studentEmail, branch
     price, trainingPrice: price,
     birthDate: sd.birthDate || null, birthPlace: sd.birthPlace || '',
     school: normalizeSchool(sd.school), studentPhone: sd.studentPhone || '',
-    paymentMethod, paymentOrderId: orderId, receiptUrl: null, branchId,
+    paymentMethod, paymentOrderId: orderId, branchId,
+    ...paymentFields({ paymentMethod, chargilyCheckoutId, chargilyPaymentId, now }),
   };
 
   await db.runTransaction(async (t) => {
@@ -589,7 +695,7 @@ async function _createTrainingReg({ studentId, studentName, studentEmail, branch
 
 // ─── Support Lesson Registration ──────────────────────────────────────────────
 
-async function _createSupportReg({ studentId, studentName, studentEmail, branchId, serviceData: sd, amount, orderId, paymentMethod }) {
+async function _createSupportReg({ studentId, studentName, studentEmail, branchId, serviceData: sd, amount, orderId, paymentMethod, chargilyCheckoutId, chargilyPaymentId }) {
   const now     = admin.firestore.FieldValue.serverTimestamp();
   const classId = sd.classId || null;
   if (!classId) { const e = new Error('missing-class'); e._code = 'missing-class'; throw e; }
@@ -653,9 +759,10 @@ async function _createSupportReg({ studentId, studentName, studentEmail, branchI
     remainingSessionsAtEnrollment: proration.remainingSessions,
     pricePerSession: proration.pricePerSession,
     includesAnnualFee, annualFeeAmount,
-    paymentMethod, paymentOrderId: orderId, paymentProofUrl: null,
+    paymentMethod, paymentOrderId: orderId,
     source: 'chargily',
     status: 'verified', verifiedAt: now, createdAt: now, updatedAt: now,
+    ...paymentFields({ paymentMethod, chargilyCheckoutId, chargilyPaymentId, now }),
   };
 
   // Transactional capacity gate (count active verified regs for this lesson, then
@@ -713,7 +820,7 @@ async function _createSupportReg({ studentId, studentName, studentEmail, branchI
 
 // ─── Annual Fee Registration ──────────────────────────────────────────────────
 
-async function _createAnnualFeeReg({ studentId, studentName, studentEmail, branchId, serviceData: sd, amount, orderId, paymentMethod }) {
+async function _createAnnualFeeReg({ studentId, studentName, studentEmail, branchId, serviceData: sd, amount, orderId, paymentMethod, chargilyCheckoutId, chargilyPaymentId }) {
   const now = admin.firestore.FieldValue.serverTimestamp();
   const yr  = academicYear.getAcademicYearLabel();
 
@@ -745,9 +852,14 @@ async function _createAnnualFeeReg({ studentId, studentName, studentEmail, branc
     studyYear: sd.studyYear || '',
     paymentMethod:  paymentMethod,
     paymentOrderId: orderId,
-    receiptUrl:     null,
     status:         'verified',
+    // annualPayments keeps its established 'verified' convention (matches the admin
+    // path + the frontend's status-based detection); `paid` is the new uniform flag.
     paymentStatus:  'verified',
+    paid:           true,
+    paidAt:         now,
+    chargilyCheckoutId: chargilyCheckoutId || null,
+    chargilyPaymentId:  chargilyPaymentId  || null,
     source:         'chargily',
     verifiedAt:     now,
     createdAt:      now,
@@ -802,6 +914,5 @@ module.exports = {
   handleWebhook,
   getOrderStatus,
   verifyAndProcess,
-  recordCashPayment,
   listOrders,
 };

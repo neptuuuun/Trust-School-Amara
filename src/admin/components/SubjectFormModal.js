@@ -22,7 +22,7 @@ const SubjectFormModal = ({
   onClose,
 }) => {
   const isEdit = Boolean(subject);
-  const { user } = useAuth();
+  const { user, adminData } = useAuth();
   const { show: showToast } = useToast();
 
   const [name, setName] = useState(subject?.name || '');
@@ -43,15 +43,16 @@ const SubjectFormModal = ({
 
     try {
       setSubmitting(true);
+      const actor = { uid: user?.uid, name: adminData?.name || '', email: user?.email };
       if (isEdit) {
-        await updateSubject(branchId, subject.id, { name, description });
+        await updateSubject(branchId, subject.id, { name, description }, actor);
         showToast('success', `تم تحديث ${subjectWord} بنجاح`);
       } else {
         await createSubject(
           branchId,
           serviceType,
           { name, description, ...scope },
-          { uid: user?.uid, email: user?.email },
+          actor,
         );
         showToast('success', `تمت إضافة ${subjectWord} بنجاح`);
       }

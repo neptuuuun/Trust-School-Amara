@@ -4,17 +4,15 @@
  */
 
 import { db } from '../firebase';
-import { getYearById } from '../data/studyLevels';
 import apiCall from '../utils/apiClient';
-import { getCurrentAcademicYear, isAnnualPaymentForCurrentYear, toDate as toDateValue } from '../utils/registrationUtils';
-import { cleanupPaymentReceipt } from './storageCleanupService';
+import { logAdminAction } from './auditService';
+import { getCurrentAcademicYear, isAnnualPaymentForCurrentYear, toDate as toDateValue, ANNUAL_FEE_DZD } from '../utils/registrationUtils';
 import {
   collection,
   collectionGroup,
   doc,
   getDoc,
   getDocs,
-  setDoc,
   updateDoc,
   addDoc,
   deleteDoc,
@@ -24,12 +22,23 @@ import {
   limit,
   serverTimestamp,
   onSnapshot,
-  arrayUnion,
   documentId,
-  Timestamp,
   writeBatch,
   increment
 } from 'firebase/firestore';
+
+/**
+ * The backend returns schedule conflicts as { code:'schedule-conflict', message,
+ * conflicts:[…] }; apiClient surfaces the body on err.response. Re-shape it into
+ * the { code, conflict, conflicts } contract the UI (ScheduleConflictPanel) reads.
+ */
+const reshapeConflictError = (err) => {
+  if (err && err.code === 'schedule-conflict') {
+    err.conflicts = err.response?.conflicts || (err.conflict ? [err.conflict] : []);
+    err.conflict = err.conflicts[0] || null;
+  }
+  return err;
+};
 
 // ==================== Collection References ====================
 
@@ -44,45 +53,6 @@ export const getBranchCollection = (branchId, path) => {
   return collection(db, `branches/${branchId}/${path}`);
 };
 
-export const listenTrainingRegistrationStatus = (branchId, userId, trainingId, callback) => {
-  if (!branchId || !userId || !trainingId) {
-    return () => {};
-  }
-
-  const entriesRef = collection(
-    db,
-    `branches/${branchId}/${TRAINING_FORM_CONTAINERS_COLLECTION}/${userId}/${TRAINING_FORM_ENTRIES_SUBCOLLECTION}`
-  );
-
-  const statusQuery = query(
-    entriesRef,
-    where('trainingId', '==', trainingId),
-    orderBy('submittedAt', 'desc'),
-    limit(1)
-  );
-
-  return onSnapshot(statusQuery, (snapshot) => {
-    const statusEntry = snapshot.docs.length ? { id: snapshot.docs[0].id, ...snapshot.docs[0].data() } : null;
-    callback(statusEntry);
-  });
-};
-
-export const getUserTrainingSignIns = async (branchId, userId) => {
-  if (!branchId || !userId) return [];
-
-  const entriesRef = collection(
-    db,
-    `branches/${branchId}/${TRAINING_FORM_CONTAINERS_COLLECTION}/${userId}/${TRAINING_FORM_ENTRIES_SUBCOLLECTION}`
-  );
-  const snapshot = await getDocs(entriesRef);
-  return snapshot.docs
-    .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
-    .sort((a, b) => {
-      const dateA = a.submittedAt?.toDate ? a.submittedAt.toDate() : 0;
-      const dateB = b.submittedAt?.toDate ? b.submittedAt.toDate() : 0;
-      return dateB - dateA;
-    });
-};
 
 export const streamUserTrainingSignIns = (branchId, userId, callback) => {
   if (!branchId || !userId) {
@@ -132,15 +102,6 @@ const CLASSES_COLLECTION = 'classes';
 
 const sortByArabic = (key) => (a, b) =>
   String(a?.[key] || '').localeCompare(String(b?.[key] || ''), 'ar');
-
-const sanitizeScheduleList = (schedules) =>
-  (Array.isArray(schedules) ? schedules : [])
-    .map((s) => ({
-      day: s?.day ? String(s.day).trim() : '',
-      start: s?.start ? String(s.start).trim() : '',
-      end: s?.end ? String(s.end).trim() : '',
-    }))
-    .filter((s) => s.day && s.start && s.end);
 
 // ── Subjects ──────────────────────────────────────────────────────────────────
 
@@ -208,20 +169,32 @@ export const createSubject = async (branchId, serviceType, data = {}, adminInfo 
     ...(data.studyYear ? { studyYear: data.studyYear } : {}),
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
-    createdBy: { uid: adminInfo.uid || '', email: adminInfo.email || '' },
+    // Canonical actor shape {uid,name,email} — standardized across all writes.
+    createdBy: { uid: adminInfo.uid || '', name: adminInfo.name || '', email: adminInfo.email || '' },
   };
   const docRef = await addDoc(getBranchCollection(branchId, SUBJECTS_COLLECTION), payload);
+  await logAdminAction({ action: 'subject.create', branchId, targetType: 'subject', targetId: docRef.id, after: { name, serviceType } });
   return { id: docRef.id, ...payload };
 };
 
 /** Update a subject's editable fields (name, description, status). */
-export const updateSubject = async (branchId, subjectId, updates = {}) => {
+export const updateSubject = async (branchId, subjectId, updates = {}, adminInfo = {}) => {
   if (!branchId || !subjectId) throw new Error('branchId and subjectId are required');
-  const clean = { updatedAt: serverTimestamp() };
+  const ref = getBranchDoc(branchId, SUBJECTS_COLLECTION, subjectId);
+  const beforeSnap = await getDoc(ref);
+  const beforeData = beforeSnap.exists() ? beforeSnap.data() : {};
+  const clean = {
+    updatedAt: serverTimestamp(),
+    updatedBy: { uid: adminInfo.uid || '', name: adminInfo.name || '', email: adminInfo.email || '' },
+  };
   if (updates.name != null) clean.name = String(updates.name).trim();
   if (updates.description != null) clean.description = String(updates.description).trim();
   if (updates.status != null) clean.status = updates.status;
-  await updateDoc(getBranchDoc(branchId, SUBJECTS_COLLECTION, subjectId), clean);
+  await updateDoc(ref, clean);
+  // Mirror the updated keys into `before` so the history/feed can diff them.
+  const before = {};
+  Object.keys(updates).forEach((k) => { before[k] = beforeData[k] ?? null; });
+  await logAdminAction({ action: 'subject.update', branchId, targetType: 'subject', targetId: subjectId, before, after: updates });
 
   // Keep the snapshot name on existing classes consistent when a subject is renamed.
   if (updates.name != null) {
@@ -252,10 +225,13 @@ export const deleteSubject = async (branchId, subjectId, { force = false } = {})
       throw e;
     }
   }
+  const subjSnap = await getDoc(getBranchDoc(branchId, SUBJECTS_COLLECTION, subjectId));
+  const subjName = subjSnap.exists() ? (subjSnap.data().name || '') : '';
   const batch = writeBatch(db);
   snap.docs.forEach((d) => batch.delete(d.ref));
   batch.delete(getBranchDoc(branchId, SUBJECTS_COLLECTION, subjectId));
   await batch.commit();
+  await logAdminAction({ action: 'subject.delete', branchId, targetType: 'subject', targetId: subjectId, before: { name: subjName }, after: { cascadedClasses: snap.size } });
 };
 
 // ── Classes ───────────────────────────────────────────────────────────────────
@@ -302,55 +278,44 @@ const applyClassFilters = (rows, options = {}) => {
   return out.sort(sortByArabic('groupName'));
 };
 
-const toNonNegativeNumber = (value, fallback = 0) => {
-  if (value === '' || value == null) return fallback;
-  const n = Number(value);
-  return Number.isFinite(n) && n >= 0 ? n : fallback;
-};
-
 /**
- * Create a class under a subject. priceType defaults to 'monthly' for support,
- * 'oneTime' for language/training.
+ * Create a class under a subject. SERVER-AUTHORITATIVE: the write + the teacher /
+ * classroom conflict check run inside a Firestore transaction on the backend
+ * (Admin SDK). Firestore rules forbid clients from creating classes directly, so
+ * this endpoint is the only way a class can come into existence — every class is
+ * therefore conflict-checked. `adminInfo` is ignored (derived from the token).
  */
-export const createClass = async (branchId, serviceType, data = {}, adminInfo = {}) => {
+export const createClass = async (branchId, serviceType, data = {}) => {
   if (!branchId) throw new Error('branchId is required');
   if (!serviceType) throw new Error('serviceType is required');
   if (!data.subjectId) throw new Error('subjectId is required');
-
-  const payload = {
-    subjectId: data.subjectId,
-    subjectName: String(data.subjectName || '').trim(),
-    serviceType,
-    teacherName: String(data.teacherName || '').trim(),
-    groupName: String(data.groupName || '').trim(),
-    schedules: sanitizeScheduleList(data.schedules),
-    capacity: toNonNegativeNumber(data.capacity, 0),
-    price: toNonNegativeNumber(data.price, 0),
-    priceType: data.priceType || (serviceType === 'support' ? 'monthly' : 'oneTime'),
-    status: data.status || 'active',
-    branchId,
-    ...(data.level ? { level: String(data.level).trim() } : {}),
-    ...(data.studyYear ? { studyYear: data.studyYear } : {}),
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-    createdBy: { uid: adminInfo.uid || '', email: adminInfo.email || '' },
-  };
-  const docRef = await addDoc(getBranchCollection(branchId, CLASSES_COLLECTION), payload);
-  return { id: docRef.id, ...payload };
+  try {
+    return await apiCall('/api/academic/classes', {
+      method: 'POST',
+      body: JSON.stringify({ branchId, serviceType, data }),
+    });
+  } catch (err) {
+    throw reshapeConflictError(err);
+  }
 };
 
-/** Update a class's editable fields. */
+/**
+ * Update a class's editable fields. SERVER-AUTHORITATIVE: schedule/teacher/
+ * classroom changes are rejected by Firestore rules for clients, so they route
+ * here, where the conflict check runs inside a transaction. (enrollmentCount
+ * bumps and subjectName renames stay direct client writes — they don't touch the
+ * schedule-defining fields and are permitted by the rules.)
+ */
 export const updateClass = async (branchId, classId, updates = {}) => {
   if (!branchId || !classId) throw new Error('branchId and classId are required');
-  const clean = { updatedAt: serverTimestamp() };
-  ['teacherName', 'groupName', 'level', 'subjectName'].forEach((k) => {
-    if (updates[k] != null) clean[k] = String(updates[k]).trim();
-  });
-  if (updates.schedules != null) clean.schedules = sanitizeScheduleList(updates.schedules);
-  if (updates.capacity != null) clean.capacity = toNonNegativeNumber(updates.capacity, 0);
-  if (updates.price != null) clean.price = toNonNegativeNumber(updates.price, 0);
-  if (updates.status != null) clean.status = updates.status;
-  await updateDoc(getBranchDoc(branchId, CLASSES_COLLECTION, classId), clean);
+  try {
+    return await apiCall(`/api/academic/classes/${classId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ branchId, updates }),
+    });
+  } catch (err) {
+    throw reshapeConflictError(err);
+  }
 };
 
 /** Fetch a single class document, or null. */
@@ -367,26 +332,40 @@ export const getClassById = async (branchId, classId) => {
  */
 export const deleteClass = async (branchId, classId, { force = false } = {}) => {
   if (!branchId || !classId) throw new Error('branchId and classId are required');
-  if (!force) {
-    const cls = await getClassById(branchId, classId);
-    const enrolled = Number(cls?.enrollmentCount) || 0;
-    if (enrolled > 0) {
-      const e = new Error('class-has-registrations');
-      e.code = 'class-has-registrations';
-      e.count = enrolled;
-      throw e;
-    }
+  // SERVER-AUTHORITATIVE: deletion runs through the Express backend so it is
+  // audit-logged (group.delete) with a server-resolved actor and the same
+  // approved-enrollment safe-delete guard. Direct client deletes are no longer used.
+  try {
+    return await apiCall(
+      `/api/academic/classes/${classId}?branchId=${encodeURIComponent(branchId)}&force=${force ? 'true' : 'false'}`,
+      { method: 'DELETE' },
+    );
+  } catch (err) {
+    // apiCall puts extra body fields on err.response — surface `count` where the UI reads it.
+    if (err?.code === 'class-has-registrations' && err.count == null) err.count = err.response?.count;
+    throw reshapeConflictError(err);
   }
-  await deleteDoc(getBranchDoc(branchId, CLASSES_COLLECTION, classId));
 };
 
 // ── Capacity (approved-enrollment) accounting ─────────────────────────────────
 // Students cannot count other students' registrations (security rules restrict
 // them to their own), so each class keeps a denormalized `enrollmentCount` of
-// APPROVED registrations. It is maintained on approve (+1) / admin-remove (-1)
-// and read both by the student "full" indicator and the verification hard-gate.
+// APPROVED registrations. It powers the student "full" indicator and the
+// verification hard-gate.
+//
+// The counter is DISPLAY/GATING state, not analytics state. It is maintained by
+// increments spread across several write paths and drifts the moment a record is
+// removed outside them. The owner's alert engine therefore counts the approved
+// archives live instead (backend/services/liveStateService.js) — do not point
+// analytics at this field.
 
-/** Adjust a class's approved-enrollment counter (best-effort; never throws). */
+/**
+ * Adjust a class's approved-enrollment counter (best-effort; never throws).
+ *
+ * @deprecated Blind ±1 drifts on races and double-clicks. Removal paths now go
+ * through the backend, which RE-COUNTS from the archive and appends the matching
+ * ledger reversal. Do not reintroduce a client-side decrement.
+ */
 export const adjustClassEnrollment = async (branchId, classId, delta) => {
   if (!branchId || !classId || !delta) return;
   try {
@@ -399,22 +378,71 @@ export const adjustClassEnrollment = async (branchId, classId, delta) => {
   }
 };
 
+
+// ── Schedule-conflict guards (service layer) ──────────────────────────────────
+// The shared engine (src/utils/scheduleConflicts.js) does the interval math; the
+// backend mirror enforces the same rules on its own write paths. These helpers
+// load the comparison set from Firestore and throw a structured
+// `schedule-conflict` error (err.conflict / err.conflicts) when a clash exists.
+
+
 /**
- * Throw { code:'class-full' } when the class is at capacity (approved-only).
- * No-op when the class is missing (deleted) or capacity is 0 (unlimited).
+ * Collect every schedule a student currently occupies across the three
+ * registration stores (active / seat-occupying records only).
+ * @returns {Promise<Array<{classId, groupName, subjectName, schedules}>>}
  */
-export const assertClassNotFull = async (branchId, classId) => {
-  if (!branchId || !classId) return;
-  const cls = await getClassById(branchId, classId);
-  if (!cls) return;
-  const capacity = Number(cls.capacity) || 0;
-  const enrolled = Number(cls.enrollmentCount) || 0;
-  if (capacity > 0 && enrolled >= capacity) {
-    const e = new Error('class-full');
-    e.code = 'class-full';
-    throw e;
+export const getStudentEnrollments = async (branchId, userId, { now = new Date() } = {}) => {
+  if (!branchId || !userId) return [];
+  const out = [];
+  const push = (docs) => docs.forEach((d) => {
+    const x = d.data() || {};
+    if (!Array.isArray(x.schedules) || x.schedules.length === 0) return;
+    out.push({
+      classId: x.classId || x.lessonId || null,
+      groupName: x.groupName || x.subjectName || x.languageName || x.trainingName || '—',
+      subjectName: x.subjectName || x.languageName || x.trainingName || '',
+      schedules: x.schedules,
+    });
+  });
+
+  try {
+    const [langSnap, trainSnap] = await Promise.all([
+      getDocs(query(getBranchCollection(branchId, 'languagesRegistered'), where('userId', '==', userId))),
+      getDocs(query(getBranchCollection(branchId, 'trainingsRegistered'), where('userId', '==', userId))),
+    ]);
+    push(langSnap.docs);
+    push(trainSnap.docs);
+  } catch (e) {
+    console.warn('getStudentEnrollments: lang/train read failed', e);
   }
+
+  // Support is a global collection filtered to active verified subscriptions.
+  try {
+    const supSnap = await getDocs(query(
+      collection(db, 'supportLessonRegistrations'),
+      where('userId', '==', userId),
+    ));
+    supSnap.docs.forEach((d) => {
+      const x = d.data() || {};
+      if (x.branchId !== branchId) return;
+      if (String(x.status || '').toLowerCase() !== 'verified') return;
+      const end = x.endDate?.toDate ? x.endDate.toDate() : (x.endDate ? new Date(x.endDate) : null);
+      if (end && end <= now) return; // expired frees the slot
+      if (!Array.isArray(x.schedules) || x.schedules.length === 0) return;
+      out.push({
+        classId: x.classId || x.lessonId || null,
+        groupName: x.groupName || x.subjectName || x.lessonName || '—',
+        subjectName: x.subjectName || x.lessonName || '',
+        schedules: x.schedules,
+      });
+    });
+  } catch (e) {
+    console.warn('getStudentEnrollments: support read failed', e);
+  }
+
+  return out;
 };
+
 
 // ==================== Teachers (branch-scoped) ====================
 // Dedicated catalog of teacher names so classes pick from a managed list
@@ -450,61 +478,26 @@ export const createTeacher = async (branchId, name, adminInfo = {}) => {
     name: n,
     branchId,
     createdAt: serverTimestamp(),
-    createdBy: { uid: adminInfo.uid || '', email: adminInfo.email || '' },
+    // Canonical actor shape {uid,name,email} — standardized across all writes.
+    createdBy: { uid: adminInfo.uid || '', name: adminInfo.name || '', email: adminInfo.email || '' },
   };
   const ref = await addDoc(getBranchCollection(branchId, TEACHERS_COLLECTION), payload);
+  await logAdminAction({ action: 'teacher.create', branchId, targetType: 'teacher', targetId: ref.id, after: { name: n } });
   return { id: ref.id, ...payload };
 };
 
-export const updateTeacher = async (branchId, teacherId, name) => {
-  if (!branchId || !teacherId) throw new Error('branchId and teacherId are required');
-  await updateDoc(getBranchDoc(branchId, TEACHERS_COLLECTION, teacherId), {
-    name: String(name || '').trim(),
-    updatedAt: serverTimestamp(),
-  });
-};
 
 export const deleteTeacher = async (branchId, teacherId) => {
   if (!branchId || !teacherId) throw new Error('branchId and teacherId are required');
-  await deleteDoc(getBranchDoc(branchId, TEACHERS_COLLECTION, teacherId));
+  const ref = getBranchDoc(branchId, TEACHERS_COLLECTION, teacherId);
+  const beforeSnap = await getDoc(ref);
+  const beforeName = beforeSnap.exists() ? (beforeSnap.data().name || '') : '';
+  await deleteDoc(ref);
+  await logAdminAction({ action: 'teacher.delete', branchId, targetType: 'teacher', targetId: teacherId, before: { name: beforeName } });
 };
 
 // ==================== User Management ====================
 
-/**
- * Create or update a user document
- * @param {string} branchId
- * @param {string} userId
- * @param {object} userData
- */
-export const createUser = async (branchId, userId, userData) => {
-  const userRef = getBranchDoc(branchId, 'users', userId);
-  const existingSnap = await getDoc(userRef);
-
-  const baseData = {
-    ...userData,
-    verified: false,
-    accountVerified: false,
-    yearlyFeePaid: false,
-    enrolledLessons: [],
-    uploadedDocs: [],
-    verificationStatus: userData?.verificationStatus || 'pending',
-    status: userData?.status || 'pending',
-    verificationRequest: userData?.verificationRequest || null,
-    role: 'student',
-    createdAt: serverTimestamp(),
-  };
-
-  if (!existingSnap.exists()) {
-    baseData.registrations = {
-      language: false,
-      trainings: [],
-      annualFee: null,
-    };
-  }
-
-  await setDoc(userRef, baseData, { merge: true });
-};
 
 /**
  * Get user document
@@ -534,70 +527,24 @@ export const updateUserProfile = async (branchId, userId, fields = {}) => {
   if (fields.guardianPhone)   { patch.guardianPhone = fields.guardianPhone; patch.phoneNumber = fields.guardianPhone; }
   if (fields.studentPhone)    patch.studentPhone = fields.studentPhone;
   if (fields.phone)           { patch.phone = fields.phone; patch.phoneNumber = fields.phone; }
-  if (fields.school)          patch.school = fields.school;
+  // School is REQUIRED — only ever written with a non-empty value, so a blank
+  // submission can never clear an existing person's educational institution.
+  if (fields.school != null && String(fields.school).trim()) patch.school = String(fields.school).trim();
   if (fields.stream)          patch.stream = fields.stream;
   if (Object.keys(patch).length === 0) return;
   patch.updatedAt = serverTimestamp();
   await updateDoc(userRef, patch);
 };
 
-/**
- * Update user verification status
- * @param {string} branchId
- * @param {string} userId
- * @param {boolean} verified
- */
-export const updateUserVerification = async (branchId, userId, approved, adminInfo = {}) => {
-  const userRef = getBranchDoc(branchId, 'users', userId);
-  const isVerified = Boolean(approved);
+// NOTE: account verification is NOT done here. The canonical path is
+// UsersPage.executeDecision → userService.updateUser, which records verifiedBy
+// and logs document.approve/reject. A previous updateUserVerification helper here
+// was dead code (zero callers) and has been removed to avoid a divergent path.
 
-  const baseUpdate = {
-    verified: isVerified,
-    accountVerified: isVerified,
-    verifiedAt: isVerified ? serverTimestamp() : null,
-    verifiedBy: adminInfo.uid || null,
-    verificationReviewerEmail: adminInfo.email || null,
-    verificationStatus: isVerified ? 'verified' : 'rejected',
-    status: 'active',
-    verificationRequest: null,
-    updatedAt: serverTimestamp()
-  };
-
-  if (!isVerified) {
-    baseUpdate.uploadedDocs = [];
-    baseUpdate.photoUrl = null;
-    baseUpdate.idCardUrl = null;
-  }
-
-  await updateDoc(userRef, baseUpdate);
-};
-
-/**
- * Update user yearly fee status
- * @param {string} branchId
- * @param {string} userId
- * @param {boolean} paid
- */
-export const updateYearlyFeeStatus = async (branchId, userId, paid) => {
-  const userRef = getBranchDoc(branchId, 'users', userId);
-  await updateDoc(userRef, { yearlyFeePaid: paid });
-};
-
-/**
- * Get all unverified users
- * @param {string} branchId
- * @returns {Promise<Array>}
- */
-export const getUnverifiedUsers = async (branchId) => {
-  const usersRef = getBranchCollection(branchId, 'users');
-  const qRef = query(usersRef, where('verificationStatus', '==', 'pending'));
-  const snapshot = await getDocs(qRef);
-  return snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
-};
 
 // ==================== Languages ====================
 
-const LANGUAGE_FORM_ENTRIES_SUBCOLLECTION = 'languageFormEntries';
+
 const TRAINING_FORM_CONTAINERS_COLLECTION = 'trainingsForms';
 const TRAINING_FORM_ENTRIES_SUBCOLLECTION = 'trainingFormEntries';
 
@@ -606,18 +553,6 @@ const normalizeLanguageName = (language) => {
   return language.languageName || language.name || '';
 };
 
-/**
- * Create a new language course
- * @param {string} branchId
- * @param {object} languageData - { name, description, price }
- */
-export const createLanguage = async (branchId, languageData) => {
-  const languagesRef = getBranchCollection(branchId, 'languages');
-  return await addDoc(languagesRef, {
-    ...languageData,
-    createdAt: serverTimestamp(),
-  });
-};
 
 /**
  * Get all languages for a branch
@@ -634,629 +569,54 @@ export const getLanguages = async (branchId) => {
   }));
 };
 
-/**
- * Create or update a student's language registration in the languagesForms structure
- * @param {string} branchId
- * @param {object} registrationData
- */
-export const createLanguageRegistration = async (branchId, registrationData) => {
-  const {
-    userId,
-    levelId,
-    levelLabel,
-    languageId,
-    languageName,
-    languagePrice,
-    teacherName,
-    studentName,
-    userEmail,
-    birthDate,
-    birthPlace,
-    guardianPhone,
-    studentPhone,
-    paymentMethod,
-    receiptUrl,
-    receiptPath,
-    // New Subject → Class snapshot fields
-    subjectId: subjectIdRaw,
-    subjectName: subjectNameRaw,
-    classId: classIdRaw,
-    groupName,
-    schedules,
-  } = registrationData;
-
-  if (!userId) throw new Error('userId is required for language registration');
-
-  const classId = classIdRaw || '';
-  const subjectId = subjectIdRaw || languageId || '';
-  const subjectName = subjectNameRaw || languageName || '';
-  // Accept the new class-based flow OR the legacy language+level flow.
-  if (!classId && !languageId) {
-    throw new Error('classId or languageId is required for language registration');
-  }
-
-  // Document id is derived from the most specific identifier available.
-  const idSource = classId || levelId || languageId || 'lang';
-  const sanitizedId = String(idSource).replace(/\./g, '_');
-  const formContainerRef = getBranchDoc(branchId, 'languagesForms', userId);
-  const existingSnapshot = await getDoc(formContainerRef);
-
-  const timestampFields = existingSnapshot.exists()
-    ? { updatedAt: serverTimestamp() }
-    : { createdAt: serverTimestamp(), updatedAt: serverTimestamp() };
-
-  await setDoc(formContainerRef, {
-    userId,
-    branchId,
-    studentEmail: userEmail || '',
-    studentName: studentName || '',
-    lastSubmittedAt: serverTimestamp(),
-    ...timestampFields
-  }, { merge: true });
-
-  const formId = `${sanitizedId}-${Date.now()}`;
-  const entriesRef = collection(formContainerRef, LANGUAGE_FORM_ENTRIES_SUBCOLLECTION);
-  const formRef = doc(entriesRef, formId);
-
-  const formData = {
-    formId,
-    userId:    userId,   // canonical ownership field (Phase D — studentId removed)
-    branchId,
-    studentEmail: userEmail || '',
-    studentName: studentName || '',
-    birthDate: birthDate || null,
-    birthPlace: birthPlace || '',
-    guardianPhone: guardianPhone || '',
-    studentPhone: studentPhone || '',
-    paymentMethod: paymentMethod || '',
-    receiptUrl: receiptUrl || '',
-    receiptPath: receiptPath || '',
-    // Legacy fields — preserved for the existing admin list + verification flow
-    languageId: languageId || subjectId || '',
-    languageName: languageName || subjectName || '',
-    languagePrice: languagePrice ?? null,
-    teacherName: teacherName || '',
-    levelId: levelId ? String(levelId).replace(/\./g, '_') : '',
-    levelLabel: levelLabel || levelId || '',
-    // New Subject → Class snapshot fields (readable even if the class changes later)
-    subjectId,
-    subjectName,
-    classId,
-    groupName: groupName || '',
-    schedules: Array.isArray(schedules) ? schedules : [],
-    status: 'pending',
-    verified: false,
-    visibility: 'pending',
-    submittedAt: serverTimestamp(),
-    verifiedAt: null,
-    verifiedBy: null,
-    updatedAt: serverTimestamp(),
-  };
-
-  await setDoc(formRef, formData);
-  return formData;
-};
-
-/**
- * Get flattened list of language registrations filtered by verification status
- * @param {string} branchId
- * @param {boolean} verifiedState
- * @returns {Promise<Array>}
- */
-export const getLanguageRegistrationsByStatus = async (branchId, verifiedState) => {
-  if (!branchId) return [];
-
-  let q = query(
-    collectionGroup(db, LANGUAGE_FORM_ENTRIES_SUBCOLLECTION),
-    where('branchId', '==', branchId),
-    orderBy('submittedAt', 'desc')
-  );
-
-  if (typeof verifiedState === 'string' && verifiedState) {
-    q = query(
-      collectionGroup(db, LANGUAGE_FORM_ENTRIES_SUBCOLLECTION),
-      where('branchId', '==', branchId),
-      where('status', '==', verifiedState),
-      orderBy('submittedAt', 'desc')
-    );
-  } else if (typeof verifiedState === 'boolean') {
-    q = query(
-      collectionGroup(db, LANGUAGE_FORM_ENTRIES_SUBCOLLECTION),
-      where('branchId', '==', branchId),
-      where('status', '==', verifiedState ? 'approved' : 'pending'),
-      orderBy('submittedAt', 'desc')
-    );
-  }
-
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map(docSnap => ({
-    id: docSnap.id,
-    ...docSnap.data()
-  }));
-};
-
-/**
- * Get unverified language registrations (backwards-compatible API)
- * @param {string} branchId
- * @returns {Promise<Array>}
- */
-export const getUnverifiedLanguageRegistrations = async (branchId) => {
-  const entries = await getLanguageRegistrationsByStatus(branchId, 'pending');
-
-  return entries.sort((a, b) => {
-    const dateA = a.submittedAt?.toDate ? a.submittedAt.toDate() : new Date(0);
-    const dateB = b.submittedAt?.toDate ? b.submittedAt.toDate() : new Date(0);
-    return dateB - dateA;
-  });
-};
-
-/**
- * Stream all language registrations for a branch
- * @param {string} branchId
- * @param {(entries: Array) => void} callback
- * @returns {() => void} unsubscribe function
- */
-export const streamBranchLanguageRegistrations = (branchId, callback) => {
-  if (!branchId) {
-    return () => {};
-  }
-
-  const q = query(
-    collectionGroup(db, LANGUAGE_FORM_ENTRIES_SUBCOLLECTION),
-    where('branchId', '==', branchId),
-    orderBy('submittedAt', 'desc')
-  );
-
-  return onSnapshot(q, (snapshot) => {
-    const entries = snapshot.docs.map(docSnap => ({
-      id: docSnap.id,
-      ...docSnap.data()
-    }));
-    callback(entries);
-  });
-};
-
-/**
- * Verify language registration by student and level
- * @param {string} branchId
- * @param {string} studentId
- * @param {string} levelId
- * @param {object} adminInfo
- */
-export const verifyLanguageRegistration = async (branchId, studentId, formId, adminInfo = {}) => {
-  if (!studentId || !formId) throw new Error('studentId and formId are required to verify language form');
-
-  const registrationRef = doc(
-    db,
-    `branches/${branchId}/languagesForms/${studentId}/${LANGUAGE_FORM_ENTRIES_SUBCOLLECTION}/${formId}`
-  );
-
-  const registrationSnap = await getDoc(registrationRef);
-  if (!registrationSnap.exists()) {
-    throw new Error('Language registration not found');
-  }
-
-  const registrationData = registrationSnap.data();
-  const verifiedBy = {
-    uid: adminInfo.uid || '',
-    email: adminInfo.email || '',
-    name: adminInfo.name || ''
-  };
-
-  // Capacity hard-gate (approved-only). New class-based registrations carry classId.
-  if (registrationData.classId) {
-    await assertClassNotFull(branchId, registrationData.classId);
-  }
-
-  const registeredRef = doc(db, `branches/${branchId}/languagesRegistered/${formId}`);
-  const userRef = getBranchDoc(branchId, 'users', studentId);
-  const languageSummary = {
-    formId,
-    languageName: registrationData.languageName || '',
-    levelLabel: registrationData.levelLabel || '',
-    registeredAt: Date.now(),
-    verifiedBy: adminInfo?.name || adminInfo?.email || null
-  };
-
-  const batch = writeBatch(db);
-
-  batch.update(registrationRef, {
-    status: 'approved',
-    verified: true,
-    visibility: 'approved',
-    verifiedAt: serverTimestamp(),
-    verifiedBy,
-    // Receipt is no longer needed after approval — drop the references (file
-    // is removed from Storage below). Audit info above is preserved.
-    receiptUrl: '',
-    receiptPath: '',
-    updatedAt: serverTimestamp()
-  });
-
-  batch.set(registeredRef, {
-    ...registrationData,
-    formId,
-    userId: studentId,  // canonical ownership field (Phase D — studentId param is the Firebase UID)
-    branchId,
-    status: 'registered',
-    receiptUrl: '',
-    receiptPath: '',
-    registeredAt: serverTimestamp(),
-    verifiedAt: serverTimestamp(),
-    verifiedBy
-  });
-
-  batch.update(userRef, {
-    'registrations.language': true,
-    'registrations.languages': arrayUnion(languageSummary),
-    updatedAt: serverTimestamp()
-  });
-
-  // Increment the class enrollment counter atomically with the registration
-  // write so the Firestore rule capacity check stays consistent.
-  if (registrationData.classId) {
-    batch.update(getBranchDoc(branchId, CLASSES_COLLECTION, registrationData.classId), {
-      enrollmentCount: increment(1),
-      updatedAt: serverTimestamp(),
-    });
-  }
-
-  await batch.commit();
-
-  // Best-effort receipt cleanup (never throws). Approved payments keep zero
-  // long-term storage — spec §5.
-  await cleanupPaymentReceipt(registrationData.receiptUrl, registrationData.receiptPath);
-};
-
-/**
- * Reject language registration by student and formId
- * @param {string} branchId
- * @param {string} studentId
- * @param {string} formId
- * @param {object} adminInfo
- */
-export const rejectLanguageRegistration = async (branchId, studentId, formId, adminInfo = {}) => {
-  if (!studentId || !formId) throw new Error('studentId and formId are required to reject language form');
-
-  const registrationRef = doc(
-    db,
-    `branches/${branchId}/languagesForms/${studentId}/${LANGUAGE_FORM_ENTRIES_SUBCOLLECTION}/${formId}`
-  );
-
-  // Capture the receipt reference before we clear it, so we can delete the file.
-  let receiptRefs = [];
-  try {
-    const snap = await getDoc(registrationRef);
-    if (snap.exists()) {
-      const d = snap.data() || {};
-      receiptRefs = [d.receiptUrl, d.receiptPath];
-    }
-  } catch { /* non-fatal — proceed with rejection regardless */ }
-
-  await updateDoc(registrationRef, {
-    status: 'rejected',
-    verified: false,
-    visibility: 'rejected',
-    verifiedAt: null,
-    verifiedBy: null,
-    rejectionReason: adminInfo?.reason || null,
-    // Remove file references from the DB (file deleted from Storage below).
-    receiptUrl: '',
-    receiptPath: '',
-    rejectedAt: serverTimestamp(),
-    rejectedBy: {
-      uid: adminInfo.uid || '',
-      email: adminInfo.email || '',
-      name: adminInfo.name || ''
-    },
-    updatedAt: serverTimestamp()
-  });
-
-  // Rejected requests must consume zero long-term storage — spec §4.
-  await cleanupPaymentReceipt(...receiptRefs);
-};
 
 // ==================== Support Lessons ====================
 
-/**
- * Create a support lesson
- * @param {string} branchId
- * @param {object} lessonData - { name, grade, teacher, timings, subjects, createdBy, studyYear }
- * @param {object} createdBy - { uid, email }
- * 
- * Note: Saves times array to support multiple time slots per lesson.
- * Format: times: [{ day: string, start: string, end: string }]
- */
-export const createSupportLesson = async (branchId, lessonData, createdBy) => {
-  const lessonsRef = getBranchCollection(branchId, 'supportLessons');
-  
-  // Normalize timings to times array format
-  const times = lessonData.timings || lessonData.times || [];
-  const normalizedYear = lessonData.year || lessonData.grade || null;
-  const yearMeta = normalizedYear ? getYearById(normalizedYear) : null;
-  
-  // Derive level from year/grade
-  const level = lessonData.level
-    || yearMeta?.level?.id
-    || (normalizedYear?.startsWith('mid') ? 'middle'
-        : normalizedYear?.startsWith('sec') ? 'high'
-        : null);
-  
-  const studyLevelLabel = lessonData.studyLevel || yearMeta?.nameShort || '';
-  
-  return await addDoc(lessonsRef, {
-    name: lessonData.name,
-    grade: normalizedYear, // legacy compatibility
-    year: normalizedYear,
-    studyYear: normalizedYear,
-    studyLevel: studyLevelLabel,
-    level: level, // 'middle' or 'high' - derived from grade
-    teacher: lessonData.teacher,
-    times: times, // New format: [{ day: string, start: string, end: string }]
-    timings: times, // Keep for backward compatibility
-    subjects: lessonData.subjects || [], // e.g. ["Math", "Physics"]
-    createdAt: serverTimestamp(),
-    createdBy: createdBy || { uid: '', email: '' },
-    branchId: branchId
-  });
-};
-
-/**
- * Update a support lesson
- * @param {string} branchId
- * @param {string} lessonId
- * @param {object} lessonData
- */
-export const updateSupportLesson = async (branchId, lessonId, lessonData) => {
-  const lessonRef = getBranchDoc(branchId, 'supportLessons', lessonId);
-  const normalizedStudyYear = lessonData?.studyYear || lessonData?.year || lessonData?.grade || null;
-  await updateDoc(lessonRef, {
-    ...lessonData,
-    ...(normalizedStudyYear
-      ? {
-          studyYear: normalizedStudyYear,
-          year: lessonData?.year || normalizedStudyYear,
-          grade: lessonData?.grade || normalizedStudyYear,
-        }
-      : {}),
-    updatedAt: serverTimestamp()
-  });
-};
-
-/**
- * Delete a support lesson
- * @param {string} branchId
- * @param {string} lessonId
- */
-export const deleteSupportLesson = async (branchId, lessonId) => {
-  const lessonRef = getBranchDoc(branchId, 'supportLessons', lessonId);
-  await deleteDoc(lessonRef);
-};
-
-/**
- * Get all support lessons for a branch
- * @param {string} branchId
- * @param {string} level - Optional: 'high' | 'middle' to filter
- * @param {string} grade - Optional: grade to filter (e.g. "mid1", "sec2")
- * @param {string} subject - Optional: subject to filter
- * @returns {Promise<Array>}
- */
-export const getSupportLessons = async (branchId, level = null, grade = null, subject = null) => {
-  const lessonsRef = getBranchCollection(branchId, 'supportLessons');
-  let q = query(lessonsRef, orderBy('createdAt', 'desc'));
-  
-  // Apply filters if provided
-  if (level) {
-    q = query(lessonsRef, where('level', '==', level), orderBy('createdAt', 'desc'));
-  }
-  if (grade) {
-    q = query(lessonsRef, where('grade', '==', grade), orderBy('createdAt', 'desc'));
-  }
-  
-  const snapshot = await getDocs(q);
-  let lessons = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-  
-  // Filter by subject if provided (subjects is an array)
-  if (subject) {
-    lessons = lessons.filter(lesson => 
-      lesson.subjects && lesson.subjects.includes(subject)
-    );
-  }
-  
-  return lessons;
-};
-
-/**
- * Create a yearly verification request for support lessons
- * @param {string} branchId
- * @param {object} verificationData - { userId, paymentProof }
- */
-export const createYearlyVerification = async (branchId, verificationData) => {
-  const registrationsRef = getBranchCollection(branchId, 'registrations');
-  return await addDoc(registrationsRef, {
-    ...verificationData,
-    type: 'yearly_fee',
-    verified: false,
-    createdAt: serverTimestamp(),
-  });
-};
-
-/**
- * Get unverified yearly verifications
- * @param {string} branchId
- * @returns {Promise<Array>}
- */
-export const getUnverifiedYearlyVerifications = async (branchId) => {
-  const registrationsRef = getBranchCollection(branchId, 'registrations');
-  const q = query(
-    registrationsRef,
-    where('type', '==', 'yearly_fee'),
-    where('verified', '==', false)
-  );
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-};
-
-/**
- * Verify yearly fee payment
- * @param {string} branchId
- * @param {string} registrationId
- * @param {string} userId
- */
-export const verifyYearlyFee = async (branchId, registrationId, userId, adminInfo = {}) => {
-  const registrationRef = getBranchDoc(branchId, 'registrations', registrationId);
-  const registrationSnap = await getDoc(registrationRef);
-
-  if (!registrationSnap.exists()) {
-    throw new Error('Yearly fee registration not found');
-  }
-
-  const registrationData = registrationSnap.data();
-  const verificationTimestamp = serverTimestamp();
-
-  await updateDoc(registrationRef, {
-    verified: true,
-    verifiedAt: verificationTimestamp,
-    verifiedBy: {
-      uid: adminInfo.uid || '',
-      email: adminInfo.email || '',
-      name: adminInfo.name || ''
-    }
-  });
-
-  await saveAnnualFeeRegisteredEntry({
-    branchId,
-    userId,
-    entryId: registrationId,
-    data: registrationData,
-    verificationTimestamp,
-    adminInfo
-  });
-  
-  // Update user's yearlyFeePaid status
-  await updateYearlyFeeStatus(branchId, userId, true);
-  if (userId) {
-    try {
-      const userRef = getBranchDoc(branchId, 'users', userId);
-      await updateDoc(userRef, {
-        'registrations.annualFee': registrationData?.year || registrationData?.level || new Date().getFullYear(),
-        'registrations.annualFeeHistory': arrayUnion({
-          registrationId,
-          year: registrationData?.year || registrationData?.level || null,
-          registeredAt: Date.now()
-        })
-      });
-    } catch (error) {
-      console.error('Failed to update user annual fee registration:', error);
-    }
-  }
-};
 
 // ==================== Annual Payments ====================
 
-/**
- * Create an annual payment document
- * @param {string} branchId
- * @param {object} paymentData - Complete payment document structure
- * @returns {Promise<DocumentReference>}
- */
-export const createAnnualPayment = async (branchId, paymentData) => {
-  // Save to branch-scoped annualPayments (single source of truth).
-  // The root-level annualFees collection has no security rule and is not used.
-  const paymentsRef = getBranchCollection(branchId, 'annualPayments');
-  const docRef = await addDoc(paymentsRef, {
-    ...paymentData,
-    status: 'pending',
-    createdAt: serverTimestamp(),
-    verifiedAt: null,
-    verifiedBy: null,
-    nextPaymentDate: null,
-  });
-  return docRef;
-};
 
 /**
- * Get all annual payments for a branch
- * @param {string} branchId
- * @param {string} status - Optional: 'pending' | 'verified' | 'rejected'
- * @returns {Promise<Array>}
+ * Read the current owner-configured annual fee amount (DZD) from config/finance.
+ * Falls back to the historical default when the config doc is absent/unreadable.
+ * Single source of truth for the amount shown in the admin record form + the
+ * student-facing support form. The authoritative snapshot is taken server-side
+ * when a payment is actually recorded.
  */
-export const getAnnualPayments = async (branchId, status = null) => {
-  const paymentsRef = getBranchCollection(branchId, 'annualPayments');
-  let q = query(paymentsRef, orderBy('createdAt', 'desc'));
-  
-  if (status) {
-    q = query(paymentsRef, where('status', '==', status), orderBy('createdAt', 'desc'));
-  }
-  
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-};
-
-/**
- * Get annual payment by ID
- * @param {string} branchId
- * @param {string} paymentId
- * @returns {Promise<DocumentSnapshot>}
- */
-export const getAnnualPayment = async (branchId, paymentId) => {
-  const paymentRef = getBranchDoc(branchId, 'annualPayments', paymentId);
-  return await getDoc(paymentRef);
-};
-
-/**
- * Verify an annual payment
- * @param {string} branchId
- * @param {string} paymentId
- * @param {object} adminInfo - { uid: string, email: string }
- * @returns {Promise<void>}
- */
-const saveAnnualFeeRegisteredEntry = async ({ branchId, userId, entryId, data, verificationTimestamp, adminInfo = {} }) => {
-  if (!branchId || !entryId) return;
-
-  const registeredRef = doc(db, `branches/${branchId}/annualFeeRegistered/${entryId}`);
-  await setDoc(registeredRef, {
-    ...data,
-    branchId,
-    userId,
-    registrationId: entryId,
-    status: 'registered',
-    registeredAt: verificationTimestamp,
-    verifiedAt: verificationTimestamp,
-    verifiedBy: {
-      uid: adminInfo.uid || '',
-      email: adminInfo.email || '',
-      name: adminInfo.name || ''
+export const getAnnualFeeAmount = async () => {
+  try {
+    const snap = await getDoc(doc(db, 'config', 'finance'));
+    if (snap.exists()) {
+      const amt = Number(snap.data()?.annualFeeAmount);
+      if (Number.isFinite(amt) && amt >= 0) return amt;
     }
-  });
-};
-
-const buildAnnualFeeSupportEnrollmentId = (branchId, studentId, subjectId, yearId) =>
-  ['annualFee', branchId || 'noBranch', studentId || 'noStudent', subjectId || 'noSubject', yearId || 'unknown'].join('_');
-
-export const verifyAnnualPayment = async (branchId, paymentId, adminInfo) => {
-  // All writes for annual payment verification — including the Admin-SDK-only
-  // supportLessonRegistrations collection — are handled atomically by the backend.
-  await apiCall('/api/admin/verify-annual-payment', {
-    method: 'POST',
-    body: JSON.stringify({ branchId, paymentId }),
-  });
+  } catch (e) {
+    console.warn('getAnnualFeeAmount failed; using default:', e);
+  }
+  return ANNUAL_FEE_DZD;
 };
 
 /**
- * Reject an annual payment
+ * Admin: record a STANDALONE annual fee payment for ANY existing student —
+ * self-registered or admin-created. Routes through the backend so the amount
+ * (owner config snapshot), ledger entry, audit log, and user flags are all
+ * written consistently. The backend rejects duplicate payments for the same
+ * student + academic year (HTTP 409, err.code === 'already-paid').
+ *
  * @param {string} branchId
- * @param {string} paymentId
- * @param {string} notes - Optional rejection notes
- * @returns {Promise<void>}
+ * @param {string} userId
+ * @param {{ studyYear?: string, notes?: string, paidAt?: string|null }} opts
+ * @returns {Promise<{ paymentId, amount, academicYear, studyYear }>}
  */
-export const rejectAnnualPayment = async (branchId, paymentId, notes = null) => {
-  // Atomic rejection via backend (Admin SDK required for supportLessonRegistrations writes).
-  await apiCall('/api/admin/reject-annual-payment', {
+export const recordAnnualFeePayment = async (branchId, userId, opts = {}) => {
+  if (!branchId || !userId) throw new Error('branchId and userId are required');
+  const { studyYear = null, notes = null, paidAt = null } = opts;
+  return apiCall('/api/admin/record-annual-fee', {
     method: 'POST',
-    body: JSON.stringify({ branchId, paymentId, notes: notes || null }),
+    body: JSON.stringify({ branchId, userId, studyYear, notes, paidAt }),
   });
 };
+
 
 export const getAnnualFeeAccessStatus = async (branchId, userId) => {
   if (!branchId || !userId) {
@@ -1326,505 +686,22 @@ export const getAnnualFeeStatusForYear = async (branchId, userId) => {
   return { status: 'unpaid', paymentId: null, academicYear: label };
 };
 
-export const listenSupportLessonSubjectRegistration = (branchId, studentId, subjectId, yearId, callback) => {
-  if (!branchId || !studentId || !subjectId || !yearId || typeof callback !== 'function') {
-    return () => {};
-  }
-
-  const summaryRef = getSupportLessonSummaryRef(branchId, studentId, subjectId, yearId);
-  return onSnapshot(summaryRef, (snapshot) => {
-    if (!snapshot.exists()) {
-      callback(null);
-      return;
-    }
-    callback({ id: snapshot.id, ...snapshot.data() });
-  });
-};
 
 const SUPPORT_LESSON_REGISTRATIONS_COLLECTION = 'supportLessonRegistrations';
-const SUPPORT_LESSON_ENROLLMENTS_COLLECTION = 'supportLessonEnrollments';
-const BRANCH_REGISTRATIONS_COLLECTION = 'registrations';
 
-const toDateInstance = (value, fallback = new Date()) => {
-  if (!value) return fallback;
-  if (value instanceof Date) return value;
-  if (value instanceof Timestamp) return value.toDate();
-  if (typeof value.toDate === 'function') return value.toDate();
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? fallback : parsed;
-};
-
-const toTimestamp = (value) => {
-  if (!value) return null;
-  if (value instanceof Timestamp) return value;
-  const date = toDateInstance(value);
-  return Timestamp.fromDate(date);
-};
-
-const addMonthsKeepingDay = (date, months) => {
-  const result = new Date(date.getTime());
-  result.setMonth(result.getMonth() + months);
-  return result;
-};
-
-const getAcademicYearLabel = (date) => {
-  const year = date.getFullYear();
-  return date.getMonth() >= 8 ? `${year}-${year + 1}` : `${year - 1}-${year}`;
-};
-
-const getSupportRegistrationDoc = (registrationId) =>
-  doc(db, `${SUPPORT_LESSON_REGISTRATIONS_COLLECTION}/${registrationId}`);
 
 const supportRegistrationCollection = () =>
   collection(db, SUPPORT_LESSON_REGISTRATIONS_COLLECTION);
 
-const supportLessonRegistrationSummaryDoc = (branchId, registrationId) =>
-  getBranchDoc(branchId, BRANCH_REGISTRATIONS_COLLECTION, registrationId);
-
-const supportLessonRegistrationsSummaryCollection = (branchId) =>
-  getBranchCollection(branchId, BRANCH_REGISTRATIONS_COLLECTION);
-
-const SUPPORT_REGISTRATION_TYPE = 'supportLesson';
-
-const buildSupportLessonRegistrationId = (studentId, subjectId, yearId = 'unknown') =>
-  [studentId, subjectId, yearId || 'unknown'].join('_');
-
-const normalizeRegistrationStatus = (status) => String(status || '').toLowerCase();
-const isBlockingSupportRegistrationStatus = (status) => {
-  const normalized = normalizeRegistrationStatus(status);
-  return normalized === 'pending' || normalized === 'verified';
-};
-
-const getSupportLessonSummaryRef = (branchId, studentId, subjectId, yearId = 'unknown') => {
-  const summaryId = buildSupportLessonRegistrationId(studentId, subjectId, yearId);
-  return supportLessonRegistrationSummaryDoc(branchId, summaryId);
-};
-
-export const ensureSupportLessonRegistrationRecord = async ({
-  branchId,
-  studentId,
-  subjectId,
-  subjectName,
-  yearId,
-  yearLabel = null,
-  metadata = {}
-}) => {
-  if (!branchId) throw new Error('branchId is required to create support lesson registration');
-  if (!studentId) throw new Error('studentId is required to create support lesson registration');
-  if (!subjectId) throw new Error('subjectId is required to create support lesson registration');
-
-  const normalizedYearId = yearId || metadata.year || 'unknown';
-  const summaryRef = getSupportLessonSummaryRef(branchId, studentId, subjectId, normalizedYearId);
-  const existingSnap = await getDoc(summaryRef);
-
-  if (existingSnap.exists()) {
-    const existingData = existingSnap.data() || {};
-    if (isBlockingSupportRegistrationStatus(existingData.status)) {
-      const error = new Error('support-lesson-registration-exists');
-      error.code = 'support-lesson-registration-exists';
-      error.data = existingData;
-      throw error;
-    }
-    // Non-blocking existing doc: return as-is; students cannot update registrations
-    return { id: summaryRef.id, ...existingData };
-  }
-
-  const timestamp = serverTimestamp();
-  const payload = {
-    branchId,
-    userId: studentId,  // canonical ownership field (Phase D — studentId param is the Firebase UID)
-    type: SUPPORT_REGISTRATION_TYPE,
-    subjectId,
-    subjectName: subjectName || metadata.subjectName || '',
-    year: normalizedYearId,
-    yearLabel: yearLabel || metadata.yearLabel || null,
-    status: 'pending',
-    feeCovered: metadata.feeCovered ?? false,
-    feeRequired: metadata.feeRequired ?? true,
-    feePaid: metadata.feePaid ?? false,
-    source: metadata.source || 'annualFee',
-    createdAt: timestamp,
-    updatedAt: timestamp,
-    ...metadata.extraFields
-  };
-
-  await setDoc(summaryRef, payload, { merge: false });
-  return { id: summaryRef.id, ...payload };
-};
-
-export const listenStudentSupportLessonRegistrations = (branchId, studentId, callback) => {
-  if (!branchId || !studentId || typeof callback !== 'function') {
-    return () => {};
-  }
-
-  const regsRef = supportLessonRegistrationsSummaryCollection(branchId);
-  const q = query(
-    regsRef,
-    where('type', '==', SUPPORT_REGISTRATION_TYPE),
-    where('userId', '==', studentId)   // Phase C: canonical field; backfill confirmed 0 missing
-  );
-
-  return onSnapshot(q, (snapshot) => {
-    const entries = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
-    callback(entries);
-  });
-};
-
-export async function markStudentSupportLessonsFeeStatus(branchId, studentId, feePaid = true) {
-  if (!branchId || !studentId) return;
-
-  const regsRef = supportLessonRegistrationsSummaryCollection(branchId);
-  const q = query(
-    regsRef,
-    where('type', '==', SUPPORT_REGISTRATION_TYPE),
-    where('userId', '==', studentId)   // Phase C: canonical field; backfill confirmed 0 missing
-  );
-
-  const snapshot = await getDocs(q);
-  if (snapshot.empty) return;
-
-  const batch = writeBatch(db);
-  snapshot.docs.forEach((docSnap) => {
-    batch.update(docSnap.ref, {
-      feePaid,
-      updatedAt: serverTimestamp()
-    });
-  });
-
-  await batch.commit();
-}
-
-const hasActiveSupportRegistration = (docs) => {
-  const now = new Date();
-  return docs.some((docSnap) => {
-    const data = docSnap.data() || {};
-    const status = String(data.status || 'pending').toLowerCase();
-    const endDate = data.endDate?.toDate
-      ? data.endDate.toDate()
-      : data.endDate
-      ? new Date(data.endDate)
-      : null;
-    const isPendingOrVerified = status === 'pending' || status === 'verified';
-    return Boolean(isPendingOrVerified && endDate && endDate > now);
-  });
-};
-
-/**
- * Create a monthly support lesson registration entry in the global collection
- */
-export const createSupportLessonRegistration = async (registrationData = {}) => {
-  const {
-    branchId,
-    userId,
-    userName = '',
-    userEmail = '',
-    lessonId,
-    lessonName = '',
-    subjectName = '',
-    studyYearId = null,
-    studyYear = null,
-    studyYearLabel = '',
-    studyLevelId = null,
-    source = 'manual',
-    durationInMonths = 1,
-    monthlyPrice = null,
-    totalPrice = null,
-    startDate = new Date(),
-    endDate = null,
-    academicYear = null,
-    status = 'pending',
-    paymentProofUrl = '',
-    verifiedBy = null,
-    verifiedAt = null,
-    createdAt: createdAtOverride = null,
-  } = registrationData;
-
-  if (!branchId) throw new Error('branchId is required for support lesson registration');
-  if (!userId) throw new Error('userId is required for support lesson registration');
-  if (!lessonId) throw new Error('lessonId is required for support lesson registration');
-  const resolvedStudyYear = studyYear || studyYearId || null;
-  if (!resolvedStudyYear) {
-    const err = new Error('missing-study-year');
-    err.code = 'missing-study-year';
-    throw err;
-  }
-  if (!Number.isInteger(durationInMonths) || durationInMonths < 1 || durationInMonths > 3) {
-    throw new Error('durationInMonths must be between 1 and 3');
-  }
-
-  const startDateObj = toDateInstance(startDate);
-
-  const endDateObj = endDate
-    ? toDateInstance(endDate)
-    : addMonthsKeepingDay(startDateObj, durationInMonths);
-
-  const registrationAcademicYear = academicYear || getAcademicYearLabel(startDateObj);
-
-  const existingQuery = query(
-    supportRegistrationCollection(),
-    where('userId', '==', userId),
-    where('lessonId', '==', lessonId)
-  );
-  const existingSnap = await getDocs(existingQuery);
-  if (hasActiveSupportRegistration(existingSnap.docs)) {
-    const error = new Error('user-already-registered-support-lesson');
-    error.code = 'user-already-registered-support-lesson';
-    throw error;
-  }
-
-  const payload = {
-    branchId,
-    userId,
-    userName,
-    userEmail,
-    lessonId,
-    lessonName,
-    subjectName,
-    studyYear: resolvedStudyYear,
-    studyYearId: resolvedStudyYear,
-    studyYearLabel,
-    studyLevelId,
-    durationInMonths,
-    source,
-    status,
-    monthlyPrice,
-    totalPrice,
-    paymentProofUrl: paymentProofUrl || '',
-    startDate: Timestamp.fromDate(startDateObj),
-    endDate: Timestamp.fromDate(endDateObj),
-    academicYear: registrationAcademicYear,
-    createdAt: createdAtOverride ? toTimestamp(createdAtOverride) : serverTimestamp(),
-    verifiedAt: status === 'verified' ? (verifiedAt ? toTimestamp(verifiedAt) : serverTimestamp()) : null,
-    verifiedBy: status === 'verified' ? (verifiedBy || null) : null
-  };
-
-  try {
-    const result = await apiCall('/api/registrations/support', {
-      method: 'POST',
-      body: JSON.stringify({
-        branchId,
-        lessonId,
-        durationInMonths,
-        startDate:       startDateObj.getTime(),
-        endDate:         endDateObj.getTime(),
-        academicYear:    registrationAcademicYear,
-        paymentProofUrl: payload.paymentProofUrl,
-        monthlyPrice,
-        totalPrice,
-        source,
-      }),
-    });
-    return result || null;
-  } catch (err) {
-    // apiCall already attaches err.code from the JSON response body.
-    // Ensure a code exists so callers can branch on it.
-    if (!err.code) err.code = 'unavailable';
-    throw err;
-  }
-};
-
-/**
- * Get unverified support lesson registrations
- * @param {string} branchId
- * @returns {Promise<Array>}
- */
-export const getUnverifiedSupportLessonRegistrations = async (branchId) => {
-  if (!branchId) return [];
-  const q = query(
-    supportRegistrationCollection(),
-    where('branchId', '==', branchId),
-    where('status', '==', 'pending')
-  );
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-};
-
-export const getPendingAnnualFeeSupportLessonRegistrations = async (branchId) => {
-  if (!branchId) return [];
-
-  const registrationsRef = getBranchCollection(branchId, 'registrations');
-  const q = query(
-    registrationsRef,
-    where('type', '==', 'supportLesson'),
-    where('source', '==', 'annualFee'),
-    where('status', '==', 'pending')
-  );
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-};
-
-/**
- * Get monthly support-lesson registrations by status (pending | needs_correction
- * | verified | rejected). Reuses the existing (branchId, status) index.
- */
-export const getSupportLessonRegistrationsByStatus = async (branchId, status) => {
-  if (!branchId || !status) return [];
-  const q = query(
-    supportRegistrationCollection(),
-    where('branchId', '==', branchId),
-    where('status', '==', status)
-  );
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-};
-
-/**
- * Get annual-fee support-lesson registration summaries by status.
- * Reuses the existing (type, source, status) index.
- */
-export const getAnnualFeeSupportRegistrationsByStatus = async (branchId, status) => {
-  if (!branchId || !status) return [];
-  const registrationsRef = getBranchCollection(branchId, 'registrations');
-  const q = query(
-    registrationsRef,
-    where('type', '==', 'supportLesson'),
-    where('source', '==', 'annualFee'),
-    where('status', '==', status)
-  );
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-};
-
-/**
- * Get training registrations by their `verified` boolean.
- * Reuses the existing collectionGroup (branchId, verified) index so no new index
- * is required. Callers segment further by `status` client-side.
- */
-export const getTrainingRegistrationsByVerified = async (branchId, verifiedState) => {
-  if (!branchId) return [];
-  const q = query(
-    collectionGroup(db, TRAINING_FORM_ENTRIES_SUBCOLLECTION),
-    where('branchId', '==', branchId),
-    where('verified', '==', verifiedState)
-  );
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map((docSnap) => {
-    const parentUserId = docSnap.ref.parent?.parent?.id || null;
-    return {
-      id: docSnap.id,
-      formId: docSnap.id,
-      studentId: docSnap.data().userId || parentUserId,
-      parentUserId,
-      ...docSnap.data(),
-    };
-  });
-};
 
 // ── Payment correction workflow (needs_correction status) ─────────────────────
 // Both routes go through the Express backend (Admin SDK): Firestore rules block
 // student writes to every payment doc, and admin annual/support writes must use
 // the Admin SDK. See backend/controllers/correctionController.js.
 
-/**
- * Admin: ask a student to correct their payment proof.
- * Sets status='needs_correction' + correction metadata WITHOUT rejecting/deleting.
- */
-export const requestPaymentCorrection = async ({
-  branchId, type, source = null, studentId = null, formId = null,
-  entryId = null, registrationId = null, paymentId = null, reason,
-}) => {
-  return apiCall('/api/corrections/request', {
-    method: 'POST',
-    body: JSON.stringify({
-      branchId, type, source, studentId, formId, entryId, registrationId, paymentId, reason,
-    }),
-  });
-};
-
-/**
- * Student (owner): resubmit a corrected proof. Returns the payment to 'pending'
- * and archives the previous proof URL. correctionCount is preserved server-side.
- */
-export const resubmitPaymentProof = async ({
-  branchId, type, source = null, studentId = null, formId = null,
-  entryId = null, registrationId = null, paymentId = null, newProofUrl,
-}) => {
-  return apiCall('/api/corrections/resubmit', {
-    method: 'POST',
-    body: JSON.stringify({
-      branchId, type, source, studentId, formId, entryId, registrationId, paymentId, newProofUrl,
-    }),
-  });
-};
-
-/**
- * Verify support lesson registration
- * @param {string} branchId
- * @param {string} registrationId
- */
-export const verifySupportLessonRegistration = async (registrationId, adminInfo = {}) => {
-  if (!registrationId) return;
-  // Firestore rule blocks all client writes to supportLessonRegistrations.
-  // Route through the backend (Admin SDK) so the update succeeds.
-  await apiCall(`/api/support-lesson-registrations/${registrationId}/verify`, {
-    method: 'PATCH',
-    body: JSON.stringify({}),
-  });
-};
-
-export const rejectSupportLessonRegistration = async (registrationId, notes = null) => {
-  if (!registrationId) return;
-  // Firestore rule blocks all client writes to supportLessonRegistrations.
-  // Route through the backend (Admin SDK).
-  await apiCall(`/api/support-lesson-registrations/${registrationId}/reject`, {
-    method: 'PATCH',
-    body: JSON.stringify({ notes: notes || null }),
-  });
-};
 
 // ==================== Trainings ====================
 
-/**
- * Create a new training course
- * @param {string} branchId
- * @param {object} trainingData - { title, description, price, ... }
- * @param {object} adminInfo - optional metadata about the admin creating the course
- */
-export const createTraining = async (branchId, trainingData, adminInfo = {}) => {
-  const trainingsRef = getBranchCollection(branchId, 'trainings');
-  const normalizedActive = typeof trainingData?.active === 'boolean' ? trainingData.active : true;
-  return await addDoc(trainingsRef, {
-    ...trainingData,
-    active: normalizedActive,
-    branchId,
-    createdBy: {
-      uid: adminInfo.uid || '',
-      email: adminInfo.email || '',
-      name: adminInfo.name || ''
-    },
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-};
-
-/**
- * Set a training as active (visible on the website)
- * @param {string} branchId
- * @param {string} trainingId
- * @param {object} adminInfo
- */
-export const approvePendingTraining = async (branchId, trainingId, adminInfo = {}) => {
-  const trainingRef = doc(db, `branches/${branchId}/trainings/${trainingId}`);
-  await updateDoc(trainingRef, {
-    active: true,
-    updatedAt: serverTimestamp(),
-    updatedBy: {
-      uid: adminInfo.uid || '',
-      email: adminInfo.email || '',
-      name: adminInfo.name || ''
-    }
-  });
-};
-
-/**
- * Delete a training
- * @param {string} branchId
- * @param {string} trainingId
- */
-export const deletePendingTraining = async (branchId, trainingId) => {
-  const trainingRef = doc(db, `branches/${branchId}/trainings/${trainingId}`);
-  await deleteDoc(trainingRef);
-};
 
 /**
  * Get all trainings for a branch
@@ -1839,20 +716,6 @@ export const getTrainings = async (branchId) => {
     .filter((training) => training?.active !== false);
 };
 
-/**
- * Create a training request (when no course is available)
- * @param {string} branchId
- * @param {object} requestData - { userId, trainingId, message }
- */
-export const createTrainingRequest = async (branchId, requestData) => {
-  const registrationsRef = getBranchCollection(branchId, 'registrations');
-  return await addDoc(registrationsRef, {
-    ...requestData,
-    type: 'training_request',
-    status: 'pending',
-    createdAt: serverTimestamp(),
-  });
-};
 
 /**
  * Get pending training requests
@@ -1870,353 +733,6 @@ export const getPendingTrainingRequests = async (branchId) => {
   return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 };
 
-/**
- * Get all training requests (regardless of status)
- * @param {string} branchId
- * @returns {Promise<Array>}
- */
-export const getAllTrainingRequests = async (branchId) => {
-  const registrationsRef = getBranchCollection(branchId, 'registrations');
-  const q = query(
-    registrationsRef,
-    where('type', '==', 'training_request'),
-    orderBy('createdAt', 'desc')
-  );
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-};
-
-/**
- * Update training request status
- * @param {string} branchId
- * @param {string} requestId
- * @param {string} status - 'pending' | 'reviewed' | 'completed' | 'accepted' | 'rejected'
- */
-export const updateTrainingRequestStatus = async (branchId, requestId, status) => {
-  const requestRef = getBranchDoc(branchId, 'registrations', requestId);
-  await updateDoc(requestRef, { 
-    status,
-    updatedAt: serverTimestamp()
-  });
-};
-
-/**
- * Create a training registration
- * @param {string} branchId
- * @param {object} registrationData - { userId, trainingId, paymentProof }
- */
-export const createTrainingRegistration = async (branchId, registrationData) => {
-  const {
-    userId,
-    userEmail = '',
-    studentName = '',
-    studentPhone = '',
-    trainingId,
-    trainingTitle,
-    trainingName,
-    trainingPrice = null,
-    paymentMethod = '',
-    paymentProof = '',
-    paymentProofPath = '',
-    trainingDescription = '',
-    paymentConfirmed = false,
-    status = 'pending',
-    // New Subject → Class snapshot fields
-    subjectId = '',
-    subjectName = '',
-    classId = '',
-    groupName = '',
-    schedules,
-  } = registrationData;
-
-  if (!branchId) throw new Error('branchId is required for training registration');
-  if (!userId) throw new Error('userId is required for training registration');
-  if (!trainingId) throw new Error('trainingId is required for training registration');
-
-  const formContainerRef = getBranchDoc(branchId, TRAINING_FORM_CONTAINERS_COLLECTION, userId);
-  const containerSnap = await getDoc(formContainerRef);
-  const timestampFields = containerSnap.exists()
-    ? { updatedAt: serverTimestamp() }
-    : { createdAt: serverTimestamp(), updatedAt: serverTimestamp() };
-
-  await setDoc(formContainerRef, {
-    userId,
-    branchId,
-    studentEmail: userEmail || '',
-    studentName: studentName || '',
-    lastSubmittedAt: serverTimestamp(),
-    ...timestampFields
-  }, { merge: true });
-
-  const entriesRef = collection(formContainerRef, TRAINING_FORM_ENTRIES_SUBCOLLECTION);
-
-  const existingEntriesSnap = await getDocs(
-    query(entriesRef, where('trainingId', '==', trainingId))
-  );
-
-  const hasDuplicate = existingEntriesSnap.docs.some((docSnap) => {
-    const data = docSnap.data() || {};
-    const normalizedStatus = String(data.status || '').toLowerCase();
-    const lockedStatuses = ['pending', 'verified', 'approved', 'registered'];
-    return data.verified === true || lockedStatuses.includes(normalizedStatus);
-  });
-
-  if (hasDuplicate) {
-    throw new Error('user-already-registered-training');
-  }
-
-  const formId = `${trainingId}-${Date.now()}`;
-  const entryRef = doc(entriesRef, formId);
-  const entryId = entryRef.id;
-
-  const entryPayload = {
-    entryId,
-    formId,
-    branchId,
-    userId,
-    studentName,
-    studentPhone,
-    userEmail,
-    trainingId,
-    selectedTrainingId: trainingId,
-    trainingTitle: trainingTitle || trainingName || subjectName || '',
-    trainingName: trainingName || trainingTitle || subjectName || '',
-    trainingPrice,
-    trainingDescription,
-    // New Subject → Class snapshot fields (readable even if the class changes later)
-    subjectId: subjectId || trainingId || '',
-    subjectName: subjectName || trainingTitle || trainingName || '',
-    classId: classId || trainingId || '',
-    groupName: groupName || '',
-    schedules: Array.isArray(schedules) ? schedules : [],
-    paymentMethod,
-    paymentProof,
-    paymentProofPath,
-    paymentConfirmed,
-    receiptUrl: paymentProof,
-    status: status || 'pending',
-    verified: false,
-    submittedAt: serverTimestamp(),
-    createdAt: serverTimestamp(),
-    timestamp: serverTimestamp(),
-    verifiedAt: null,
-    verifiedBy: null,
-    birthDate: registrationData.birthDate || null,
-    birthPlace: registrationData.birthPlace || '',
-  };
-
-  await setDoc(entryRef, entryPayload);
-
-  return entryPayload;
-};
-
-/**
- * Get unverified training registrations
- * @param {string} branchId
- * @returns {Promise<Array>}
- */
-export const getUnverifiedTrainingRegistrations = async (branchId) => {
-  if (!branchId) return [];
-
-  const q = query(
-    collectionGroup(db, TRAINING_FORM_ENTRIES_SUBCOLLECTION),
-    where('branchId', '==', branchId),
-    where('verified', '==', false)
-  );
-
-  const snapshot = await getDocs(q);
-  return snapshot.docs
-    .map((docSnap) => {
-      const parentUserId = docSnap.ref.parent?.parent?.id || null;
-      return {
-        id: docSnap.id,
-        formId: docSnap.id,
-        studentId: docSnap.data().userId || parentUserId,
-        parentUserId,
-        ...docSnap.data(),
-      };
-    })
-    .filter((entry) => {
-      const normalizedStatus = String(entry.status || '').toLowerCase();
-      return normalizedStatus !== 'rejected';
-    })
-    .sort((a, b) => {
-      const dateA = a.submittedAt?.toDate ? a.submittedAt.toDate() : 0;
-      const dateB = b.submittedAt?.toDate ? b.submittedAt.toDate() : 0;
-      return dateB - dateA;
-    });
-};
-
-/**
- * Verify training registration
- * @param {string} branchId
- * @param {string} registrationId
- */
-export const verifyTrainingRegistration = async (branchId, studentId, entryId, adminInfo = {}) => {
-  if (!branchId || !studentId || !entryId) {
-    throw new Error('branchId, studentId and entryId are required to verify training registration');
-  }
-
-  const registrationRef = doc(
-    db,
-    `branches/${branchId}/${TRAINING_FORM_CONTAINERS_COLLECTION}/${studentId}/${TRAINING_FORM_ENTRIES_SUBCOLLECTION}/${entryId}`
-  );
-  const registrationSnap = await getDoc(registrationRef);
-
-  if (!registrationSnap.exists()) {
-    throw new Error('Training registration not found');
-  }
-
-  const registrationData = registrationSnap.data();
-
-  let trainingMeta = null;
-  if (registrationData.trainingId) {
-    try {
-      const trainingSnap = await getDoc(getBranchDoc(branchId, 'trainings', registrationData.trainingId));
-      if (trainingSnap.exists()) {
-        trainingMeta = trainingSnap.data();
-      }
-    } catch (error) {
-      console.warn('Unable to load training meta for registration copy:', error);
-    }
-  }
-
-  let userProfile = null;
-  if (registrationData.userId) {
-    try {
-      const userSnap = await getUser(branchId, registrationData.userId);
-      if (userSnap.exists()) {
-        userProfile = userSnap.data();
-      }
-    } catch (error) {
-      console.warn('Unable to load user profile for training registration:', error);
-    }
-  }
-
-  const trainingTitle = registrationData.trainingTitle || trainingMeta?.title || '';
-  const trainingPrice = registrationData.trainingPrice || trainingMeta?.price || null;
-  const summaryRegisteredAt = Date.now();
-  const verifiedBy = {
-    uid: adminInfo.uid || '',
-    email: adminInfo.email || '',
-    name: adminInfo.name || ''
-  };
-
-  // Capacity hard-gate (approved-only). New class-based registrations carry classId.
-  if (registrationData.classId) {
-    await assertClassNotFull(branchId, registrationData.classId);
-  }
-
-  const registeredRef = doc(db, `branches/${branchId}/trainingsRegistered/${entryId}`);
-  const batch = writeBatch(db);
-
-  batch.update(registrationRef, {
-    verified: true,
-    status: 'approved',
-    // Receipt no longer needed after approval — clear refs (file removed below).
-    paymentProof: '',
-    paymentProofPath: '',
-    receiptUrl: '',
-    verifiedAt: serverTimestamp(),
-    verifiedBy
-  });
-
-  batch.set(registeredRef, {
-    ...registrationData,
-    registrationId: entryId,
-    formId: entryId,
-    branchId,
-    trainingTitle,
-    name: trainingTitle,
-    trainingPrice,
-    studentName: registrationData.studentName || userProfile?.name || userProfile?.fullName || '',
-    studentPhone: registrationData.studentPhone || userProfile?.phoneNumber || '',
-    status: 'approved',
-    paymentProof: '',
-    paymentProofPath: '',
-    receiptUrl: '',
-    registeredAt: serverTimestamp(),
-    verifiedAt: serverTimestamp(),
-    verifiedBy
-  });
-
-  if (registrationData.userId) {
-    const userRef = getBranchDoc(branchId, 'users', registrationData.userId);
-    batch.update(userRef, {
-      'registrations.trainings': arrayUnion({
-        registrationId: entryId,
-        formId: entryId,
-        trainingId: registrationData.trainingId || entryId,
-        name: trainingTitle,
-        title: trainingTitle,
-        price: trainingMeta?.price || registrationData.trainingPrice || null,
-        status: 'approved',
-        registeredAt: summaryRegisteredAt,
-        verifiedAt: summaryRegisteredAt
-      }),
-      updatedAt: serverTimestamp()
-    });
-  }
-
-  // Increment the class enrollment counter atomically with the registration
-  // write so the Firestore rule capacity check stays consistent.
-  if (registrationData.classId) {
-    batch.update(getBranchDoc(branchId, CLASSES_COLLECTION, registrationData.classId), {
-      enrollmentCount: increment(1),
-      updatedAt: serverTimestamp(),
-    });
-  }
-
-  await batch.commit();
-
-  // Approved payments keep zero long-term storage — spec §5.
-  await cleanupPaymentReceipt(
-    registrationData.paymentProof,
-    registrationData.paymentProofPath,
-    registrationData.receiptUrl
-  );
-};
-
-export const rejectTrainingRegistration = async (branchId, studentId, entryId, adminInfo = {}) => {
-  if (!branchId || !studentId || !entryId) {
-    throw new Error('branchId, studentId and entryId are required to reject training registration');
-  }
-
-  const registrationRef = doc(
-    db,
-    `branches/${branchId}/${TRAINING_FORM_CONTAINERS_COLLECTION}/${studentId}/${TRAINING_FORM_ENTRIES_SUBCOLLECTION}/${entryId}`
-  );
-
-  // Capture the receipt reference before clearing it, so we can delete the file.
-  let receiptRefs = [];
-  try {
-    const snap = await getDoc(registrationRef);
-    if (snap.exists()) {
-      const d = snap.data() || {};
-      receiptRefs = [d.paymentProof, d.paymentProofPath, d.receiptUrl];
-    }
-  } catch { /* non-fatal — proceed with rejection regardless */ }
-
-  await updateDoc(registrationRef, {
-    status: 'rejected',
-    verified: false,
-    verifiedAt: null,
-    rejectionReason: adminInfo.reason || '',
-    // Remove file references from the DB (file deleted from Storage below).
-    paymentProof: '',
-    paymentProofPath: '',
-    receiptUrl: '',
-    updatedAt: serverTimestamp(),
-    reviewedBy: {
-      uid: adminInfo.uid || '',
-      email: adminInfo.email || '',
-      name: adminInfo.name || ''
-    }
-  });
-
-  // Rejected training requests must consume zero long-term storage — spec §4.
-  await cleanupPaymentReceipt(...receiptRefs);
-};
 
 export const streamRegisteredLanguages = (branchId, callback) => {
   if (!branchId) return () => {};
@@ -2315,108 +831,74 @@ export const streamTrainingFormEntries = (branchId, callback) => {
 // Admin CRUD — trainingsRegistered
 // ---------------------------------------------------------------------------
 
-export const adminRemoveTrainingRegistration = async (branchId, docId) => {
+/**
+ * Remove an approved training registration. SERVER-AUTHORITATIVE: the delete,
+ * the enrollmentCount recount, the ledger REVERSAL and the audit entry run in
+ * one backend call.
+ *
+ * This was a client `deleteDoc`. Clients cannot write /ledger (rules deny it),
+ * so the revenue stayed on the books after every deletion and the owner's
+ * state-based alerts never moved. Do not move it back.
+ */
+export const adminRemoveTrainingRegistration = async (branchId, docId, reason = null) => {
   if (!branchId || !docId) throw new Error('branchId and docId are required');
-  const ref = doc(getBranchCollection(branchId, 'trainingsRegistered'), docId);
-  let classId = null;
-  try { const s = await getDoc(ref); if (s.exists()) classId = s.data()?.classId || null; } catch { /* ignore */ }
-  await deleteDoc(ref);
-  if (classId) await adjustClassEnrollment(branchId, classId, -1); // free the seat
+  return apiCall(`/api/academic/registrations/training/${docId}`, {
+    method: 'DELETE',
+    body: JSON.stringify({ branchId, reason }),
+  });
 };
 
-export const adminEditTrainingRegistration = async (branchId, docId, updates) => {
-  if (!branchId || !docId) throw new Error('branchId and docId are required');
-  const safe = { ...updates };
-  delete safe.branchId;
-  delete safe.registrationId;
-  safe.updatedAt = serverTimestamp();
-  await updateDoc(doc(getBranchCollection(branchId, 'trainingsRegistered'), docId), safe);
-};
 
+/**
+ * Admin direct-add a (class-based) training registration. SERVER-AUTHORITATIVE:
+ * duplicate guard + capacity + student schedule-conflict + write +
+ * enrollmentCount run in one backend transaction.
+ */
 export const adminAddTrainingRegistration = async (branchId, data) => {
   if (!branchId) throw new Error('branchId is required');
   if (!data.userId) throw new Error('userId is required for training registration');
-
-  // Duplicate guard: same student + training in same branch
-  if (data.trainingId) {
-    const dupQ = query(
-      getBranchCollection(branchId, 'trainingsRegistered'),
-      where('userId',     '==', data.userId),
-      where('trainingId', '==', data.trainingId)
-    );
-    const dupSnap = await getDocs(dupQ);
-    if (!dupSnap.empty) {
-      throw new Error('الطالب مسجل مسبقاً في هذه الدورة التكوينية.');
-    }
+  try {
+    return await apiCall('/api/academic/registrations/training/admin-add', {
+      method: 'POST',
+      body: JSON.stringify({ branchId, data }),
+    });
+  } catch (err) {
+    throw reshapeConflictError(err);
   }
-
-  // Capacity hard-gate — admin-add writes an approved (seat-occupying) registration.
-  if (data.classId) await assertClassNotFull(branchId, data.classId);
-
-  const ref = await addDoc(getBranchCollection(branchId, 'trainingsRegistered'), {
-    ...data,
-    userId: data.userId,  // canonical ownership field (Phase D — studentId removed)
-    branchId,
-    registeredAt: serverTimestamp(),
-    verifiedAt:   serverTimestamp(),
-    source:       'admin',
-  });
-  if (data.classId) await adjustClassEnrollment(branchId, data.classId, 1);
-  return { id: ref.id };
 };
 
 // ---------------------------------------------------------------------------
 // Admin CRUD — languagesRegistered
 // ---------------------------------------------------------------------------
 
-export const adminRemoveLanguageRegistration = async (branchId, docId) => {
+/**
+ * Remove an approved language registration. SERVER-AUTHORITATIVE — see
+ * adminRemoveTrainingRegistration for why this cannot be a client deleteDoc.
+ */
+export const adminRemoveLanguageRegistration = async (branchId, docId, reason = null) => {
   if (!branchId || !docId) throw new Error('branchId and docId are required');
-  const ref = doc(getBranchCollection(branchId, 'languagesRegistered'), docId);
-  let classId = null;
-  try { const s = await getDoc(ref); if (s.exists()) classId = s.data()?.classId || null; } catch { /* ignore */ }
-  await deleteDoc(ref);
-  if (classId) await adjustClassEnrollment(branchId, classId, -1); // free the seat
+  return apiCall(`/api/academic/registrations/language/${docId}`, {
+    method: 'DELETE',
+    body: JSON.stringify({ branchId, reason }),
+  });
 };
 
-export const adminEditLanguageRegistration = async (branchId, docId, updates) => {
-  if (!branchId || !docId) throw new Error('branchId and docId are required');
-  const safe = { ...updates };
-  delete safe.branchId;
-  safe.updatedAt = serverTimestamp();
-  await updateDoc(doc(getBranchCollection(branchId, 'languagesRegistered'), docId), safe);
-};
 
+/**
+ * Admin direct-add a (class-based) language registration. SERVER-AUTHORITATIVE
+ * (see adminAddTrainingRegistration).
+ */
 export const adminAddLanguageRegistration = async (branchId, data) => {
   if (!branchId) throw new Error('branchId is required');
   if (!data.userId) throw new Error('userId is required for language registration');
-
-  // Duplicate guard: same student + language + level in same branch
-  if (data.languageId && data.levelId) {
-    const dupQ = query(
-      getBranchCollection(branchId, 'languagesRegistered'),
-      where('userId',     '==', data.userId),
-      where('languageId', '==', data.languageId),
-      where('levelId',    '==', data.levelId)
-    );
-    const dupSnap = await getDocs(dupQ);
-    if (!dupSnap.empty) {
-      throw new Error('الطالب مسجل مسبقاً في هذا المستوى من هذه اللغة.');
-    }
+  try {
+    return await apiCall('/api/academic/registrations/language/admin-add', {
+      method: 'POST',
+      body: JSON.stringify({ branchId, data }),
+    });
+  } catch (err) {
+    throw reshapeConflictError(err);
   }
-
-  // Capacity hard-gate — admin-add writes an approved (seat-occupying) registration.
-  if (data.classId) await assertClassNotFull(branchId, data.classId);
-
-  const ref = await addDoc(getBranchCollection(branchId, 'languagesRegistered'), {
-    ...data,
-    userId: data.userId,  // canonical ownership field (Phase D — studentId removed)
-    branchId,
-    registeredAt: serverTimestamp(),
-    verifiedAt:   serverTimestamp(),
-    source:       'admin',
-  });
-  if (data.classId) await adjustClassEnrollment(branchId, data.classId, 1);
-  return { id: ref.id };
 };
 
 export const streamSupportLessonRegistrations = (branchId, callback) => {
@@ -2436,97 +918,12 @@ export const streamSupportLessonRegistrations = (branchId, callback) => {
 
 // ==================== Meta Information ====================
 
-/**
- * Get branch meta information
- * @param {string} branchId
- * @returns {Promise<object>}
- */
-export const getBranchMeta = async (branchId) => {
-  const metaRef = getBranchDoc(branchId, 'meta', 'info');
-  const snapshot = await getDoc(metaRef);
-  return snapshot.exists() ? snapshot.data() : null;
-};
-
-/**
- * Check if email is admin for a branch
- * @param {string} branchId
- * @param {string} email
- * @returns {Promise<boolean>}
- */
-export const isAdminForBranch = async (branchId, email) => {
-  const meta = await getBranchMeta(branchId);
-  if (!meta || !meta.adminEmails) return false;
-  return meta.adminEmails.map(e => e.toLowerCase()).includes(email.toLowerCase());
-};
-
-/**
- * Create or update branch meta
- * @param {string} branchId
- * @param {object} metaData - { branchName, adminEmails }
- */
-export const setBranchMeta = async (branchId, metaData) => {
-  const metaRef = getBranchDoc(branchId, 'meta', 'info');
-  await setDoc(metaRef, metaData, { merge: true });
-};
 
 // ==================== Annual Fee Status ====================
 
-/**
- * Get annual fee status for a user
- * @param {string} userId - The user ID to check
- * @returns {Promise<{paid: boolean, date: Date}>} - Object with payment status and date
- */
-export const getAnnualFeeStatus = async (userId) => {
-  try {
-    const feeDoc = await getDoc(doc(db, 'annualFees', userId));
-    if (feeDoc.exists()) {
-      const data = feeDoc.data();
-      return {
-        paid: data.paid === true,
-        date: data.paidAt?.toDate?.() || null,
-        status: data.paid === true ? 'verified' : 'pending'
-      };
-    }
-    return { paid: false, date: null, status: 'unpaid' };
-  } catch (error) {
-    console.error('Error getting annual fee status:', error);
-    return { paid: false, date: null, status: 'error' };
-  }
-};
 
 // ==================== Utility Functions ====================
 
-/**
- * Get all pending verifications across all types
- * @param {string} branchId
- * @returns {Promise<object>} - Object with arrays for each type
- */
-export const getAllPendingVerifications = async (branchId) => {
-  const [
-    users,
-    languageRegs,
-    yearlyVerifications,
-    supportLessonRegs,
-    trainingReqs,
-    trainingRegs
-  ] = await Promise.all([
-    getUnverifiedUsers(branchId),
-    getUnverifiedLanguageRegistrations(branchId),
-    getUnverifiedYearlyVerifications(branchId),
-    getUnverifiedSupportLessonRegistrations(branchId),
-    getPendingTrainingRequests(branchId),
-    getUnverifiedTrainingRegistrations(branchId)
-  ]);
-
-  return {
-    users,
-    languageRegistrations: languageRegs,
-    yearlyVerifications,
-    supportLessonRegistrations: supportLessonRegs,
-    trainingRequests: trainingReqs,
-    trainingRegistrations: trainingRegs
-  };
-};
 
 // ==================== Contact Messages ====================
 
@@ -2544,75 +941,9 @@ export const createContactMessage = async (branchId, messageData) => {
   });
 };
 
-/**
- * Get all contact messages for a branch
- * @param {string} branchId
- * @returns {Promise<Array>}
- */
-export const getContactMessages = async (branchId) => {
-  const messagesRef = getBranchCollection(branchId, 'contactMessages');
-  const q = query(messagesRef, orderBy('createdAt', 'desc'));
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-};
-
-/**
- * Mark contact message as read
- * @param {string} branchId
- * @param {string} messageId
- */
-export const markContactMessageRead = async (branchId, messageId) => {
-  const messageRef = getBranchDoc(branchId, 'contactMessages', messageId);
-  await updateDoc(messageRef, { read: true });
-};
 
 // ==================== Rules ====================
 
-/**
- * Create or update a rule
- * @param {string} branchId
- * @param {string} ruleId
- * @param {object} ruleData - { title, content }
- */
-export const setRule = async (branchId, ruleId, ruleData) => {
-  const ruleRef = getBranchDoc(branchId, 'rules', ruleId);
-  await setDoc(ruleRef, {
-    ...ruleData,
-    updatedAt: serverTimestamp(),
-  }, { merge: true });
-};
-
-/**
- * Get a rule
- * @param {string} branchId
- * @param {string} ruleId
- * @returns {Promise<DocumentSnapshot>}
- */
-export const getRule = async (branchId, ruleId) => {
-  const ruleRef = getBranchDoc(branchId, 'rules', ruleId);
-  return await getDoc(ruleRef);
-};
-
-/**
- * Get all rules for a branch
- * @param {string} branchId
- * @returns {Promise<Array>}
- */
-export const getRules = async (branchId) => {
-  const rulesRef = getBranchCollection(branchId, 'rules');
-  const snapshot = await getDocs(rulesRef);
-  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-};
-
-/**
- * Delete a rule
- * @param {string} branchId
- * @param {string} ruleId
- */
-export const deleteRule = async (branchId, ruleId) => {
-  const ruleRef = getBranchDoc(branchId, 'rules', ruleId);
-  await deleteDoc(ruleRef);
-};
 
 /**
  * Check if user has access to support lessons
@@ -2641,135 +972,6 @@ export const isUserVerified = async (branchId, userId) => {
 
 // ==================== Support Lesson Expiration & Renewal ====================
 
-/**
- * Upsert a support lesson registration.
- *
- * Behaviour:
- *  - If no existing registration → create a new document.
- *  - If an existing registration is 'expired' → update it in place (renewal).
- *  - If an existing registration is 'pending' or 'active' → throw an error so
- *    the form can display the correct message to the student.
- *
- * This is the ONLY path that student-initiated registration should use so that
- * expiration and duplicate-prevention logic stays in one place.
- *
- * @returns {{ id: string, type: 'new' | 'renewal' }}
- */
-export const upsertSupportLessonRegistration = async ({
-  branchId,
-  userId,
-  lessonId,
-  subjectName = '',
-  yearName = null,
-  teacherName = null,
-  studyYearId = null,
-  studyLevelId = null,
-  durationInMonths = 1,
-  startDate,            // JS Date — estimated; will be overwritten on admin verify
-  endDate,              // JS Date — estimated; will be overwritten on admin verify
-  academicYear = null,
-  paymentProofUrl = '',
-  monthlyPrice = null,
-  totalPrice = null,
-  registrationNumber = null, // formatted reg number (e.g. BOUM-202605-1234) — NOT the Firebase UID
-  studentPhone = null,       // phoneNumber from user profile
-  studentStudyYear = null,   // studyYear from user profile
-}) => {
-  if (!branchId || !userId || !lessonId) {
-    throw new Error('branchId, userId, and lessonId are required');
-  }
-
-  const startTs = Timestamp.fromDate(startDate instanceof Date ? startDate : new Date(startDate));
-  const endTs   = Timestamp.fromDate(endDate   instanceof Date ? endDate   : new Date(endDate));
-  const now     = new Date();
-
-  // Find any existing registration for this student × lesson × branch.
-  const existingQ = query(
-    collection(db, SUPPORT_LESSON_REGISTRATIONS_COLLECTION),
-    where('userId',   '==', userId),
-    where('lessonId', '==', lessonId),
-    where('branchId', '==', branchId),
-  );
-  const existingSnap = await getDocs(existingQ);
-
-  if (!existingSnap.empty) {
-    // Pick the most recent document.
-    const sorted = existingSnap.docs
-      .map((d) => ({ id: d.id, ...d.data() }))
-      .sort((a, b) => {
-        const at = a.createdAt?.toDate?.()?.getTime() ?? 0;
-        const bt = b.createdAt?.toDate?.()?.getTime() ?? 0;
-        return bt - at;
-      });
-    const latest = sorted[0];
-    const norm   = String(latest.status || '').toLowerCase();
-
-    if (norm === 'pending') {
-      const err = new Error('لديك طلب تسجيل قيد المراجعة لهذا الدرس. يرجى الانتظار حتى تتم مراجعته.');
-      err.code = 'registration-pending';
-      throw err;
-    }
-
-    if (['verified', 'approved', 'active', 'registered'].includes(norm)) {
-      const rawEnd  = latest.endDate ?? latest.expiresAt ?? null;
-      const endDateObj = rawEnd?.toDate ? rawEnd.toDate() : (rawEnd ? new Date(rawEnd) : null);
-      if (endDateObj && endDateObj > now) {
-        const err = new Error('لديك اشتراك نشط لهذا الدرس. سيتم تمكين التجديد تلقائياً عند انتهاء الاشتراك.');
-        err.code = 'registration-active';
-        throw err;
-      }
-
-      // Expired verified registration → update in place (renewal).
-      const renewalFields = {
-        startDate:        startTs,
-        endDate:          endTs,
-        durationInMonths,
-        academicYear:     academicYear    ?? latest.academicYear    ?? null,
-        paymentProofUrl:  paymentProofUrl || latest.paymentProofUrl || '',
-        status:           'pending',
-        monthlyPrice:     monthlyPrice    ?? latest.monthlyPrice    ?? null,
-        totalPrice:       totalPrice      ?? null,
-        subjectName:      subjectName     || latest.subjectName     || '',
-        yearName:         yearName        ?? latest.yearName        ?? null,
-        studentStudyYear: studentStudyYear ?? latest.studentStudyYear ?? null,
-        renewedAt:        serverTimestamp(),
-        updatedAt:        serverTimestamp(),
-        ...(registrationNumber != null && { registrationNumber }),
-        ...(studentPhone != null && { studentPhone }),
-        ...(teacherName  != null && { teacherName }),
-      };
-      await updateDoc(doc(db, SUPPORT_LESSON_REGISTRATIONS_COLLECTION, latest.id), renewalFields);
-      return { id: latest.id, type: 'renewal' };
-    }
-  }
-
-  // No blocking registration — create a new document.
-  const newPayload = {
-    branchId,
-    userId,
-    lessonId,
-    subjectName:      subjectName  || '',
-    yearName:         yearName     ?? null,
-    studyYearId:      studyYearId  ?? null,
-    studyLevelId:     studyLevelId ?? null,
-    durationInMonths,
-    startDate:        startTs,
-    endDate:          endTs,
-    academicYear:     academicYear ?? null,
-    paymentProofUrl:  paymentProofUrl || '',
-    status:           'pending',
-    monthlyPrice:     monthlyPrice ?? null,
-    totalPrice:       totalPrice   ?? null,
-    studentStudyYear: studentStudyYear ?? null,
-    createdAt:        serverTimestamp(),
-    updatedAt:        serverTimestamp(),
-    ...(registrationNumber != null && registrationNumber !== '' && { registrationNumber }),
-    ...(studentPhone != null && studentPhone !== '' && { studentPhone }),
-    ...(teacherName  != null && teacherName  !== '' && { teacherName }),
-  };
-  const ref = await addDoc(collection(db, SUPPORT_LESSON_REGISTRATIONS_COLLECTION), newPayload);
-  return { id: ref.id, type: 'new' };
-};
 
 /**
  * Admin: manually renew a support lesson registration for one additional month.
@@ -2835,128 +1037,6 @@ export const adminEditSupportLessonRegistration = async (registrationId, updates
   });
 };
 
-
-/**
- * Admin: manually approve annual fee for a student who paid physically at school.
- * Creates a verified annualPayments document and updates the user profile.
- */
-export const adminApproveAnnualFeeManually = async (branchId, userId, adminInfo = {}, studentMeta = {}) => {
-  if (!branchId || !userId) throw new Error('branchId and userId are required');
-
-  const academicYear = studentMeta.academicYear || null;
-  const studyYear = academicYear || null;
-  const schoolLevel = studyYear
-    ? (studyYear.startsWith('mid') ? 'middle' : studyYear.startsWith('sec') ? 'high' : null)
-    : null;
-
-  const verificationTimestamp = serverTimestamp();
-
-  const paymentsRef = getBranchCollection(branchId, 'annualPayments');
-  const paymentRef = await addDoc(paymentsRef, {
-    userId,
-    studentName:  studentMeta.name  || '',
-    studentPhone: studentMeta.phone || '',
-    academicYear: academicYear || null,
-    status:        'verified',
-    paymentMethod: 'physical',
-    source:        'admin',
-    notes:         adminInfo.notes || 'تم الدفع يدوياً في المدرسة',
-    createdAt:     verificationTimestamp,
-    verifiedAt:    verificationTimestamp,
-    verifiedBy: {
-      uid:   adminInfo.uid   || '',
-      email: adminInfo.email || '',
-      name:  adminInfo.name  || '',
-    },
-  });
-
-  const userRef = getBranchDoc(branchId, 'users', userId);
-  await updateDoc(userRef, {
-    yearlyFeePaid:    true,
-    paymentVerified:  true,
-    updatedAt:        serverTimestamp(),
-    ...(studyYear   ? { studyYear }   : {}),
-    ...(schoolLevel ? { schoolLevel } : {}),
-    'registrations.annualFee': new Date().getFullYear(),
-    'registrations.annualFeeHistory': arrayUnion({
-      registrationId: paymentRef.id,
-      year: new Date().getFullYear(),
-      registeredAt: Date.now(),
-      source: 'admin',
-      academicYear: academicYear || null,
-    }),
-  });
-
-  return paymentRef.id;
-};
-
-/**
- * Admin: manually add a training registration (physical payment, verified immediately).
- */
-export const adminAddTrainingRegistrationManually = async (branchId, data, adminInfo = {}) => {
-  if (!branchId) throw new Error('branchId is required');
-  if (!data.userId) throw new Error('userId is required');
-  if (!data.trainingId) throw new Error('trainingId is required');
-
-  const ref = await addDoc(getBranchCollection(branchId, 'trainingsRegistered'), {
-    branchId,
-    userId:         data.userId,
-    studentName:    data.studentName    || '',
-    studentPhone:   data.studentPhone   || '',
-    userEmail:      data.userEmail      || '',
-    trainingId:     data.trainingId,
-    trainingTitle:  data.trainingTitle  || data.trainingName || '',
-    trainingName:   data.trainingTitle  || data.trainingName || '',
-    trainingPrice:  data.trainingPrice  ?? null,
-    paymentMethod:  'physical',
-    source:         'admin',
-    status:         'approved',
-    verified:       true,
-    registeredAt:   serverTimestamp(),
-    verifiedAt:     serverTimestamp(),
-    verifiedBy: {
-      uid:   adminInfo.uid   || '',
-      email: adminInfo.email || '',
-      name:  adminInfo.name  || '',
-    },
-  });
-  return { id: ref.id };
-};
-
-/**
- * Admin: manually add a language registration (physical payment, verified immediately).
- */
-export const adminAddLanguageRegistrationManually = async (branchId, data, adminInfo = {}) => {
-  if (!branchId) throw new Error('branchId is required');
-  if (!data.userId) throw new Error('userId is required');
-  if (!data.languageId) throw new Error('languageId is required');
-
-  const ref = await addDoc(getBranchCollection(branchId, 'languagesRegistered'), {
-    branchId,
-    userId:        data.userId,   // canonical ownership field (Phase D — studentId removed)
-    studentName:   data.studentName   || '',
-    studentPhone:  data.studentPhone  || '',
-    studentEmail:  data.userEmail     || '',
-    languageId:    data.languageId,
-    languageName:  data.languageName  || '',
-    levelId:       data.levelId       || '',
-    levelLabel:    data.levelLabel    || '',
-    teacherName:   data.teacherName   || '',
-    languagePrice: data.languagePrice ?? null,
-    paymentMethod: 'physical',
-    source:        'admin',
-    status:        'registered',
-    verified:      true,
-    registeredAt:  serverTimestamp(),
-    verifiedAt:    serverTimestamp(),
-    verifiedBy: {
-      uid:   adminInfo.uid   || '',
-      email: adminInfo.email || '',
-      name:  adminInfo.name  || '',
-    },
-  });
-  return { id: ref.id };
-};
 
 /**
  * Real-time listener for all approved language registrations for a specific student.
@@ -3035,10 +1115,5 @@ export const getStudentSupportLessonRegistrations = async (branchId, userId) => 
   const snap = await getDocs(q);
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 };
-
-
-
-
-
 
 

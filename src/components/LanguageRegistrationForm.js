@@ -2,21 +2,16 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useBranch } from '../contexts/BranchContext';
 import { useUserProfile } from '../hooks/useUserProfile';
-import {
-  getLanguages,
-  createLanguageRegistration,
-  isUserVerified,
-} from '../services/firestoreService';
-import { supabase } from '../supabase';
-import { optimizeImage } from '../utils/imageOptimizer';
+import { getLanguages, isUserVerified, getStudentLanguageRegistrations } from '../services/firestoreService';
 import { GraduationCap, Languages } from 'lucide-react';
 import EnrollmentProfileCard from './EnrollmentProfileCard';
-import PaymentInstructions from './payments/PaymentInstructions';
+import ChargilyPayButton from './payments/ChargilyPayButton';
+import EnrolledNotice from './payments/EnrolledNotice';
 import { scheduleRows } from './academic/academicDisplay';
 import { Button } from './ui/button';
 import { Select, Label } from './ui/input';
-import { Alert, LoadingState, Spinner } from './ui/feedback';
-
+import { Alert, LoadingState } from './ui/feedback';
+import { DEFAULT_SCHOOL } from '../utils/personData';
 
 const parseNumericPrice = (raw) => {
   if (raw == null) return null;
@@ -101,47 +96,38 @@ const LanguageRegistrationForm = ({ initialSelection = null, lockSelection = fal
   const { selectedBranchId } = useBranch();
   const { profile } = useUserProfile();
 
-  const [languages, setLanguages] = useState([]);
-  const [levelOptions, setLevelOptions] = useState([]);
-  const [selectedLevel, setSelectedLevel] = useState('');
-  const [selectedLanguageId, setSelectedLanguageId] = useState('');
-  const [selectedLevelDetails, setSelectedLevelDetails] = useState(null);
-  const [receiptFile, setReceiptFile] = useState(null);
-  const [paymentMethod, setPaymentMethod] = useState('');
-  const [paymentMethodError, setPaymentMethodError] = useState('');
-  const [receiptError, setReceiptError] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  const [verified, setVerified] = useState(false);
-  const [initialSelectionApplied, setInitialSelectionApplied] = useState(false);
+  const [languages,               setLanguages]               = useState([]);
+  const [levelOptions,             setLevelOptions]             = useState([]);
+  const [selectedLevel,            setSelectedLevel]            = useState('');
+  const [selectedLanguageId,       setSelectedLanguageId]       = useState('');
+  const [selectedLevelDetails,     setSelectedLevelDetails]     = useState(null);
+  const [loading,                  setLoading]                  = useState(true);
+  const [error,                    setError]                    = useState('');
+  const [verified,                 setVerified]                 = useState(false);
+  const [myRegistrations,          setMyRegistrations]          = useState([]);
+  const [initialSelectionApplied,  setInitialSelectionApplied]  = useState(false);
 
-  const initialSelectionLevelId = initialSelection?.levelId || '';
+  const initialSelectionLevelId    = initialSelection?.levelId    || '';
   const initialSelectionLanguageId = initialSelection?.languageId || '';
-  const initialSelectionKey = `${initialSelectionLevelId}::${initialSelectionLanguageId}`;
-
+  const initialSelectionKey        = `${initialSelectionLevelId}::${initialSelectionLanguageId}`;
 
   useEffect(() => {
     if (!user || !selectedBranchId) {
-      setLanguages([]);
-      setLevelOptions([]);
-      setVerified(false);
-      setLoading(false);
-      return;
+      setLanguages([]); setLevelOptions([]); setVerified(false); setLoading(false); return;
     }
-
     const loadData = async () => {
       try {
         setLoading(true);
-        const [verifiedStatus, languagesData] = await Promise.all([
+        const [verifiedStatus, languagesData, myRegs] = await Promise.all([
           isUserVerified(selectedBranchId, user.uid),
           getLanguages(selectedBranchId),
+          getStudentLanguageRegistrations(selectedBranchId, user.uid).catch(() => []),
         ]);
         const normalizedLanguages = languagesData.map(normalizeLanguageCourse);
         setVerified(verifiedStatus);
         setLanguages(normalizedLanguages);
         setLevelOptions(extractLevelOptions(normalizedLanguages));
+        setMyRegistrations(Array.isArray(myRegs) ? myRegs : []);
       } catch (err) {
         console.error('Error loading language form data:', err);
         setError('فشل في تحميل بيانات اللغات. يرجى المحاولة لاحقاً.');
@@ -149,18 +135,11 @@ const LanguageRegistrationForm = ({ initialSelection = null, lockSelection = fal
         setLoading(false);
       }
     };
-
     loadData();
   }, [selectedBranchId, user]);
 
-  useEffect(() => {
-    setSelectedLanguageId('');
-    setSelectedLevelDetails(null);
-  }, [selectedLevel]);
-
-  useEffect(() => {
-    setInitialSelectionApplied(false);
-  }, [initialSelectionKey]);
+  useEffect(() => { setSelectedLanguageId(''); setSelectedLevelDetails(null); }, [selectedLevel]);
+  useEffect(() => { setInitialSelectionApplied(false); }, [initialSelectionKey]);
 
   const availableLanguagesForLevel = useMemo(() => {
     if (!selectedLevel) return [];
@@ -182,6 +161,18 @@ const LanguageRegistrationForm = ({ initialSelection = null, lockSelection = fal
 
   const handleLanguageChange = (event) => applyLanguageSelection(event.target.value);
 
+  // Already-paid guard: a languagesRegistered doc exists ONLY after a confirmed
+  // payment (or an admin record), so its presence means "paid". Match the new
+  // class-based flow by classId and the legacy flow by languageId + levelId.
+  const isAlreadyEnrolled = ({ classId, languageId, levelId } = {}) =>
+    myRegistrations.some((r) => {
+      if (r?.paid === false) return false;
+      if (classId && r.classId === classId) return true;
+      const rLang = r.languageId || r.subjectId;
+      if (languageId && levelId && rLang === languageId && r.levelId === levelId) return true;
+      return false;
+    });
+
   useEffect(() => {
     if (initialSelectionApplied) return;
     if (!initialSelectionLevelId) return;
@@ -196,191 +187,54 @@ const LanguageRegistrationForm = ({ initialSelection = null, lockSelection = fal
     if (!matchExists) return;
     applyLanguageSelection(initialSelectionLanguageId);
     setInitialSelectionApplied(true);
-  }, [
-    initialSelectionApplied, initialSelectionLanguageId, initialSelectionLevelId,
-    selectedLevel, availableLanguagesForLevel,
-  ]);
+  }, [initialSelectionApplied, initialSelectionLanguageId, initialSelectionLevelId, selectedLevel, availableLanguagesForLevel]);
 
-
-  const uploadReceiptToSupabase = async () => {
-    if (!supabase) throw new Error('خدمة رفع الملفات غير متاحة حالياً. يرجى إبلاغ الإدارة.');
-    if (!receiptFile) throw new Error('يرجى إرفاق صورة الإيصال.');
-
-    // Optimize (resize → WebP → compress) before upload. Falls back to original on failure.
-    const optimizedFile = await optimizeImage(receiptFile);
-
-    const objectPath = `language-forms/${selectedBranchId}/${user.uid}/${Date.now()}.webp`;
-    const { error: uploadError } = await supabase.storage
-      .from('annual-fee')
-      .upload(objectPath, optimizedFile, {
-        upsert: false,
-        contentType: optimizedFile.type || 'image/webp',
-      });
-    if (uploadError) {
-      console.error('Supabase upload error:', uploadError);
-      throw new Error('تعذر رفع صورة الإيصال. يرجى المحاولة مرة أخرى.');
-    }
-    const { data: { publicUrl } } = supabase.storage.from('annual-fee').getPublicUrl(objectPath);
-    if (!publicUrl) throw new Error('تعذر الحصول على رابط لصورة الإيصال.');
-    return { publicUrl, path: objectPath };
-  };
-
-  const onSubmit = async () => {
-    setError('');
-    setSuccess('');
-    setPaymentMethodError('');
-    setReceiptError('');
-
-    if (!verified) { setError('يجب توثيق حسابك من طرف الإدارة قبل إرسال الطلب.'); return; }
-
-    // ── New class-based flow: subject/teacher/group/schedules already chosen ──
-    if (selectedClass) {
-      if (!paymentMethod) { setPaymentMethodError('يرجى اختيار طريقة الدفع'); return; }
-      if (!receiptFile) { setReceiptError('يرجى رفع صورة إيصال الدفع'); return; }
-      try {
-        setSubmitting(true);
-        const { publicUrl, path } = await uploadReceiptToSupabase();
-        await createLanguageRegistration(selectedBranchId, {
-          userId: user.uid,
-          userEmail: user.email,
-          studentName: profile?.name || '',
-          birthDate: profile?.birthDate || null,
-          birthPlace: profile?.birthPlace || '',
-          guardianPhone: profile?.guardianPhone || '',
-          studentPhone: profile?.studentPhone || profile?.guardianPhone || '',
-          paymentMethod,
-          // Subject → Class snapshot
-          classId: selectedClass.id,
-          subjectId: selectedClass.subjectId,
-          subjectName: selectedClass.subjectName || selectedClass.name || '',
-          groupName: selectedClass.groupName || '',
-          teacherName: selectedClass.teacherName || '',
-          schedules: Array.isArray(selectedClass.schedules) ? selectedClass.schedules : [],
-          // Legacy mirrors for the existing admin list + verification flow
-          languageId: selectedClass.subjectId,
-          languageName: selectedClass.subjectName || selectedClass.name || '',
-          levelLabel: selectedClass.level || '',
-          languagePrice: selectedClass.price ?? null,
-          receiptUrl: publicUrl,
-          receiptPath: path,
-          status: 'pending',
-          createdAt: new Date().toISOString(),
-        });
-        setSuccess('تم استلام طلبك بنجاح. سيتم تفعيله فور التحقق من طرف الإدارة.');
-        onSuccess?.();
-        setPaymentMethod('');
-        setReceiptFile(null);
-      } catch (err) {
-        console.error('Error submitting language form:', err);
-        setError(err.message || 'حدث خطأ أثناء إرسال الطلب. حاول مرة أخرى.');
-      } finally {
-        setSubmitting(false);
-      }
-      return;
-    }
-
-    if (!selectedLevel) { setError('يرجى اختيار المستوى أولاً.'); return; }
-    if (!selectedLanguageId || !selectedLevelDetails) { setError('يرجى اختيار اللغة المرتبطة بالمستوى.'); return; }
-    if (!paymentMethod) { setPaymentMethodError('يرجى اختيار طريقة الدفع'); return; }
-    if (!receiptFile) { setReceiptError('يرجى رفع صورة إيصال الدفع'); return; }
-
-    try {
-      setSubmitting(true);
-      const { publicUrl, path } = await uploadReceiptToSupabase();
-
-      await createLanguageRegistration(selectedBranchId, {
-        userId: user.uid,
-        userEmail: user.email,
-        studentName: profile?.name || '',
-        birthDate: profile?.birthDate || null,
-        birthPlace: profile?.birthPlace || '',
-        guardianPhone: profile?.guardianPhone || '',
-        studentPhone: profile?.studentPhone || profile?.guardianPhone || '',
-        paymentMethod: paymentMethod,
-        levelId: selectedLevel,
-        levelLabel: selectedLevelDetails.levelLabel,
-        languageId: selectedLanguageId,
-        languageName: selectedLevelDetails.languageName,
-        languagePrice: selectedLevelDetails.price,
-        teacherName: selectedLevelDetails.teacherName,
-        receiptUrl: publicUrl,
-        receiptPath: path,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-      });
-
-      setSuccess('تم استلام طلبك بنجاح. سيتم تفعيله فور التحقق من طرف الإدارة.');
-      onSuccess?.();
-      setPaymentMethod('');
-      if (!lockSelection) {
-        setSelectedLevel('');
-        setSelectedLanguageId('');
-        setSelectedLevelDetails(null);
-      }
-      setReceiptFile(null);
-    } catch (err) {
-      console.error('Error submitting language form:', err);
-      setError(err.message || 'حدث خطأ أثناء إرسال الطلب. حاول مرة أخرى.');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  if (!user) {
-    return (
-      <div className="p-6" dir="rtl">
-        <Alert variant="danger">يرجى تسجيل الدخول للوصول إلى نموذج التسجيل.</Alert>
-      </div>
-    );
-  }
-
-  if (!selectedBranchId) {
-    return (
-      <div className="p-6" dir="rtl">
-        <Alert variant="warning">يرجى اختيار الفرع أولاً للمتابعة في عملية التسجيل.</Alert>
-      </div>
-    );
-  }
-
-  if (loading) {
-    return (
-      <div dir="rtl">
-        <LoadingState label="جاري تحميل بيانات الدورات…" />
-      </div>
-    );
-  }
-
-  if (!verified) {
-    return (
-      <div className="p-6" dir="rtl">
-        <Alert variant="warning" title="حسابك قيد المراجعة">
-          سيتم تفعيل إمكانية التسجيل في الدورات بعد أن يقوم فريق الإدارة بتوثيق حسابك.
-        </Alert>
-      </div>
-    );
-  }
-
-  return (
+  if (!user) return <div className="p-6" dir="rtl"><Alert variant="danger">يرجى تسجيل الدخول للوصول إلى نموذج التسجيل.</Alert></div>;
+  if (!selectedBranchId) return <div className="p-6" dir="rtl"><Alert variant="warning">يرجى اختيار الفرع أولاً للمتابعة في عملية التسجيل.</Alert></div>;
+  if (loading) return <div dir="rtl"><LoadingState label="جاري تحميل بيانات الدورات…" /></div>;
+  if (!verified) return (
     <div className="p-6" dir="rtl">
-      <div className="max-w-3xl mx-auto space-y-6">
-        <header>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">نموذج التسجيل في دورات اللغات</h1>
-          <p className="text-gray-600">
-            {selectedClass
-              ? 'راجع تفاصيل المجموعة المختارة، ثم أرفق إيصال الدفع لإتمام التسجيل.'
-              : 'اختر المستوى، ثم اللغة المناسبة، وأرفق إيصال الدفع.'}
-          </p>
-        </header>
+      <Alert variant="warning" title="حسابك قيد المراجعة">
+        سيتم تفعيل إمكانية التسجيل في الدورات بعد أن يقوم فريق الإدارة بتوثيق حسابك.
+      </Alert>
+    </div>
+  );
 
-        <EnrollmentProfileCard />
+  // ── New class-based flow: subject/teacher/group/schedules already chosen ──
+  if (selectedClass) {
+    const price = parseNumericPrice(selectedClass.price);
+    const serviceData = {
+      studentName:  profile?.name || '',
+      birthDate:    profile?.birthDate   || null,
+      birthPlace:   profile?.birthPlace  || '',
+      school:       profile?.school || DEFAULT_SCHOOL,
+      guardianPhone: profile?.guardianPhone || '',
+      studentPhone:  profile?.studentPhone  || profile?.guardianPhone || '',
+      classId:      selectedClass.id,
+      subjectId:    selectedClass.subjectId,
+      subjectName:  selectedClass.subjectName || selectedClass.name || '',
+      languageId:   selectedClass.subjectId,
+      languageName: selectedClass.subjectName || selectedClass.name || '',
+      levelLabel:   selectedClass.level || '',
+      groupName:    selectedClass.groupName || '',
+      teacherName:  selectedClass.teacherName || '',
+      schedules:    Array.isArray(selectedClass.schedules) ? selectedClass.schedules : [],
+      price,
+      serviceName:  `${selectedClass.subjectName || selectedClass.name || ''} — ${selectedClass.groupName || ''}`,
+    };
 
-        {error && <Alert variant="danger">{error}</Alert>}
+    return (
+      <div className="p-6" dir="rtl">
+        <div className="max-w-3xl mx-auto space-y-6">
+          <header>
+            <h1 className="text-3xl font-bold text-gray-900 mb-2">نموذج التسجيل في دورات اللغات</h1>
+            <p className="text-gray-600">راجع تفاصيل المجموعة المختارة، ثم أكمل الدفع لإتمام التسجيل.</p>
+          </header>
 
-        {success && <Alert variant="success">{success}</Alert>}
+          <EnrollmentProfileCard />
+          {error && <Alert variant="danger">{error}</Alert>}
 
-        {selectedClass ? (
           <div className="bg-white rounded-2xl shadow-lg p-6 space-y-6">
-            {/* Locked class summary (Subject / Teacher / Group / Schedules) */}
             <div className="bg-primary/5 border border-primary/10 rounded-xl p-4 space-y-2">
               <h4 className="text-lg font-semibold text-primary">
                 {selectedClass.subjectName || selectedClass.name}
@@ -403,26 +257,36 @@ const LanguageRegistrationForm = ({ initialSelection = null, lockSelection = fal
               </div>
             </div>
 
-            {/* Payment Method & Receipt */}
-            <PaymentInstructions
-              selectedMethod={paymentMethod}
-              onMethodChange={(m) => { setPaymentMethod(m); setPaymentMethodError(''); }}
-              receiptFile={receiptFile}
-              onReceiptChange={(f) => { setReceiptFile(f); setReceiptError(''); }}
-              methodError={paymentMethodError}
-              receiptError={receiptError}
-              inputId="language-receipt-upload"
-            />
-
-            <Button onClick={onSubmit} fullWidth disabled={submitting}>
-              {submitting ? (
-                <><Spinner size="sm" className="text-white" />جاري الإرسال...</>
-              ) : (
-                'إرسال طلب التسجيل'
-              )}
-            </Button>
+            {isAlreadyEnrolled({ classId: selectedClass.id, languageId: selectedClass.subjectId }) ? (
+              <EnrolledNotice />
+            ) : (
+              <ChargilyPayButton
+                amount={price}
+                branchId={selectedBranchId}
+                serviceType="language"
+                serviceData={serviceData}
+                disabled={price == null}
+              />
+            )}
           </div>
-        ) : languages.length === 0 ? (
+        </div>
+      </div>
+    );
+  }
+
+  // ── Legacy dropdown flow ──
+  return (
+    <div className="p-6" dir="rtl">
+      <div className="max-w-3xl mx-auto space-y-6">
+        <header>
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">نموذج التسجيل في دورات اللغات</h1>
+          <p className="text-gray-600">اختر المستوى، ثم اللغة المناسبة، وأكمل الدفع.</p>
+        </header>
+
+        <EnrollmentProfileCard />
+        {error && <Alert variant="danger">{error}</Alert>}
+
+        {languages.length === 0 ? (
           <div className="bg-white rounded-lg shadow p-10 text-center">
             <Languages className="w-16 h-16 text-gray-400 mx-auto mb-4" />
             <h3 className="text-xl font-semibold mb-2">لا توجد دورات لغة مفعّلة حالياً</h3>
@@ -430,7 +294,6 @@ const LanguageRegistrationForm = ({ initialSelection = null, lockSelection = fal
           </div>
         ) : (
           <div className="bg-white rounded-2xl shadow-lg p-6 space-y-6">
-            {/* Level selector */}
             <div>
               <Label htmlFor="lang-level" required className="flex items-center gap-2">
                 <GraduationCap className="w-4 h-4" aria-hidden="true" />
@@ -472,39 +335,48 @@ const LanguageRegistrationForm = ({ initialSelection = null, lockSelection = fal
             )}
 
             {selectedLevelDetails && (
-              <div className="bg-primary/5 border border-primary/10 rounded-xl p-4 space-y-2">
-                <h4 className="text-lg font-semibold text-primary">
-                  {selectedLevelDetails.languageName} · {selectedLevelDetails.levelLabel}
-                </h4>
-                <div className="text-sm text-gray-700 space-y-1">
-                  {selectedLevelDetails.languageDescription && <p>{selectedLevelDetails.languageDescription}</p>}
-                  <p><strong>الأستاذ:</strong> {selectedLevelDetails.teacherName || '—'}</p>
-                  <p><strong>السعر:</strong> {formatPriceText(selectedLevelDetails.price)}</p>
-                  {selectedLevelDetails.schedule && (
-                    <p><strong>الجدول:</strong> {selectedLevelDetails.schedule}</p>
-                  )}
+              <>
+                <div className="bg-primary/5 border border-primary/10 rounded-xl p-4 space-y-2">
+                  <h4 className="text-lg font-semibold text-primary">
+                    {selectedLevelDetails.languageName} · {selectedLevelDetails.levelLabel}
+                  </h4>
+                  <div className="text-sm text-gray-700 space-y-1">
+                    {selectedLevelDetails.languageDescription && <p>{selectedLevelDetails.languageDescription}</p>}
+                    <p><strong>الأستاذ:</strong> {selectedLevelDetails.teacherName || '—'}</p>
+                    <p><strong>السعر:</strong> {formatPriceText(selectedLevelDetails.price)}</p>
+                    {selectedLevelDetails.schedule && (
+                      <p><strong>الجدول:</strong> {selectedLevelDetails.schedule}</p>
+                    )}
+                  </div>
                 </div>
-              </div>
+
+                {isAlreadyEnrolled({ languageId: selectedLanguageId, levelId: selectedLevel }) ? (
+                  <EnrolledNotice />
+                ) : (
+                  <ChargilyPayButton
+                    amount={selectedLevelDetails.price}
+                    branchId={selectedBranchId}
+                    serviceType="language"
+                    serviceData={{
+                      studentName:  profile?.name || '',
+                      birthDate:    profile?.birthDate   || null,
+                      birthPlace:   profile?.birthPlace  || '',
+                      school:       profile?.school || DEFAULT_SCHOOL,
+                      guardianPhone: profile?.guardianPhone || '',
+                      studentPhone:  profile?.studentPhone  || profile?.guardianPhone || '',
+                      levelId:      selectedLevel,
+                      levelLabel:   selectedLevelDetails.levelLabel,
+                      languageId:   selectedLanguageId,
+                      languageName: selectedLevelDetails.languageName,
+                      teacherName:  selectedLevelDetails.teacherName,
+                      price:        selectedLevelDetails.price,
+                      serviceName:  `${selectedLevelDetails.languageName} — ${selectedLevelDetails.levelLabel}`,
+                    }}
+                    disabled={!selectedLanguageId}
+                  />
+                )}
+              </>
             )}
-
-            {/* Payment Method & Receipt */}
-            <PaymentInstructions
-              selectedMethod={paymentMethod}
-              onMethodChange={(m) => { setPaymentMethod(m); setPaymentMethodError(''); }}
-              receiptFile={receiptFile}
-              onReceiptChange={(f) => { setReceiptFile(f); setReceiptError(''); }}
-              methodError={paymentMethodError}
-              receiptError={receiptError}
-              inputId="language-receipt-upload"
-            />
-
-            <Button onClick={onSubmit} fullWidth disabled={submitting}>
-              {submitting ? (
-                <><Spinner size="sm" className="text-white" />جاري الإرسال...</>
-              ) : (
-                'إرسال طلب التسجيل'
-              )}
-            </Button>
           </div>
         )}
       </div>

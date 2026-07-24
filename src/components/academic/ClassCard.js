@@ -10,6 +10,7 @@
 import React from 'react';
 import { User, Users, Clock, CheckCircle, AlertCircle } from 'lucide-react';
 import { formatPriceText, scheduleRows } from './academicDisplay';
+import { groupTypeBadge } from '../../utils/supportClassification';
 
 const BUTTON_BY_STATUS = {
   none:     { text: 'التسجيل',        disabled: false, cls: 'bg-primary text-white hover:bg-primary-600' },
@@ -29,12 +30,22 @@ const ClassCard = ({ cls, status = { type: 'none' }, onRegister }) => {
     <div className="flex flex-col overflow-hidden rounded-2xl bg-white shadow-md ring-1 ring-gray-100 transition-shadow duration-300 hover:shadow-lg">
       <div className="flex flex-1 flex-col p-6">
         {/* Group title + optional level */}
-        <div className="mb-3 flex items-center gap-2">
+        <div className="mb-3 flex flex-wrap items-center gap-2">
           <Users className="h-7 w-7 flex-shrink-0 text-primary" aria-hidden="true" />
           <h3 className="text-xl font-bold text-primary">{cls?.groupName || 'مجموعة'}</h3>
           {cls?.level && (
             <span className="rounded-md bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">{cls.level}</span>
           )}
+          {/* Group-type badge — support only, so students instantly see the type. */}
+          {cls?.serviceType === 'support' && (() => {
+            const gt = groupTypeBadge(cls.groupType);
+            return (
+              <span className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-semibold ${gt.classes}`}>
+                <gt.Icon className={`h-2.5 w-2.5 shrink-0 ${gt.iconClass}`} fill="currentColor" aria-hidden="true" />
+                {gt.label}
+              </span>
+            );
+          })()}
         </div>
 
         {/* Teacher */}
@@ -62,14 +73,25 @@ const ClassCard = ({ cls, status = { type: 'none' }, onRegister }) => {
           <span>{formatPriceText(cls?.price, cls?.priceType)}</span>
         </div>
 
-        {/* Remaining seats (only when a capacity is set) */}
-        {Number(cls?.capacity) > 0 && (() => {
-          const remaining = Math.max(0, (Number(cls.capacity) || 0) - (Number(cls.enrollmentCount) || 0));
+        {/* Availability — students/public see only open/full status, never the
+            exact enrollment count. Enrollment numbers (current/max/remaining) are
+            administrative info, shown to admins in SubjectClassManager. */}
+        {(() => {
+          const cap = Number(cls?.capacity) || 0;
+          const isFull = cap > 0 && (Number(cls?.enrollmentCount) || 0) >= cap;
           return (
-            <div className="mb-4 text-sm">
-              {remaining > 0
-                ? <span className="text-success-600">المقاعد المتبقية: {remaining}</span>
-                : <span className="font-medium text-danger-600">اكتمل العدد</span>}
+            <div className="mb-4">
+              {isFull ? (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-danger-50 px-2.5 py-1 text-xs font-semibold text-danger-700 ring-1 ring-danger-200">
+                  <AlertCircle className="h-3.5 w-3.5" aria-hidden="true" />
+                  المجموعة مكتملة
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-success-50 px-2.5 py-1 text-xs font-semibold text-success-700 ring-1 ring-success-200">
+                  <CheckCircle className="h-3.5 w-3.5" aria-hidden="true" />
+                  التسجيل مفتوح
+                </span>
+              )}
             </div>
           );
         })()}

@@ -1,4 +1,5 @@
 import React from 'react';
+import { withNumberInputGuards } from '../../utils/numberInputGuards';
 
 /**
  * Form control primitives. Mirror the existing `.input` look (so adoption is seamless)
@@ -28,12 +29,15 @@ export const Input = React.forwardRef(function Input(
 ) {
   const ps = startIcon ? 'ps-11' : 'ps-4';
   const pe = endAdornment ? 'pe-11' : 'pe-4';
+  // Number inputs silently step on wheel/arrow keys — guard them so a focused
+  // money/score field can't be corrupted by an incidental scroll or keypress.
+  const guarded = props.type === 'number' ? withNumberInputGuards(props) : props;
   const control = (
     <input
       ref={ref}
       aria-invalid={!!error || undefined}
       className={cx(controlBase, ps, pe, stateClasses(error), className)}
-      {...props}
+      {...guarded}
     />
   );
 

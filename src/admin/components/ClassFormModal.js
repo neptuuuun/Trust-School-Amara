@@ -11,12 +11,15 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Loader2, Users, Plus, Trash2, Clock, UserPlus, X } from 'lucide-react';
+import { Loader2, Users, Plus, Trash2, Clock, UserPlus, X, DoorOpen } from 'lucide-react';
 import AdminModal from './AdminModal';
+import ScheduleConflictPanel from './ScheduleConflictPanel';
 import { useToast } from './ToastNotifications';
 import { useAuth } from '../../contexts/AuthContext';
 import { createClass, updateClass, streamTeachers, createTeacher } from '../../services/firestoreService';
 import { validateClass, validateSchedules, DAYS_OF_WEEK } from '../../utils/classValidation';
+import { numberInputGuards } from '../../utils/numberInputGuards';
+import { GROUP_TYPE_OPTIONS, normalizeGroupType } from '../../utils/supportClassification';
 
 const emptyRow = () => ({ day: '', start: '', end: '' });
 
@@ -30,12 +33,18 @@ const ClassFormModal = ({
   onClose,
 }) => {
   const isEdit = Boolean(classData);
-  const { user } = useAuth();
+  const isSupport = serviceType === 'support';
+  const { user, adminData } = useAuth();
   const { show: showToast } = useToast();
 
   const [teacherName, setTeacherName] = useState(classData?.teacherName || '');
   const [groupName, setGroupName] = useState(classData?.groupName || '');
+  const [classroom, setClassroom] = useState(classData?.classroom || '');
   const [level, setLevel] = useState(classData?.level || '');
+  // Support-only: group type (normal vs low-level support). Defaults to normal.
+  const [groupType, setGroupType] = useState(
+    isSupport ? normalizeGroupType(classData?.groupType) : '',
+  );
   const [capacity, setCapacity] = useState(
     classData?.capacity != null && classData.capacity !== 0 ? String(classData.capacity) : '',
   );
@@ -51,6 +60,7 @@ const ClassFormModal = ({
   const [fieldErrors, setFieldErrors] = useState({});
   const [scheduleErrors, setScheduleErrors] = useState({ errors: [], rowErrors: {} });
   const [formError, setFormError] = useState('');
+  const [conflicts, setConflicts] = useState([]); // schedule-conflict descriptors
   const [submitting, setSubmitting] = useState(false);
 
   // Teacher dropdown (managed teachers collection) + inline add.
@@ -70,7 +80,7 @@ const ClassFormModal = ({
     if (!n) return;
     try {
       setTeacherBusy(true);
-      const t = await createTeacher(branchId, n, { uid: user?.uid, email: user?.email });
+      const t = await createTeacher(branchId, n, { uid: user?.uid, name: adminData?.name || '', email: user?.email });
       setTeacherName(t.name);
       setNewTeacher('');
       setAddingTeacher(false);
@@ -100,8 +110,9 @@ const ClassFormModal = ({
   const handleSubmit = async (e) => {
     e.preventDefault();
     setFormError('');
+    setConflicts([]);
 
-    const classCheck = validateClass({ teacherName, groupName, capacity, price });
+    const classCheck = validateClass({ teacherName, groupName, capacity, price, groupType }, { requireGroupType: isSupport });
     const scheduleCheck = validateSchedules(schedules);
     setFieldErrors(classCheck.errors);
     setScheduleErrors({ errors: scheduleCheck.errors, rowErrors: scheduleCheck.rowErrors });
@@ -115,9 +126,11 @@ const ClassFormModal = ({
       subjectName: subject.name,
       teacherName,
       groupName,
+      classroom,
       capacity,
       price,
       schedules,
+      ...(isSupport ? { groupType } : {}),
       ...(resolvedLevel ? { level: resolvedLevel } : {}),
       ...(subject.studyYear ? { studyYear: subject.studyYear } : {}),
     };
@@ -133,8 +146,14 @@ const ClassFormModal = ({
       }
       onClose();
     } catch (err) {
-      console.error('ClassFormModal save error:', err);
-      setFormError('حدث خطأ أثناء الحفظ. يرجى المحاولة مرة أخرى.');
+      // Schedule conflict → render the actionable panel (teacher / classroom).
+      if (err?.code === 'schedule-conflict') {
+        setConflicts(err.conflicts || [err.conflict].filter(Boolean));
+        setFormError('');
+      } else {
+        console.error('ClassFormModal save error:', err);
+        setFormError('حدث خطأ أثناء الحفظ. يرجى المحاولة مرة أخرى.');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -182,6 +201,8 @@ const ClassFormModal = ({
             {formError}
           </div>
         )}
+
+        {conflicts.length > 0 && <ScheduleConflictPanel conflicts={conflicts} />}
 
         {/* Teacher + Group */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -258,6 +279,40 @@ const ClassFormModal = ({
           </div>
         </div>
 
+        {/* Group type — support only (routes weak students to dedicated groups) */}
+        {isSupport && (
+          <div>
+            <label className="mb-1.5 block text-sm font-semibold text-gray-800">
+              نوع المجموعة <span className="text-danger-500">*</span>
+            </label>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {GROUP_TYPE_OPTIONS.map((opt) => {
+                const active = groupType === opt.value;
+                const isLow = opt.value === 'low_level_support';
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => { setGroupType(opt.value); if (fieldErrors.groupType) setFieldErrors((p) => ({ ...p, groupType: undefined })); }}
+                    className={`flex items-start gap-2 rounded-xl border p-3 text-start transition-colors ${
+                      active
+                        ? (isLow ? 'border-orange-300 bg-orange-50 ring-2 ring-orange-100' : 'border-success-300 bg-success-50 ring-2 ring-success-100')
+                        : 'border-gray-200 bg-white hover:bg-gray-50'
+                    }`}
+                  >
+                    <span className="mt-0.5 text-lg leading-none">{isLow ? '🟠' : '🟢'}</span>
+                    <span className="min-w-0">
+                      <span className="block text-sm font-semibold text-gray-900">{opt.label}</span>
+                      <span className="block text-xs text-gray-500">{opt.hint}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            {fieldErrors.groupType && <p className="mt-1 text-xs text-danger-600">{fieldErrors.groupType}</p>}
+          </div>
+        )}
+
         {/* Optional level (CEFR for languages) */}
         {showLevel && (
           <div>
@@ -274,6 +329,24 @@ const ClassFormModal = ({
           </div>
         )}
 
+        {/* Classroom (optional) — enables room double-booking detection */}
+        <div>
+          <label className="mb-1.5 flex items-center gap-1.5 text-sm font-semibold text-gray-800">
+            <DoorOpen className="h-4 w-4 text-primary" />
+            القاعة <span className="text-gray-400">(اختياري)</span>
+          </label>
+          <input
+            type="text"
+            value={classroom}
+            onChange={(e) => setClassroom(e.target.value)}
+            placeholder="مثال: القاعة 1، المخبر..."
+            className={inputCls(false)}
+          />
+          <p className="mt-1 text-xs text-gray-500">
+            عند تحديد القاعة يمنع النظام حجزها لمجموعتين في نفس الوقت.
+          </p>
+        </div>
+
         {/* Capacity + Price */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
@@ -283,6 +356,7 @@ const ClassFormModal = ({
             <input
               type="number"
               min="0"
+              {...numberInputGuards}
               value={capacity}
               onChange={(e) => { setCapacity(e.target.value); if (fieldErrors.capacity) setFieldErrors((p) => ({ ...p, capacity: undefined })); }}
               placeholder="اترك فارغاً لعدد غير محدود"
@@ -292,11 +366,12 @@ const ClassFormModal = ({
           </div>
           <div>
             <label className="mb-1.5 block text-sm font-semibold text-gray-800">
-              السعر (دج) <span className="text-gray-400">(اختياري)</span>
+              {isSupport ? 'السعر الشهري (دج)' : 'السعر (دج)'} <span className="text-gray-400">(اختياري)</span>
             </label>
             <input
               type="number"
               min="0"
+              {...numberInputGuards}
               value={price}
               onChange={(e) => { setPrice(e.target.value); if (fieldErrors.price) setFieldErrors((p) => ({ ...p, price: undefined })); }}
               placeholder="0"
@@ -305,6 +380,13 @@ const ClassFormModal = ({
             {fieldErrors.price && <p className="mt-1 text-xs text-danger-600">{fieldErrors.price}</p>}
           </div>
         </div>
+
+        {/* Support pricing note — proration is derived automatically from the schedule. */}
+        {isSupport && (
+          <p className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+            يُحتسب سعر الحصة تلقائياً = السعر الشهري ÷ عدد الحصص المجدولة في الشهر. عند انضمام الطالب في منتصف الشهر يدفع فقط مقابل الحصص المتبقية حسب المواعيد أدناه.
+          </p>
+        )}
 
         {/* Schedules */}
         <div>

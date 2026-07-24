@@ -19,15 +19,8 @@ service firebase.storage {
         && request.resource.contentType.matches('image/.*');
     }
 
-    // Student-owned files (ID cards, photos, receipts): owner read/write, admin read.
+    // Student-owned files (ID cards, photos): owner read/write, admin read.
     match /students/{uid}/{allPaths=**} {
-      allow read:  if isSignedIn() && (request.auth.uid == uid || isAdmin());
-      allow write: if isSignedIn() && request.auth.uid == uid && isValidImageUpload();
-    }
-
-    // Payment screenshots — owner-scoped path (payments/{uid}/...).
-    // Only the owner may upload (images only); only the owner or an admin may read.
-    match /payments/{uid}/{allPaths=**} {
       allow read:  if isSignedIn() && (request.auth.uid == uid || isAdmin());
       allow write: if isSignedIn() && request.auth.uid == uid && isValidImageUpload();
     }

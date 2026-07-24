@@ -15,9 +15,7 @@
  *     student can never be enrolled into an overlapping slot.
  *
  * Payloads mirror the previous client-side firestoreService functions exactly so
- * the approved archive + student dashboard stay byte-compatible. Payment-receipt
- * cleanup stays on the client (Firebase Storage) — these handlers return the
- * receipt refs for the caller to delete after a successful response.
+ * the approved archive + student dashboard stay byte-compatible.
  */
 
 const { admin, db } = require('../config/firebase');
@@ -30,6 +28,7 @@ const {
 const ledger = require('../services/ledgerService');
 const { writeAudit, resolveActor } = require('../services/auditService');
 const { normalizeGroupType } = require('../services/supportEligibility');
+const { recordManualPaymentOrder } = require('../services/paymentOrderLog');
 
 const FieldValue = admin.firestore.FieldValue;
 
@@ -38,8 +37,14 @@ const FieldValue = admin.firestore.FieldValue;
  * Best-effort: a logging failure must never break the approval transaction that
  * already committed. Class attribution (teacher/subject/group) is enriched from
  * the class doc when available so teacher analytics stay accurate.
+ *
+ * `manualPayment: true` additionally writes an operational paymentOrder receipt
+ * (paymentMethod 'cash') so money collected at the desk shows up in the admin
+ * payment log alongside online Chargily orders. The online path never sets it —
+ * chargilyController has already created the real order. This does NOT create a
+ * second ledger entry; the ledger write below remains the only revenue record.
  */
-async function recordRegistrationRevenue({ branchId, serviceType, sourceCollection, sourceDocId, regData = {}, classId, actor, amount }) {
+async function recordRegistrationRevenue({ branchId, serviceType, sourceCollection, sourceDocId, regData = {}, classId, actor, amount, manualPayment = false }) {
   try {
     let subjectId = regData.subjectId || null;
     let subjectName = regData.subjectName || regData.languageName || regData.trainingTitle || regData.trainingName || null;
@@ -87,6 +92,15 @@ async function recordRegistrationRevenue({ branchId, serviceType, sourceCollecti
       targetId: sourceDocId,
       after: { status: 'approved', studentId: regData.userId || regData.studentId || null, classId: classId || null },
     });
+
+    if (manualPayment) {
+      await recordManualPaymentOrder({
+        branchId, serviceType, sourceCollection, sourceDocId,
+        regData: { ...regData, subjectName, groupName: className },
+        amount: ledger.toNumber(resolvedAmount),
+        actor,
+      });
+    }
   } catch (logErr) {
     console.error(`[${serviceType}] ledger/audit error:`, logErr.message);
   }
@@ -325,6 +339,102 @@ const deleteClass = async (req, res, next) => {
   }
 };
 
+// ── Registration removal (language / training) ────────────────────────────────
+
+/**
+ * Remove an approved language/training registration, server-side.
+ *
+ * This used to be a client-side `deleteDoc` + an enrollmentCount decrement. That
+ * left the ledger untouched (Firestore rules deny client ledger writes anyway),
+ * so the revenue this registration produced stayed on the books forever and the
+ * owner's state-based alerts never moved after a deletion.
+ *
+ * Every removal now, in order:
+ *   1. deletes the archive doc,
+ *   2. re-counts enrollmentCount from the live archive (never a blind -1, which
+ *      drifts on double-clicks and races),
+ *   3. appends a ledger REVERSAL — history is preserved, net revenue drops,
+ *   4. writes a `payment.delete` audit entry (the permanent event record).
+ *
+ * Steps 3–4 are best-effort: a logging failure must not resurrect a deleted row.
+ */
+async function removeRegistration(req, res, next, { collectionName, serviceType, targetType }) {
+  try {
+    const branchId = req.adminBranchId || req.body?.branchId || req.query.branchId;
+    const docId = req.params.id;
+    const reason = req.body?.reason || null;
+
+    if (!branchId) return res.status(400).json({ code: 'missing-branch', message: 'branchId is required.' });
+    if (!docId) return res.status(400).json({ code: 'missing-id', message: 'registrationId is required.' });
+
+    const ref = db.collection('branches').doc(branchId).collection(collectionName).doc(docId);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ code: 'not-found', message: 'Registration not found.' });
+
+    const data = snap.data() || {};
+    // Branch guard: an admin may never reach outside their own branch.
+    if (req.adminBranchId && (data.branchId || branchId) !== req.adminBranchId)
+      return res.status(403).json({ code: 'permission-denied', message: 'لا يمكنك إدارة تسجيل خارج فرعك.' });
+
+    const classId = data.classId || null;
+    await ref.delete();
+
+    // Free the seat by RE-COUNTING, so the counter can't drift out of step with
+    // the archive the alert engine now reads.
+    if (classId) await recountClassEnrollment(branchId, classId, collectionName);
+
+    const actor = { uid: req.user?.uid || '', email: req.user?.email || '', role: 'admin' };
+    try {
+      await ledger.recordReversal(
+        ledger.ledgerId(collectionName, branchId, docId),
+        { recordedBy: actor, reason: reason || 'registration deleted' }
+      );
+    } catch (e) {
+      console.error(`[${collectionName} delete] reversal error:`, e.message);
+    }
+    await writeAudit({
+      branchId, actor, action: 'payment.delete',
+      targetType, targetId: docId,
+      before: {
+        status: data.status || null,
+        studentId: data.userId || data.studentId || null,
+        classId,
+        amount: ledger.deriveAmount(serviceType, data),
+      },
+      reason,
+    }).catch((e) => console.error(`[${collectionName} delete] audit error:`, e.message));
+
+    return res.status(200).json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Recount a class's enrollmentCount from the live archives. Language/training
+ * seats are one-doc-per-enrollment, so a plain size count is exact.
+ */
+async function recountClassEnrollment(branchId, classId, collectionName) {
+  try {
+    const snap = await db.collection('branches').doc(branchId).collection(collectionName)
+      .where('classId', '==', classId).get();
+    await classesRef(branchId).doc(classId).update({
+      enrollmentCount: snap.size,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+  } catch (e) {
+    console.warn('recountClassEnrollment failed:', e.message);
+  }
+}
+
+const deleteLanguageRegistration = (req, res, next) => removeRegistration(req, res, next, {
+  collectionName: 'languagesRegistered', serviceType: 'language', targetType: 'languageRegistration',
+});
+
+const deleteTrainingRegistration = (req, res, next) => removeRegistration(req, res, next, {
+  collectionName: 'trainingsRegistered', serviceType: 'training', targetType: 'trainingRegistration',
+});
+
 // ── Capacity helper (transactional read) ──────────────────────────────────────
 
 function assertCapacityInTx(classSnap) {
@@ -343,7 +453,7 @@ function assertCapacityInTx(classSnap) {
 /**
  * POST /api/academic/registrations/language/verify
  * Body: { branchId, studentId, formId, adminName? }
- * Returns { success, receiptUrl, receiptPath } — caller cleans up the receipt.
+ * Returns { success }.
  */
 const verifyLanguage = async (req, res, next) => {
   try {
@@ -391,11 +501,11 @@ const verifyLanguage = async (req, res, next) => {
         t.update(regRef, {
           status: 'approved', verified: true, visibility: 'approved',
           verifiedAt: FieldValue.serverTimestamp(), verifiedBy,
-          receiptUrl: '', receiptPath: '', updatedAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
         });
         t.set(registeredRef, {
           ...regData, formId, userId: studentId, branchId,
-          status: 'registered', receiptUrl: '', receiptPath: '',
+          status: 'registered',
           registeredAt: FieldValue.serverTimestamp(),
           verifiedAt: FieldValue.serverTimestamp(), verifiedBy,
         });
@@ -416,9 +526,11 @@ const verifyLanguage = async (req, res, next) => {
       sourceCollection: 'languagesRegistered', sourceDocId: formId,
       regData, classId: regData.classId,
       actor: { uid: req.user.uid, email: req.user.email || '', role: 'admin' },
+      // Admin-side enrollment = money collected in person -> log a cash receipt.
+      manualPayment: true,
     });
 
-    return res.status(200).json({ success: true, receiptUrl: regData.receiptUrl || '', receiptPath: regData.receiptPath || '' });
+    return res.status(200).json({ success: true });
   } catch (err) {
     next(err);
   }
@@ -429,7 +541,7 @@ const verifyLanguage = async (req, res, next) => {
 /**
  * POST /api/academic/registrations/training/verify
  * Body: { branchId, studentId, entryId, adminName? }
- * Returns { success, paymentProof, paymentProofPath, receiptUrl } for cleanup.
+ * Returns { success }.
  */
 const verifyTraining = async (req, res, next) => {
   try {
@@ -489,7 +601,6 @@ const verifyTraining = async (req, res, next) => {
 
         t.update(regRef, {
           verified: true, status: 'approved',
-          paymentProof: '', paymentProofPath: '', receiptUrl: '',
           verifiedAt: FieldValue.serverTimestamp(), verifiedBy,
         });
         t.set(registeredRef, {
@@ -497,7 +608,7 @@ const verifyTraining = async (req, res, next) => {
           trainingTitle, name: trainingTitle, trainingPrice,
           studentName: regData.studentName || (userProfile && (userProfile.name || userProfile.fullName)) || '',
           studentPhone: regData.studentPhone || (userProfile && userProfile.phoneNumber) || '',
-          status: 'approved', paymentProof: '', paymentProofPath: '', receiptUrl: '',
+          status: 'approved',
           registeredAt: FieldValue.serverTimestamp(),
           verifiedAt: FieldValue.serverTimestamp(), verifiedBy,
         });
@@ -526,14 +637,11 @@ const verifyTraining = async (req, res, next) => {
       regData: { ...regData, trainingTitle }, classId: regData.classId,
       amount: trainingPrice,
       actor: { uid: req.user.uid, email: req.user.email || '', role: 'admin' },
+      // Admin-side enrollment = money collected in person -> log a cash receipt.
+      manualPayment: true,
     });
 
-    return res.status(200).json({
-      success: true,
-      paymentProof: regData.paymentProof || '',
-      paymentProofPath: regData.paymentProofPath || '',
-      receiptUrl: regData.receiptUrl || '',
-    });
+    return res.status(200).json({ success: true });
   } catch (err) {
     next(err);
   }
@@ -592,6 +700,8 @@ const adminAddLanguage = async (req, res, next) => {
       sourceCollection: 'languagesRegistered', sourceDocId: newRef.id,
       regData: data, classId: data.classId,
       actor: { uid: req.user.uid, email: req.user.email || '', role: 'admin' },
+      // Admin-side enrollment = money collected in person -> log a cash receipt.
+      manualPayment: true,
     });
     return res.status(201).json({ id: newRef.id });
   } catch (err) {
@@ -647,6 +757,8 @@ const adminAddTraining = async (req, res, next) => {
       sourceCollection: 'trainingsRegistered', sourceDocId: newRef.id,
       regData: data, classId: data.classId,
       actor: { uid: req.user.uid, email: req.user.email || '', role: 'admin' },
+      // Admin-side enrollment = money collected in person -> log a cash receipt.
+      manualPayment: true,
     });
     return res.status(201).json({ id: newRef.id });
   } catch (err) {
@@ -662,6 +774,8 @@ module.exports = {
   verifyTraining,
   adminAddLanguage,
   adminAddTraining,
+  deleteLanguageRegistration,
+  deleteTrainingRegistration,
   // Exported for reuse by the Chargily registration factory so the live
   // (online-payment) enrollment path enforces the SAME capacity gate and records
   // the SAME ledger+audit as the admin approval paths.

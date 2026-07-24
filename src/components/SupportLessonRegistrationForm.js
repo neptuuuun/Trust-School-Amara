@@ -4,17 +4,19 @@ import { useAuth } from '../contexts/AuthContext';
 import { useBranch } from '../contexts/BranchContext';
 import {
   getAnnualFeeStatusForYear,
+  getAnnualFeeAmount,
   getUser,
 } from '../services/firestoreService';
 import apiCall from '../utils/apiClient';
 import useSupportLessonRegistrationStatus from '../hooks/useSupportLessonRegistrationStatus';
-import { supabase } from '../supabase';
-import { optimizeImage } from '../utils/imageOptimizer';
-import { isRegistrationBlocking, isRenewalCandidate, addMonthsKeepingDay, ANNUAL_FEE_DZD } from '../utils/registrationUtils';
+import { isRegistrationBlocking, isRenewalCandidate, startOfMonth, endOfMonth, ANNUAL_FEE_DZD } from '../utils/registrationUtils';
+import { getAcademicYearLabel } from '../utils/academicYear';
 import { formatDate } from '../utils/dateUtils';
 import { BookOpen, DollarSign } from 'lucide-react';
-import PaymentInstructions from './payments/PaymentInstructions';
-import { Button } from './ui/button';
+import ChargilyPayButton from './payments/ChargilyPayButton';
+import AverageGateModal from './academic/AverageGateModal';
+import { classificationFromProfile, REASONS } from '../utils/supportClassification';
+import { DEFAULT_SCHOOL } from '../utils/personData';
 import { Select, Label } from './ui/input';
 import { Alert, LoadingState } from './ui/feedback';
 
@@ -37,40 +39,40 @@ const formatPriceText = (raw) => {
   return `${price.toLocaleString('en-US')} دج`;
 };
 
-
-const getAcademicYearLabel = (date) => {
-  const year = date.getFullYear();
-  return date.getMonth() >= 8 ? `${year}-${year + 1}` : `${year - 1}-${year}`;
-};
-
 const SupportLessonRegistrationForm = () => {
   const { user } = useAuth();
   const { selectedBranchId } = useBranch();
   const location = useLocation();
 
-  const [lessons] = useState([]); // legacy dropdown source (unused — class arrives via navigation state)
+  const [lessons] = useState([]);
   const [selectedLesson, setSelectedLesson] = useState('');
-  const [paymentProof, setPaymentProof] = useState(null);
-  const [paymentMethod, setPaymentMethod] = useState('');
-  const [paymentMethodError, setPaymentMethodError] = useState('');
-  const [receiptError, setReceiptError] = useState('');
   const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  // annualFeeStatus: { status: 'loading' | 'unpaid' | 'pending' | 'verified' | 'rejected', paymentId: string|null }
   const [annualFeeStatus, setAnnualFeeStatus] = useState({ status: 'loading', paymentId: null });
   const [userData, setUserData] = useState(null);
+  const [quote, setQuote] = useState(null);
+  const [showAverageGate, setShowAverageGate] = useState(false);
+  // Owner-configured annual fee amount (falls back to the historical default).
+  const [configuredFee, setConfiguredFee] = useState(ANNUAL_FEE_DZD);
 
-  // Support lessons are always 1-month subscriptions — no user choice needed.
-  const DURATION_MONTHS = 1;
+  useEffect(() => {
+    let mounted = true;
+    getAnnualFeeAmount()
+      .then((amt) => { if (mounted && Number.isFinite(Number(amt))) setConfiguredFee(Number(amt)); })
+      .catch(() => {});
+    return () => { mounted = false; };
+  }, []);
 
-  // Estimated subscription window (official dates are set by admin on verification).
-  const now = new Date();
-  const estimatedStart = now;
-  const estimatedEnd   = addMonthsKeepingDay(now, DURATION_MONTHS);
+  const classification = classificationFromProfile(userData);
 
-  const stateLesson     = location.state?.lesson;
+  // Support is a CALENDAR-month subscription: the cycle always covers the full
+  // current month (1st → last day) and resets on the 1st — never "today + 30d".
+  const now               = new Date();
+  const cycleStart        = startOfMonth(now);
+  const cycleEnd          = endOfMonth(now);
+  const academicYearLabel = getAcademicYearLabel(now);
+
+  const stateLesson       = location.state?.lesson;
   const lessonIdFromState = stateLesson?.id;
   const effectiveLessonId = selectedLesson || lessonIdFromState;
 
@@ -81,10 +83,7 @@ const SupportLessonRegistrationForm = () => {
     [lessonOptions, selectedLesson, stateLesson]
   );
 
-  const userStudyYear = useMemo(() => {
-    const raw = userData?.studyYear || '';
-    return String(raw || '').trim() || null;
-  }, [userData]);
+  const userStudyYear = useMemo(() => String(userData?.studyYear || '').trim() || null, [userData]);
 
   const selectedLessonStudyYear = useMemo(() => {
     const raw = selectedLessonData?.studyYear || selectedLessonData?.year || selectedLessonData?.grade || '';
@@ -95,25 +94,38 @@ const SupportLessonRegistrationForm = () => {
     userStudyYear && selectedLessonStudyYear && userStudyYear !== selectedLessonStudyYear
   );
 
-  const pricePerMonth = selectedLessonData?.priceMonthly ?? selectedLessonData?.price ?? null;
+  const pricePerMonth     = selectedLessonData?.priceMonthly ?? selectedLessonData?.price ?? null;
+  const monthlyPriceNum   = parseNumericPrice(pricePerMonth) ?? 0;
+  const needsAnnualFee    = annualFeeStatus.status === 'unpaid';
+  const annualFeePending  = annualFeeStatus.status === 'pending';
+  const annualFeeAmount   = needsAnnualFee ? configuredFee : 0;
 
-  // Annual-fee case (academic-year aware): CASE 2 = first support reg of the year.
-  const monthlyPriceNum  = parseNumericPrice(pricePerMonth) ?? 0;
-  const needsAnnualFee   = annualFeeStatus.status === 'unpaid';   // bundle annual + first month
-  const annualFeePending = annualFeeStatus.status === 'pending';  // first reg already under review
-  const annualFeeAmount  = needsAnnualFee ? ANNUAL_FEE_DZD : 0;
-  const bundledTotal     = monthlyPriceNum + annualFeeAmount;
+  const proratedMonthly = quote && Number.isFinite(Number(quote.amountDue))
+    ? Number(quote.amountDue)
+    : monthlyPriceNum;
+
+  const isProrated = Boolean(
+    quote && quote.totalSessions != null && quote.remainingSessions != null
+    && quote.remainingSessions < quote.totalSessions
+  );
+
+  const bundledTotal = proratedMonthly + annualFeeAmount;
+  const chargeAmount = selectedLessonData ? bundledTotal : 0;
 
   const { loading: checkingExisting, registration: existingRegistration } =
     useSupportLessonRegistrationStatus(selectedBranchId, user?.uid, effectiveLessonId || '');
 
   const registrationBlocked = isRegistrationBlocking(existingRegistration);
-  const isRenewal = isRenewalCandidate(existingRegistration);
+  const isRenewal           = isRenewalCandidate(existingRegistration);
 
   useEffect(() => {
     if (selectedBranchId && user) loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBranchId, user]);
+
+  useEffect(() => {
+    if (!loading && user && userData && classification == null) setShowAverageGate(true);
+  }, [loading, user, userData, classification]);
 
   const loadData = async () => {
     try {
@@ -124,8 +136,17 @@ const SupportLessonRegistrationForm = () => {
       ]);
       setAnnualFeeStatus(feeStatus);
       if (userSnap.exists()) setUserData(userSnap.data());
-      // The class to register into is passed via navigation state from YearPage.
       if (location.state?.lesson?.id) setSelectedLesson(location.state.lesson.id);
+
+      const lessonIdForQuote = location.state?.lesson?.id || selectedLesson;
+      if (lessonIdForQuote) {
+        try {
+          const params = new URLSearchParams({ branchId: selectedBranchId, classId: lessonIdForQuote });
+          setQuote(await apiCall(`/api/support-sessions/quote?${params.toString()}`));
+        } catch {
+          setQuote(null);
+        }
+      }
     } catch (err) {
       console.error('Error loading data:', err);
       setError('فشل في تحميل البيانات');
@@ -134,159 +155,61 @@ const SupportLessonRegistrationForm = () => {
     }
   };
 
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError('');
-    setSuccess('');
-    setPaymentMethodError('');
-    setReceiptError('');
-
-    if (!selectedLesson) {
-      setError('يرجى اختيار الدرس المراد الاشتراك فيه');
-      return;
-    }
-    if (isSelectedLessonMismatched) {
-      setError('غير متاح لهذا المستوى (سنتك الدراسية لا تطابق سنة الدرس).');
-      return;
-    }
-    if (!paymentMethod) {
-      setPaymentMethodError('يرجى اختيار طريقة الدفع');
-      return;
-    }
-    if (!paymentProof) {
-      setReceiptError('يرجى رفع صورة إيصال الدفع');
-      return;
-    }
-    if (registrationBlocked) {
-      setError('لديك اشتراك نشط لهذا الدرس. لا يمكن إرسال طلب جديد حالياً.');
-      return;
-    }
-
-    const lesson      = selectedLessonData;
-    const studyYearId = lesson?.studyYear || lesson?.year || lesson?.grade || null;
-    const studyLevelId = lesson?.level || null;
-
-    if (!studyYearId) {
-      setError('يجب تحديد السنة الدراسية لهذا الدرس قبل التسجيل. يرجى التواصل مع الإدارة.');
-      return;
-    }
-
-    try {
-      setSubmitting(true);
-
-      // Upload payment proof
-      let paymentProofURL = '';
-      if (paymentProof) {
-        if (!supabase) throw new Error('خدمة رفع الملفات غير متاحة حالياً. يرجى إبلاغ الإدارة.');
-
-        // Optimize (resize → WebP → compress) before upload. Falls back to original.
-        const optimizedProof = await optimizeImage(paymentProof);
-
-        // Convert to ArrayBuffer to avoid Chrome's ERR_HTTP2_PROTOCOL_ERROR which
-        // occurs when the browser tries to stream a File/Blob body over HTTP/2.
-        const proofBuffer = await optimizedProof.arrayBuffer();
-        const proofContentType = optimizedProof.type || 'image/webp';
-
-        const filePath = `support-lessons/${user.uid}/${Date.now()}.webp`;
-        const { error: uploadError } = await supabase.storage
-          .from('support-lesson-payments')
-          .upload(filePath, proofBuffer, {
-            contentType: proofContentType,
-            upsert: false,
-            cacheControl: '3600',
-          });
-
-        if (uploadError) {
-          console.error('Supabase upload error:', uploadError);
-          throw new Error('تعذر رفع صورة الإيصال. يرجى المحاولة مرة أخرى.');
-        }
-
-        const { data: publicUrlData } = supabase.storage
-          .from('support-lesson-payments')
-          .getPublicUrl(filePath);
-
-        if (!publicUrlData?.publicUrl) throw new Error('تعذر الحصول على رابط لصورة الإيصال.');
-        paymentProofURL = publicUrlData.publicUrl;
-      }
-
-      const submissionDate = new Date();
-
-      // Route through the Express backend — the Firestore rule explicitly denies
-      // all client writes to supportLessonRegistrations (allow create,update,delete: if false).
-      // The backend validates annual fee, study year, and duplicates server-side.
-      await apiCall('/api/registrations/support', {
-        method: 'POST',
-        body: JSON.stringify({
-          branchId:        selectedBranchId,
-          lessonId:        lesson?.id || selectedLesson,
-          studyYearLabel:  lesson?.studyYearLabel || lesson?.yearLabel || '',
-          durationInMonths: DURATION_MONTHS,
-          startDate:       submissionDate.toISOString(),
-          endDate:         addMonthsKeepingDay(submissionDate, DURATION_MONTHS).toISOString(),
-          academicYear:    getAcademicYearLabel(submissionDate),
-          paymentProofUrl: paymentProofURL,
-          paymentMethod:   paymentMethod,
-          monthlyPrice:    monthlyPriceNum,
-          totalPrice:      monthlyPriceNum,
-          // Annual fee bundling — only on the first support registration of the year.
-          includesAnnualFee: needsAnnualFee,
-          annualFeeAmount:   annualFeeAmount,
-          totalAmount:       bundledTotal,
-          source:          'manual',
-        }),
-      });
-
-      setSuccess('تم إرسال طلب الاشتراك بنجاح! سيتم مراجعته من قبل الإدارة.');
-      setPaymentProof(null);
-      setPaymentMethod('');
-      setError('');
-      const fileInput = document.getElementById('payment-proof');
-      if (fileInput) fileInput.value = '';
-      // Refresh annual fee status so the form reflects the new 'pending' state
-      // and prevents a stale 'unpaid' status from triggering a duplicate bundle.
-      loadData();
-    } catch (err) {
-      console.error('Error submitting registration:', err);
-      if (err?.code === 'class-full') {
-        setError('المجموعة مكتملة. لم يعد بالإمكان التسجيل في هذه المجموعة.');
-      } else if (err?.code === 'yearly-fee-required') {
-        setError('الرسوم السنوية مطلوبة للتسجيل في دروس الدعم.');
-      } else if (err?.code === 'duplicate-annual-fee-bundle') {
-        setError('الرسوم السنوية قيد المراجعة بالفعل. لا يمكن إرسال طلب آخر يتضمنها في انتظار اعتماد الطلب الأول.');
-        loadData(); // refresh so the UI switches to the 'pending' warning state
-      } else if (err?.code === 'study-year-mismatch') {
-        setError('غير متاح لهذا المستوى (سنتك الدراسية لا تطابق سنة المجموعة).');
-      } else {
-        setError(err.message || 'حدث خطأ أثناء إرسال الطلب. حاول مرة أخرى.');
-      }
-    } finally {
-      setSubmitting(false);
-    }
+  // Build serviceData for the payment order. All data the backend needs to create
+  // the supportLessonRegistration document on webhook confirmation.
+  const buildServiceData = () => {
+    const lesson = selectedLessonData;
+    if (!lesson) return null;
+    return {
+      studentName:  userData?.name || '',
+      school:       userData?.school || DEFAULT_SCHOOL,
+      classId:      lesson.id,
+      subjectId:    lesson.subjectId    || null,
+      subjectName:  lesson.subjectName  || lesson.name || '',
+      lessonName:   lesson.lessonName   || lesson.subjectName || lesson.name || '',
+      groupName:    lesson.groupName    || '',
+      teacherName:  lesson.teacherName  || lesson.teacher || '',
+      schedules:    lesson.schedules    || [],
+      studyYear:    userStudyYear       || '',
+      groupType:    lesson.groupType    || 'normal_support',
+      monthlyPrice: monthlyPriceNum,
+      proratedAmount: proratedMonthly,
+      totalPrice:   bundledTotal,
+      includesAnnualFee: needsAnnualFee,
+      annualFeeAmount:   annualFeeAmount,
+      distinguishedSubjectsAverage: userData?.distinguishedSubjectsAverage ?? null,
+      startDate:    now.toISOString(),
+      academicYear: getAcademicYearLabel(now),
+      serviceName:  lesson.subjectName || lesson.name || 'درس الدعم',
+    };
   };
 
-  if (loading) {
-    return (
-      <div className="p-6">
-        <LoadingState />
-      </div>
-    );
-  }
+  if (loading) return <div className="p-6"><LoadingState /></div>;
 
   return (
     <div className="p-6" dir="rtl">
+      {showAverageGate && (
+        <AverageGateModal
+          branchId={selectedBranchId}
+          onClose={() => setShowAverageGate(false)}
+          onClassified={({ average, classification: c }) => {
+            setUserData((prev) => ({ ...(prev || {}), distinguishedSubjectsAverage: average, supportClassification: c }));
+            setShowAverageGate(false);
+          }}
+        />
+      )}
+
       <div className="max-w-2xl mx-auto">
         <div className="mb-6">
           <h1 className="text-3xl font-bold text-gray-900 mb-2">التسجيل في درس الدعم</h1>
-          <p className="text-gray-600">راجع تفاصيل المجموعة وأرفق إيصال الدفع.</p>
+          <p className="text-gray-600">راجع تفاصيل المجموعة وأتمّ الدفع.</p>
         </div>
 
         {isRenewal && (
-          <Alert variant="info" className="mb-6">اشتراكك السابق منتهٍ. يمكنك تجديده بإرسال طلب جديد أدناه.</Alert>
+          <Alert variant="info" className="mb-6">اشتراكك السابق منتهٍ. يمكنك تجديده بالدفع أدناه.</Alert>
         )}
 
-        {error && <Alert variant="danger" className="mb-6">{error}</Alert>}
-        {success && <Alert variant="success" className="mb-6">{success}</Alert>}
+        {error   && <Alert variant="danger"  className="mb-6">{error}</Alert>}
 
         {!selectedLessonData && lessons.length === 0 ? (
           <div className="bg-white rounded-lg shadow-md p-12 text-center">
@@ -295,7 +218,7 @@ const SupportLessonRegistrationForm = () => {
             <p className="text-gray-600">يرجى التحقق لاحقاً</p>
           </div>
         ) : (
-          <form onSubmit={handleSubmit} className="bg-white rounded-lg shadow-md p-6 space-y-6">
+          <div className="bg-white rounded-lg shadow-md p-6 space-y-6">
             {/* Lesson selection */}
             <div>
               <Label required>درس الدعم</Label>
@@ -315,21 +238,15 @@ const SupportLessonRegistrationForm = () => {
                       <span className="text-gray-500">المواعيد:</span>{' '}
                       {selectedLessonData.schedules
                         .map((s) => `${s.day || ''} ${s.start || ''}${s.end ? `-${s.end}` : ''}`.trim())
-                        .filter(Boolean)
-                        .join('، ')}
+                        .filter(Boolean).join('، ')}
                     </p>
                   )}
                   {isSelectedLessonMismatched && (
                     <p className="text-danger font-medium">غير متاح لهذا المستوى</p>
                   )}
-                  <p className="text-gray-500 text-xs">محدد تلقائياً من صفحة دروس الدعم.</p>
                 </div>
               ) : (
-                <Select
-                  value={selectedLesson}
-                  onChange={(e) => setSelectedLesson(e.target.value)}
-                  required
-                >
+                <Select value={selectedLesson} onChange={(e) => setSelectedLesson(e.target.value)} required>
                   <option value="">-- اختر درس --</option>
                   {lessonOptions.map((lesson) => {
                     const lsy = String(lesson?.studyYear || lesson?.year || lesson?.grade || '').trim() || null;
@@ -345,35 +262,31 @@ const SupportLessonRegistrationForm = () => {
               )}
             </div>
 
-            {/* Subscription info (read-only) */}
+            {/* Subscription info */}
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-2">
               <p className="text-sm font-semibold text-blue-900">تفاصيل الاشتراك</p>
               <div className="grid grid-cols-2 gap-3 text-sm text-blue-800">
-                <div>
-                  <span className="text-blue-600">المدة:</span>
-                  <span className="font-semibold ms-1">شهر واحد</span>
-                </div>
-                <div>
-                  <span className="text-blue-600">السنة الدراسية:</span>
-                  <span className="font-semibold ms-1">
-                    {userStudyYear || '—'}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-blue-600">تاريخ البداية المتوقع:</span>
-                  <span className="font-semibold ms-1">{formatDate(estimatedStart)}</span>
-                </div>
-                <div>
-                  <span className="text-blue-600">تاريخ الانتهاء المتوقع:</span>
-                  <span className="font-semibold ms-1">{formatDate(estimatedEnd)}</span>
-                </div>
+                <div><span className="text-blue-600">المدة:</span><span className="font-semibold ms-1">شهر واحد</span></div>
+                <div><span className="text-blue-600">السنة الدراسية:</span><span className="font-semibold ms-1">{academicYearLabel}</span></div>
+                <div><span className="text-blue-600">بداية الشهر:</span><span className="font-semibold ms-1">{formatDate(cycleStart)}</span></div>
+                <div><span className="text-blue-600">نهاية الشهر:</span><span className="font-semibold ms-1">{formatDate(cycleEnd)}</span></div>
               </div>
-              <p className="text-xs text-blue-600 pt-1">
-                التواريخ الفعلية تُحدَّد عند تأكيد الإدارة للدفع.
+              <p className="border-t border-blue-200 pt-2 text-xs text-blue-700">
+                الاشتراك يغطّي الشهر الحالي كاملاً (من أول الشهر إلى آخره). عند الانضمام في منتصف الشهر تدفع فقط مقابل الحصص المتبقية.
               </p>
             </div>
 
-            {/* Payment breakdown (CASE 2 bundles annual fee + first month) */}
+            {/* Proration note */}
+            {selectedLessonData && isProrated && (
+              <Alert variant="info" className="text-xs">
+                انضمامك في منتصف الشهر: تدفع فقط مقابل الحصص المتبقية.{' '}
+                <strong>{quote.remainingSessions}</strong> من {quote.totalSessions} حصة ×{' '}
+                {formatPriceText(quote.pricePerSession)} = <strong>{formatPriceText(proratedMonthly)}</strong>
+                {' '}(بدلاً من {formatPriceText(monthlyPriceNum)} للشهر الكامل).
+              </Alert>
+            )}
+
+            {/* Payment breakdown */}
             {selectedLessonData && (needsAnnualFee ? (
               <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
                 <p className="mb-2 flex items-center gap-2 text-sm font-semibold text-gray-900">
@@ -385,8 +298,8 @@ const SupportLessonRegistrationForm = () => {
                     <span className="font-semibold">{formatPriceText(annualFeeAmount)}</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span>اشتراك الشهر الأول</span>
-                    <span className="font-semibold">{formatPriceText(monthlyPriceNum)}</span>
+                    <span>{isProrated ? 'اشتراك الشهر (حسب الحصص المتبقية)' : 'اشتراك الشهر الأول'}</span>
+                    <span className="font-semibold">{formatPriceText(proratedMonthly)}</span>
                   </div>
                   <div className="mt-1.5 flex items-center justify-between border-t border-gray-200 pt-1.5">
                     <span className="font-bold text-gray-900">الإجمالي</span>
@@ -394,48 +307,60 @@ const SupportLessonRegistrationForm = () => {
                   </div>
                 </div>
                 <p className="mt-3 rounded-lg border border-blue-200 bg-blue-50 p-2.5 text-xs text-blue-800">
-                  هذا أول تسجيل لك في دروس الدعم هذا العام. تُدفع الرسوم السنوية مرة واحدة فقط في السنة الدراسية، وبعدها تكفيك المدفوعات الشهرية. أرفق إيصالاً واحداً يشمل المبلغ الإجمالي.
+                  هذا أول تسجيل لك في دروس الدعم هذا العام. تُدفع الرسوم السنوية مرة واحدة فقط في السنة الدراسية.
                 </p>
               </div>
             ) : (
               <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 flex items-center gap-3">
                 <DollarSign className="w-5 h-5 text-gray-500 shrink-0" />
                 <div className="text-sm">
-                  <p className="text-gray-600">السعر الشهري</p>
-                  <p className="font-bold text-gray-900 text-base">{formatPriceText(monthlyPriceNum)}</p>
+                  <p className="text-gray-600">{isProrated ? 'المبلغ المستحق هذا الشهر' : 'السعر الشهري'}</p>
+                  <p className="font-bold text-gray-900 text-base">{formatPriceText(proratedMonthly)}</p>
                 </div>
               </div>
             ))}
 
-            {/* Payment Method & Receipt */}
-            <PaymentInstructions
-              selectedMethod={paymentMethod}
-              onMethodChange={(m) => { setPaymentMethod(m); setPaymentMethodError(''); }}
-              receiptFile={paymentProof}
-              onReceiptChange={(f) => { setPaymentProof(f); setReceiptError(''); }}
-              methodError={paymentMethodError}
-              receiptError={receiptError}
-              disabled={submitting}
-              inputId="support-lesson-payment-proof"
-            />
-
-            {/* Fee status note */}
+            {/* Annual fee status notes */}
             {annualFeeStatus.status === 'verified' && (
-              <Alert variant="success">الرسوم السنوية مدفوعة لهذا العام ✓ — هذا الطلب للدفع الشهري فقط.</Alert>
+              <Alert variant="success">الرسوم السنوية مدفوعة لهذا العام — هذا الطلب للدفع الشهري فقط.</Alert>
             )}
             {annualFeePending && (
-              <Alert variant="warning">رسومك السنوية قيد المراجعة. يمكنك إرسال هذا الطلب الآن، وسيتم تفعيله بعد اعتماد الرسوم السنوية.</Alert>
+              <Alert variant="warning">رسومك السنوية مدفوعة وقيد التأكيد.</Alert>
             )}
 
-            {/* Submit */}
-            <Button type="submit" fullWidth disabled={submitting || registrationBlocked || checkingExisting || !paymentMethod || !paymentProof}>
-              {submitting
-                ? 'جاري الإرسال...'
-                : isRenewal
-                ? 'تجديد الاشتراك'
-                : 'إرسال طلب التسجيل'}
-            </Button>
-          </form>
+            {/* Classification gate note */}
+            {classification == null && (
+              <Alert variant="warning">
+                يجب إدخال معدل المواد المميزة قبل المتابعة.
+                <button
+                  type="button"
+                  onClick={() => setShowAverageGate(true)}
+                  className="underline font-semibold mr-2"
+                >
+                  إدخال المعدل
+                </button>
+              </Alert>
+            )}
+
+            {/* Chargily Pay Button */}
+            <ChargilyPayButton
+              amount={chargeAmount}
+              branchId={selectedBranchId}
+              serviceType="support"
+              serviceData={buildServiceData() || {}}
+              disabled={
+                !selectedLessonData ||
+                isSelectedLessonMismatched ||
+                registrationBlocked ||
+                checkingExisting ||
+                classification == null
+              }
+            />
+
+            {registrationBlocked && (
+              <Alert variant="info">لديك اشتراك نشط لهذا الدرس. لا يمكن إرسال طلب جديد حالياً.</Alert>
+            )}
+          </div>
         )}
       </div>
     </div>

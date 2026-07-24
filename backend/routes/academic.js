@@ -15,6 +15,8 @@ const {
   verifyTraining,
   adminAddLanguage,
   adminAddTraining,
+  deleteLanguageRegistration,
+  deleteTrainingRegistration,
 } = require('../controllers/academicController');
 
 // Classes — transactional teacher/classroom conflict check.
@@ -27,5 +29,10 @@ router.post('/registrations/language/verify',     verifyToken, requireAdmin, ver
 router.post('/registrations/training/verify',     verifyToken, requireAdmin, verifyTraining);
 router.post('/registrations/language/admin-add',  verifyToken, requireAdmin, adminAddLanguage);
 router.post('/registrations/training/admin-add',  verifyToken, requireAdmin, adminAddTraining);
+
+// Removal — must be server-side: only the Admin SDK may append the ledger
+// reversal that makes the owner's state-based alerts reflect the deletion.
+router.delete('/registrations/language/:id', verifyToken, requireAdmin, deleteLanguageRegistration);
+router.delete('/registrations/training/:id', verifyToken, requireAdmin, deleteTrainingRegistration);
 
 module.exports = router;

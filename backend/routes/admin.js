@@ -3,22 +3,26 @@ const router  = express.Router();
 const { verifyToken, requireAdmin } = require('../middleware/auth');
 const {
   createStudent,
-  verifyAnnualPayment,
-  rejectAnnualPayment,
   recordAnnualFee,
   deleteStudent,
   setStudentDistinguishedAverage,
 } = require('../controllers/adminController');
+const { getOverview, resolveStuckOrder } = require('../controllers/adminOverviewController');
+
+// GET /api/admin/overview
+// One round-trip snapshot of what needs the branch admin today: the document
+// verification queue, paid-but-unseated payment orders, un-triaged training
+// requests, expiring support subscriptions, captured revenue, catalog pressure.
+router.get('/overview', verifyToken, requireAdmin, getOverview);
+
+// POST /api/admin/payment-orders/:orderId/resolve
+// Close the operational alert on a paid-but-unseated order after handling it
+// out-of-band. Never edits money or the ledger — only clears needsAttention and
+// records who closed it, with an audit entry.
+router.post('/payment-orders/:orderId/resolve', verifyToken, requireAdmin, resolveStuckOrder);
 
 // POST /api/admin/create-student
 router.post('/create-student', verifyToken, requireAdmin, createStudent);
-
-// POST /api/admin/verify-annual-payment
-// Atomically verifies payment + branch registrations + supportLessonRegistrations + user profile.
-router.post('/verify-annual-payment', verifyToken, requireAdmin, verifyAnnualPayment);
-
-// POST /api/admin/reject-annual-payment
-router.post('/reject-annual-payment', verifyToken, requireAdmin, rejectAnnualPayment);
 
 // POST /api/admin/record-annual-fee
 // Records a verified annual fee for ANY student (standalone financial record).

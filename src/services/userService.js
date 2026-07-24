@@ -8,6 +8,7 @@ import { collection, doc, getDoc, getDocs, setDoc, updateDoc, query, where, orde
 import { supabase } from '../supabase';
 import { recordUserActivity, USER_STATUS } from './userLifecycleService';
 import { validateImageFile, optimizeImage } from '../utils/imageOptimizer';
+import { normalizeSchool } from '../utils/personData';
 
 // ==================== Supabase Storage Functions ====================
 
@@ -15,11 +16,10 @@ import { validateImageFile, optimizeImage } from '../utils/imageOptimizer';
  * Upload a file to Supabase Storage
  * @param {File} file - The file to upload
  * @param {string} userId - User ID
- * @param {string} fileType - Type of file: 'userPhoto', 'idPhoto', or 'annualPayment'
- * @param {string} paymentId - Optional: Payment ID for annual payment receipts
+ * @param {string} fileType - Type of file: 'userPhoto' or 'idPhoto'
  * @returns {Promise<{publicUrl: string, path: string}>}
  */
-export const uploadToSupabase = async (file, userId, fileType, paymentId = null) => {
+export const uploadToSupabase = async (file, userId, fileType) => {
   if (!supabase) {
     const errorMsg = 'Supabase not configured. Please check your environment variables.';
     console.error('❌', errorMsg);
@@ -57,13 +57,7 @@ export const uploadToSupabase = async (file, userId, fileType, paymentId = null)
   try {
     let filePath;
 
-    if (fileType === 'annualPayment') {
-      // Annual payment receipt: annual-payments/{userId}/{paymentId}.webp
-      if (!paymentId) {
-        paymentId = `payment-${Date.now()}`;
-      }
-      filePath = `annual-payments/${userId}/${paymentId}.webp`;
-    } else if (fileType === 'userPhoto') {
+    if (fileType === 'userPhoto') {
       filePath = `userPhotos/${userId}/userPhoto.webp`;
     } else {
       filePath = `${userId}/idPhoto.webp`;
@@ -101,69 +95,10 @@ export const uploadToSupabase = async (file, userId, fileType, paymentId = null)
     console.error(`❌ Upload error in uploadToSupabase:`, {
       fileType,
       userId,
-      paymentId,
       error: error.message
     });
     throw error;
   }
-};
-
-/**
- * Upload support lesson payment proof to Supabase Storage
- * Bucket: support-lesson-payments
- * Path: support-lessons/{userId}/{timestamp}.{ext}
- *
- * @param {File} file
- * @param {string} userId
- * @returns {Promise<{publicUrl: string, path: string}>}
- */
-export const uploadSupportLessonPaymentProof = async (file, userId) => {
-  if (!supabase) {
-    const errorMsg = 'Supabase not configured. Please check your environment variables.';
-    console.error('❌', errorMsg);
-    throw new Error(errorMsg);
-  }
-
-  if (!file) {
-    throw new Error('No file provided for support lesson payment proof upload');
-  }
-
-  if (!userId) {
-    throw new Error('User ID is required for support lesson payment proof upload');
-  }
-
-  const fileExt = file.name.split('.').pop() || 'jpg';
-  const timestamp = Date.now();
-  const filePath = `support-lessons/${userId}/${timestamp}.${fileExt}`;
-
-  console.log('🔵 Uploading support lesson payment proof to Supabase:', filePath);
-
-  const { error: uploadError } = await supabase.storage
-    .from('support-lesson-payments')
-    .upload(filePath, file, {
-      upsert: false,
-      cacheControl: '3600'
-    });
-
-  if (uploadError) {
-    console.error('❌ Upload failed for support lesson payment proof:', uploadError);
-    throw new Error(`Failed to upload support lesson payment proof: ${uploadError.message}`);
-  }
-
-  const { data: urlData } = supabase.storage
-    .from('support-lesson-payments')
-    .getPublicUrl(filePath);
-
-  if (!urlData?.publicUrl) {
-    throw new Error('Failed to get public URL for support lesson payment proof');
-  }
-
-  console.log('✅ Support lesson payment proof uploaded successfully:', urlData.publicUrl);
-
-  return {
-    publicUrl: urlData.publicUrl,
-    path: filePath
-  };
 };
 
 // ==================== User Registration ====================
@@ -227,6 +162,8 @@ export const saveUser = async (userData) => {
       birthDate: userData.birthDate || null,
       birthPlace: userData.birthPlace || null,
       address: userData.address || null,
+      // Educational institution is REQUIRED — never empty/null. Defaults to «حر».
+      school: normalizeSchool(userData.school),
       phoneNumber: userData.phoneNumber || userData.phone || null,
       phone: userData.phoneNumber || userData.phone || null,
       role: userData.role || 'student',

@@ -146,6 +146,42 @@ const getSummary = async (req, res, next) => {
 
     const pct = (cur, base) => (base > 0 ? Math.round(((cur - base) / base) * 1000) / 10 : null);
 
+    // ── Financial forecast (support-subscription basis) ──────────────────────────
+    // Anticipates where the month will land instead of only reporting the past.
+    // Non-arbitrary: a linear run-rate of what has actually been collected so far
+    // this month, scaled to the full month. Target = expected recurring support
+    // revenue (Σ active support enrollment × price) — the money we *should* collect.
+    // Completed (past) months are already final, so the projection equals the actual;
+    // future months carry no projection. Same basis as the expected/actual cards, so
+    // "collection %" is honest and can't exceed ~100% by mixing service types.
+    const [fy, fm] = key.split('-').map(Number);
+    const daysInMonth = new Date(fy, fm, 0).getDate();
+    const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const isCurrentMonth = key === currentMonthKey;
+    const isPastMonth = key < currentMonthKey;
+    const isFutureMonth = !isCurrentMonth && !isPastMonth;
+    const daysElapsed = isCurrentMonth ? now.getDate() : (isPastMonth ? daysInMonth : 0);
+
+    // The target-relative verdict is meaningful ONLY for the current month: the
+    // target (expectedRevenue) is a snapshot of *today's* active enrollment, not
+    // the selected month's, so applying it to a completed/future month would mix
+    // a live target with a historical actual. For past months we therefore report
+    // the final collected figure only (no target/collection%/status); future
+    // months carry nothing yet.
+    const forecastApplicable = isCurrentMonth;
+    const forecastProjected = isCurrentMonth
+      ? (daysElapsed > 0 ? Math.round((actualSupport / daysElapsed) * daysInMonth) : 0)
+      : (isPastMonth ? actualSupport : null);
+    const forecastTarget = forecastApplicable ? expectedRevenue : null;
+    const collectionPct = forecastApplicable && expectedRevenue > 0
+      ? Math.round((actualSupport / expectedRevenue) * 100)
+      : null;
+    let forecastStatus = null;
+    if (forecastApplicable && expectedRevenue > 0) {
+      const ratio = forecastProjected / expectedRevenue;
+      forecastStatus = ratio >= 1.05 ? 'ahead' : ratio < 0.9 ? 'behind' : 'on_track';
+    }
+
     return res.json({
       month: key,
       cards: {
@@ -163,6 +199,20 @@ const getSummary = async (req, res, next) => {
       trends: {
         revenue:     { current: totalRevenue, previous: prevRevenue, changePct: pct(totalRevenue, prevRevenue) },
         newStudents: { current: newStudents, previous: prevNew, changePct: pct(newStudents, prevNew) },
+      },
+      forecast: {
+        basis: 'support',            // client labels this clearly (اشتراكات الدعم)
+        applicable: forecastApplicable, // target-relative verdict valid only for the current month
+        current: actualSupport,      // collected so far this month (support)
+        projected: forecastProjected,// run-rate projection to month end (final for past months)
+        target: forecastTarget,      // expected recurring support revenue (null off current month)
+        collectionPct,               // current / target (%) — null off current month
+        status: forecastStatus,      // 'ahead' | 'on_track' | 'behind' | null
+        isCurrentMonth,
+        isPastMonth,
+        isFutureMonth,
+        daysElapsed,
+        daysInMonth,
       },
     });
   } catch (err) {

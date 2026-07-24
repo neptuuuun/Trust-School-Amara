@@ -17,7 +17,7 @@ import { motion } from 'framer-motion';
 import {
   Plus, Edit2, Trash2, AlertCircle, Search, Loader2,
   ChevronDown, ChevronUp, BookOpen, Users, Clock, GraduationCap,
-  UserCog, Eye, EyeOff,
+  UserCog, Eye, EyeOff, History,
 } from 'lucide-react';
 import { useBranch } from '../../contexts/BranchContext';
 import { useToast } from './ToastNotifications';
@@ -26,12 +26,15 @@ import AdminConfirmDialog from './AdminConfirmDialog';
 import SubjectFormModal from './SubjectFormModal';
 import ClassFormModal from './ClassFormModal';
 import TeacherManagerModal from './TeacherManagerModal';
+import EntityHistoryPanel from './EntityHistoryPanel';
 import {
   streamSubjects, streamClasses, deleteSubject, deleteClass, updateClass,
 } from '../../services/firestoreService';
+import { groupTypeBadge, normalizeGroupType } from '../../utils/supportClassification';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { LoadingState } from '../../components/ui/feedback';
+import OwnershipBadge from '../../components/ui/OwnershipBadge';
 
 // ── Per-service labels ──────────────────────────────────────────────────────
 const SERVICE_CONFIG = {
@@ -85,6 +88,7 @@ const SubjectClassManager = ({ serviceType, scope = {}, headerTrail }) => {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [collapsed, setCollapsed] = useState({}); // subjectId -> true when collapsed
+  const [groupTypeFilter, setGroupTypeFilter] = useState('all'); // support only: all|normal_support|low_level_support
 
   // Modal state
   const [subjectModal, setSubjectModal] = useState(undefined); // undefined=closed, null=add, object=edit
@@ -92,6 +96,10 @@ const SubjectClassManager = ({ serviceType, scope = {}, headerTrail }) => {
   const [deleteState, setDeleteState] = useState({ open: false, kind: null, id: null, name: '' });
   const [teacherModalOpen, setTeacherModalOpen] = useState(false);
   const [busyClassId, setBusyClassId] = useState(null);
+  // { targetType, targetId, title } for the record-level "View History" panel.
+  const [historyTarget, setHistoryTarget] = useState(null);
+
+  const isSupport = serviceType === 'support';
 
   // ── Streams (branch-scoped) ────────────────────────────────────────────────
   useEffect(() => {
@@ -117,6 +125,16 @@ const SubjectClassManager = ({ serviceType, scope = {}, headerTrail }) => {
     classes.forEach((c) => { (map[c.subjectId] = map[c.subjectId] || []).push(c); });
     return map;
   }, [classes]);
+
+  // Support-only group-type counts for the filter pills.
+  const groupTypeCounts = useMemo(() => {
+    const c = { all: classes.length, normal_support: 0, low_level_support: 0 };
+    classes.forEach((cl) => { c[normalizeGroupType(cl.groupType)] += 1; });
+    return c;
+  }, [classes]);
+
+  const matchesGroupType = (c) =>
+    !isSupport || groupTypeFilter === 'all' || normalizeGroupType(c.groupType) === groupTypeFilter;
 
   // ── Search filter ──────────────────────────────────────────────────────────
   const term = search.trim().toLowerCase();
@@ -225,6 +243,15 @@ const SubjectClassManager = ({ serviceType, scope = {}, headerTrail }) => {
       {teacherModalOpen && (
         <TeacherManagerModal branchId={selectedBranchId} onClose={() => setTeacherModalOpen(false)} />
       )}
+      {historyTarget && (
+        <EntityHistoryPanel
+          targetType={historyTarget.targetType}
+          targetId={historyTarget.targetId}
+          branchId={selectedBranchId}
+          title={historyTarget.title}
+          onClose={() => setHistoryTarget(null)}
+        />
+      )}
 
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -267,6 +294,30 @@ const SubjectClassManager = ({ serviceType, scope = {}, headerTrail }) => {
         />
       </div>
 
+      {/* Group-type filter — support only */}
+      {isSupport && (
+        <div className="flex flex-wrap gap-2">
+          {[
+            { value: 'all', label: 'كل المجموعات', count: groupTypeCounts.all },
+            { value: 'normal_support', label: '🟢 مجموعات عادية', count: groupTypeCounts.normal_support },
+            { value: 'low_level_support', label: '🟠 مجموعات دعم خاصة', count: groupTypeCounts.low_level_support },
+          ].map((f) => (
+            <button
+              key={f.value}
+              onClick={() => setGroupTypeFilter(f.value)}
+              className={`rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors ${
+                groupTypeFilter === f.value ? 'bg-primary text-white shadow-sm' : 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
+              }`}
+            >
+              {f.label}
+              <span className={`ms-1.5 rounded-full px-1.5 py-0.5 text-xs ${groupTypeFilter === f.value ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-600'}`}>
+                {f.count}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Content */}
       {loading ? (
         <LoadingState />
@@ -284,7 +335,9 @@ const SubjectClassManager = ({ serviceType, scope = {}, headerTrail }) => {
       ) : (
         <div className="space-y-3">
           {filtered.map((subject) => {
-            const subjectClasses = classesBySubject[subject.id] || [];
+            const subjectClasses = (classesBySubject[subject.id] || []).filter(matchesGroupType);
+            // When a group-type filter is active, hide subjects with no matching groups.
+            if (isSupport && groupTypeFilter !== 'all' && subjectClasses.length === 0) return null;
             const expanded = isExpanded(subject.id);
             return (
               <div key={subject.id} className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
@@ -312,6 +365,14 @@ const SubjectClassManager = ({ serviceType, scope = {}, headerTrail }) => {
                   </button>
                   <div className="flex shrink-0 gap-2">
                     <button
+                      onClick={() => setHistoryTarget({ targetType: 'subject', targetId: subject.id, title: subject.name || cfg.subjectWord })}
+                      title="عرض السجل"
+                      className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50"
+                    >
+                      <History className="h-3.5 w-3.5" />
+                      السجل
+                    </button>
+                    <button
                       onClick={() => setSubjectModal(subject)}
                       className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50"
                     >
@@ -327,6 +388,17 @@ const SubjectClassManager = ({ serviceType, scope = {}, headerTrail }) => {
                     </button>
                   </div>
                 </div>
+                {(subject.createdBy || subject.updatedBy) && (
+                  <div className="-mt-1 px-4 pb-2">
+                    <OwnershipBadge
+                      compact
+                      createdBy={subject.createdBy}
+                      createdAt={subject.createdAt}
+                      updatedBy={subject.updatedBy}
+                      updatedAt={subject.updatedAt}
+                    />
+                  </div>
+                )}
 
                 {/* Classes */}
                 {expanded && (
@@ -353,10 +425,22 @@ const SubjectClassManager = ({ serviceType, scope = {}, headerTrail }) => {
                                     <Users className="h-3 w-3" />
                                     {c.groupName || '—'}
                                   </span>
+                                  {isSupport && (() => {
+                                    const gt = groupTypeBadge(c.groupType);
+                                    return (
+                                      <span className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium ${gt.classes}`}>
+                                        <gt.Icon className={`h-2.5 w-2.5 shrink-0 ${gt.iconClass}`} fill="currentColor" aria-hidden="true" />
+                                        {gt.label}
+                                      </span>
+                                    );
+                                  })()}
                                   {c.level && (
                                     <span className="rounded-md bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">{c.level}</span>
                                   )}
-                                  {c.price > 0 && <span className="text-xs text-gray-500">· {c.price} دج</span>}
+                                  {c.price > 0 && <span className="text-xs text-gray-500">· {c.price} دج{isSupport ? '/شهر' : ''}</span>}
+                                  {isSupport && Array.isArray(c.schedules) && c.schedules.length > 0 && (
+                                    <span className="text-xs text-gray-500">· {c.schedules.length} حصة/أسبوع</span>
+                                  )}
                                   {cap > 0 && (
                                     <span className={`rounded-md px-2 py-0.5 text-xs font-medium ${isFull ? 'bg-danger-100 text-danger-700' : 'bg-success-50 text-success-700'}`}>
                                       {enrolled}/{cap} مقعد{isFull ? ' (مكتمل)' : ''}
@@ -375,8 +459,25 @@ const SubjectClassManager = ({ serviceType, scope = {}, headerTrail }) => {
                                     ? `${summary} — ${c.schedules.length} ${c.schedules.length === 1 ? 'موعد' : 'مواعيد'}`
                                     : 'لا مواعيد'}
                                 </p>
+                                {(c.createdBy || c.updatedBy) && (
+                                  <OwnershipBadge
+                                    className="mt-1.5"
+                                    createdBy={c.createdBy}
+                                    createdAt={c.createdAt}
+                                    updatedBy={c.updatedBy}
+                                    updatedAt={c.updatedAt}
+                                  />
+                                )}
                               </div>
                               <div className="flex shrink-0 gap-1.5">
+                                <button
+                                  onClick={() => setHistoryTarget({ targetType: 'class', targetId: c.id, title: `${c.teacherName || ''} — ${c.groupName || ''}` })}
+                                  aria-label="عرض السجل"
+                                  title="عرض السجل"
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50"
+                                >
+                                  <History className="h-3.5 w-3.5" />
+                                </button>
                                 <button
                                   onClick={() => toggleClassStatus(c)}
                                   disabled={busyClassId === c.id}

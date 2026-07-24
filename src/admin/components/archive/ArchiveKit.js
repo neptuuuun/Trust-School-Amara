@@ -2,14 +2,15 @@
  * ArchiveKit — shared presentational building blocks for the admin ARCHIVE pages
  * (المسجلون في اللغات / الدورات التكوينية / دروس الدعم / الرسوم السنوية).
  *
- * These pages are management/archive views of ALREADY-APPROVED records — NOT
- * verification queues. This kit guarantees they share one design system:
- * identical spacing, card style, typography, stat cards, skeleton loaders,
- * empty states, detail rows, and search/filter controls.
+ * These pages list records that are paid by construction — after the Chargily
+ * migration a registration document only exists once money was captured — so
+ * they are management views, never approval queues. This kit guarantees they
+ * share one design system: identical spacing, card style, typography, stat
+ * cards, skeleton loaders, empty states, detail rows, and search/filter controls.
  *
- * Visual language mirrors the (untouched) verification page so the whole admin
- * dashboard feels unified: rounded-2xl cards, gray-100/200 borders, shadow-sm,
- * the `primary` brand color, full RTL.
+ * The payments page (سجل المدفوعات) is built on the same primitives, so the
+ * whole admin dashboard reads as one product: rounded-2xl cards, gray-100/200
+ * borders, shadow-sm, the `primary` brand color, full RTL.
  */
 
 import React from 'react';

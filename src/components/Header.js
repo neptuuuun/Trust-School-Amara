@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import LogoImage from '../assets/images/logo.png';
 import { useAuth } from '../contexts/AuthContext';
@@ -22,6 +22,22 @@ const Header = () => {
     const closeMobileMenu = () => setMobileMenuOpen(false);
 
     const isActive = (to) => location.pathname === to;
+
+    // Single derivation of what the navbar should show. Mirrors the JSX below so
+    // there is exactly one place that maps auth state → UI.
+    //   'loading' → render nothing (auth not yet resolved)
+    //   'guest'   → دخول / تسجيل
+    //   'admin'   → لوحة الإدارة / خروج
+    //   'student' → الملف الشخصي / خروج
+    const navbarMode = loading ? 'loading' : !user ? 'guest' : role === 'admin' ? 'admin' : 'student';
+
+    // TEMPORARY DEBUG — remove once the auth/navbar bug is confirmed fixed.
+    useEffect(() => {
+        console.log('Auth Loading:', loading);
+        console.log('Firebase User:', user ? { uid: user.uid, email: user.email } : null);
+        console.log('User Role:', role);
+        console.log('Navbar Mode:', navbarMode);
+    }, [loading, user, role, navbarMode]);
 
     return (
         <header className="sticky top-0 z-50 w-full bg-primary shadow-primary">

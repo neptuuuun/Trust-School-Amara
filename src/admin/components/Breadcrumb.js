@@ -1,20 +1,23 @@
 import React from 'react';
 import { useBranch } from '../../contexts/BranchContext';
+import { branchLabel } from '../../utils/branches';
 
 /**
  * Breadcrumb
  *
- * Reads branchId directly from BranchContext (set from Firestore after auth).
  * Displays: Branch name / ...trail items
+ *
+ * NOTE: this used to destructure `branchId` from BranchContext, which never
+ * existed on the context value (it exposes `selectedBranchId`), so the first
+ * crumb silently rendered "—" on every page. It now reads the real key and
+ * resolves the Arabic branch name instead of showing the raw Firestore id.
  *
  * @param {string[]} trail - Additional path segments after the branch name
  */
 const Breadcrumb = ({ trail = [] }) => {
-  const { branchId } = useBranch();
+  const { selectedBranchId, branches } = useBranch();
 
-  // branchId is the raw Firestore ID; if you want the display name,
-  // pass it as the first trail item from the parent component instead.
-  const items = [branchId ?? '—', ...trail];
+  const items = [branchLabel(selectedBranchId, branches), ...trail];
 
   return (
     <nav className="text-sm text-gray-600 mb-2" dir="rtl" aria-label="Breadcrumb">

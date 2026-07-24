@@ -12,6 +12,7 @@ import {
   CalendarClock,
   Users,
   FileText,
+  History,
   X,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
@@ -27,7 +28,9 @@ import {
 } from '../../services/announcementService';
 import AnnouncementFormModal from '../components/AnnouncementFormModal';
 import AdminConfirmDialog from '../components/AdminConfirmDialog';
+import EntityHistoryPanel from '../components/EntityHistoryPanel';
 import Breadcrumb from '../components/Breadcrumb';
+import OwnershipBadge from '../../components/ui/OwnershipBadge';
 import { formatDateTime as formatDate } from '../../utils/dateUtils';
 
 const isExpired = (ts) => {
@@ -39,8 +42,11 @@ const isExpired = (ts) => {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 const AnnouncementsPage = () => {
-  const { user } = useAuth();
+  const { user, adminData } = useAuth();
   const { selectedBranchId } = useBranch();
+
+  // Canonical actor for provenance stamps ({uid,name,email}).
+  const actor = { uid: user?.uid, name: adminData?.name || '', email: user?.email };
 
   const [announcements, setAnnouncements]     = useState([]);
   const [loading, setLoading]                 = useState(true);
@@ -51,6 +57,7 @@ const AnnouncementsPage = () => {
   const [deleteConfirm, setDeleteConfirm]     = useState(null);
   const [filterStyle, setFilterStyle]         = useState('all');
   const [filterStatus, setFilterStatus]       = useState('all');
+  const [historyTarget, setHistoryTarget]     = useState(null);
 
   // ── Stream announcements for this branch only ─────────────────────────────
   useEffect(() => {
@@ -72,9 +79,9 @@ const AnnouncementsPage = () => {
     setError(null);
     try {
       if (editTarget) {
-        await updateAnnouncement(selectedBranchId, editTarget.id, formData);
+        await updateAnnouncement(selectedBranchId, editTarget.id, formData, actor);
       } else {
-        await createAnnouncement(selectedBranchId, formData, user.uid);
+        await createAnnouncement(selectedBranchId, formData, actor);
       }
       setShowModal(false);
       setEditTarget(null);
@@ -95,12 +102,12 @@ const AnnouncementsPage = () => {
   };
 
   const togglePublish = async (a) => {
-    try { await updateAnnouncement(selectedBranchId, a.id, { isPublished: !a.isPublished }); }
+    try { await updateAnnouncement(selectedBranchId, a.id, { isPublished: !a.isPublished }, actor); }
     catch { setError('فشل التحديث'); }
   };
 
   const togglePin = async (a) => {
-    try { await updateAnnouncement(selectedBranchId, a.id, { isPinned: !a.isPinned }); }
+    try { await updateAnnouncement(selectedBranchId, a.id, { isPinned: !a.isPinned }, actor); }
     catch { setError('فشل التحديث'); }
   };
 
@@ -303,14 +310,31 @@ const AnnouncementsPage = () => {
                               {formatDate(a.expiresAt)}
                             </span>
                           )}
-                          <span className="text-gray-300">
-                            أنشئ: {formatDate(a.createdAt)}
-                          </span>
+                          {a.createdBy && typeof a.createdBy === 'object' && (a.createdBy.name || a.updatedBy) ? (
+                            <OwnershipBadge
+                              compact
+                              createdBy={a.createdBy}
+                              createdAt={a.createdAt}
+                              updatedBy={a.updatedBy}
+                              updatedAt={a.updatedAt}
+                            />
+                          ) : (
+                            <span className="text-gray-300">
+                              أنشئ: {formatDate(a.createdAt)}
+                            </span>
+                          )}
                         </div>
                       </div>
 
                       {/* Action buttons */}
                       <div className="flex-shrink-0 flex items-center gap-0.5">
+                        <button
+                          onClick={() => setHistoryTarget({ targetId: a.id, title: a.title })}
+                          title="عرض السجل"
+                          className="p-2 rounded-lg text-gray-400 hover:bg-gray-100 transition-colors"
+                        >
+                          <History className="w-4 h-4" />
+                        </button>
                         <button
                           onClick={() => togglePin(a)}
                           title={a.isPinned ? 'إلغاء التثبيت' : 'تثبيت'}
@@ -377,6 +401,16 @@ const AnnouncementsPage = () => {
         onConfirm={() => deleteConfirm && handleDelete(deleteConfirm)}
         onCancel={() => setDeleteConfirm(null)}
       />
+
+      {historyTarget && (
+        <EntityHistoryPanel
+          targetType="announcement"
+          targetId={historyTarget.targetId}
+          branchId={selectedBranchId}
+          title={historyTarget.title}
+          onClose={() => setHistoryTarget(null)}
+        />
+      )}
     </div>
   );
 };

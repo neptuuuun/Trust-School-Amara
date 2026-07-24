@@ -19,6 +19,7 @@ import {
   serverTimestamp,
 } from 'firebase/firestore';
 import { db } from '../firebase';
+import { logAdminAction } from './auditService';
 
 // ─── Collection path helper ───────────────────────────────────────────────────
 const branchAnnouncementsRef = (branchId) =>
@@ -141,8 +142,15 @@ export function streamAdminAnnouncements(branchId, onData, onError) {
 
 // ─── CRUD (admin only — rules enforce this) ───────────────────────────────────
 
-export async function createAnnouncement(branchId, data, adminUid) {
-  return addDoc(branchAnnouncementsRef(branchId), {
+// Normalize an actor into the canonical {uid,name,email} provenance shape.
+// Accepts a bare uid string (legacy callers) or an object.
+const toActor = (a) =>
+  typeof a === 'string'
+    ? { uid: a, name: '', email: '' }
+    : { uid: a?.uid || '', name: a?.name || '', email: a?.email || '' };
+
+export async function createAnnouncement(branchId, data, actor) {
+  const ref = await addDoc(branchAnnouncementsRef(branchId), {
     title:       data.title?.trim() || '',
     body:        data.body?.trim() || '',
     emoji:       data.emoji?.trim() || null,
@@ -159,19 +167,24 @@ export async function createAnnouncement(branchId, data, adminUid) {
     ctaLabel:    data.ctaLabel?.trim() || null,
     ctaLink:     data.ctaLink?.trim() || null,
     branchId,
-    createdBy:   adminUid,
+    createdBy:   toActor(actor),
     createdAt:   serverTimestamp(),
     updatedAt:   serverTimestamp(),
   });
+  await logAdminAction({ action: 'announcement.create', branchId, targetType: 'announcement', targetId: ref.id, after: { title: data.title?.trim() || '' } });
+  return ref;
 }
 
-export async function updateAnnouncement(branchId, id, data) {
-  return updateDoc(branchAnnouncementDoc(branchId, id), {
-    ...data,
-    updatedAt: serverTimestamp(),
-  });
+export async function updateAnnouncement(branchId, id, data, actor) {
+  const patch = { ...data, updatedAt: serverTimestamp() };
+  if (actor) patch.updatedBy = toActor(actor);
+  const res = await updateDoc(branchAnnouncementDoc(branchId, id), patch);
+  await logAdminAction({ action: 'announcement.update', branchId, targetType: 'announcement', targetId: id });
+  return res;
 }
 
 export async function deleteAnnouncement(branchId, id) {
-  return deleteDoc(branchAnnouncementDoc(branchId, id));
+  const res = await deleteDoc(branchAnnouncementDoc(branchId, id));
+  await logAdminAction({ action: 'announcement.delete', branchId, targetType: 'announcement', targetId: id });
+  return res;
 }

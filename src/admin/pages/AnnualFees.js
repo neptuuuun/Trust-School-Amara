@@ -1,11 +1,15 @@
-// AnnualFees — FINANCIAL ARCHIVE of verified (paid) annual fees.
+// AnnualFees — the SINGLE SOURCE OF TRUTH for annual fee management.
 //
-// This page answers "which students have paid their annual fees (after
-// verification)?" — a financial tracking / archive view, NOT a verification
-// queue. Verifying & rejecting annual-fee payments is handled entirely on the
-// Payments Verification page. This page therefore shows ONLY records whose
-// status === 'verified' and exposes view / print (no approve/reject, no delete —
-// financial records are never destroyed from here).
+// This page answers "which students have paid their annual fees?" and is also
+// where admins RECORD a payment for ANY existing student — self-registered or
+// admin-created (see "Add Annual Fee Payment"). The annual fee is a standalone
+// financial record linked to a student, never a side effect of account creation.
+// Records appear identically regardless of how the account was created.
+//
+// The list shows ONLY records whose status === 'verified' (paid). Recording is
+// done via the centralized backend endpoint (amount from owner config + ledger +
+// audit + duplicate prevention per academic year). No approve/reject/delete here —
+// financial records are never destroyed from this page.
 //
 // Branch isolation: reads branches/{selectedBranchId}/annualPayments only;
 // getUsersByIds is branch-scoped. Early-return when no branch is selected.
@@ -15,14 +19,14 @@ import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
 import { db } from '../../firebase';
 import {
   Wallet, Users, CalendarPlus, TrendingUp, Download,
-  Eye, Printer, CreditCard, User, BookOpen, BadgeCheck,
+  Eye, Printer, CreditCard, User, BookOpen, BadgeCheck, Plus,
 } from 'lucide-react';
 import { useBranch } from '../../contexts/BranchContext';
 import { getUsersByIds } from '../../services/firestoreService';
 import { exportToCsv, generateFilename } from '../../utils/csvExport';
 import { printRecord } from '../../utils/printRecord';
 import AdminModal from '../components/AdminModal';
-import FileViewerModal from '../components/FileViewerModal';
+import AddAnnualFeePaymentModal from '../components/AddAnnualFeePaymentModal';
 import { useToast } from '../components/ToastNotifications';
 import {
   StatCard, PageHeader, SearchInput, EmptyState, ArchiveSkeleton, SELECT_CLASS,
@@ -38,7 +42,7 @@ const PaidBadge = () => (
 );
 
 // ── Detail modal ─────────────────────────────────────────────────────────────────
-const DetailModal = ({ fee, onClose, onPrint, onViewImage }) => (
+const DetailModal = ({ fee, onClose, onPrint }) => (
   <AdminModal
     open
     onClose={onClose}
@@ -115,23 +119,6 @@ const DetailModal = ({ fee, onClose, onPrint, onViewImage }) => (
         )}
       </div>
 
-      {/* Receipt */}
-      {fee.receiptUrl && (
-        <div>
-          <h3 className="mb-2 text-sm font-semibold text-gray-800">إيصال الدفع</h3>
-          <button
-            type="button"
-            onClick={() => onViewImage(fee.receiptUrl)}
-            className="group relative block w-full overflow-hidden rounded-xl border border-gray-200"
-          >
-            <img src={fee.receiptUrl} alt="إيصال الدفع" className="max-h-72 w-full object-contain transition-opacity group-hover:opacity-90" />
-            <span className="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/20">
-              <Eye className="h-8 w-8 text-white opacity-0 drop-shadow-lg transition-opacity group-hover:opacity-100" />
-            </span>
-          </button>
-        </div>
-      )}
-
       <div className="flex items-center gap-3 rounded-xl border border-success-200 bg-success-50 p-4">
         <BadgeCheck className="h-5 w-5 flex-shrink-0 text-success-600" />
         <div>
@@ -157,7 +144,7 @@ const AnnualFees = () => {
   const [dateFilter, setDateFilter] = useState('all');
 
   const [selectedFee, setSelectedFee] = useState(null);
-  const [lightbox, setLightbox] = useState(null);
+  const [showAddModal, setShowAddModal] = useState(false);
 
   // Real-time stream of annual payments (branch-scoped); keep only VERIFIED.
   useEffect(() => {
@@ -216,7 +203,6 @@ const AnnualFees = () => {
       totalAmount:   f.totalAmount,
       baseFee:       f.annualFee ?? f.baseAnnualFee ?? null,
       paymentMethod: f.paymentMethod || '',
-      receiptUrl:    f.receiptUrl || f.screenshotUrl || '',
       createdAt:     f.createdAt || null,
     };
   }), [raw, profiles]);
@@ -313,16 +299,27 @@ const AnnualFees = () => {
           fee={selectedFee}
           onClose={() => setSelectedFee(null)}
           onPrint={handlePrint}
-          onViewImage={setLightbox}
         />
       )}
-      <FileViewerModal url={lightbox} onClose={() => setLightbox(null)} />
+      {showAddModal && (
+        <AddAnnualFeePaymentModal
+          branchId={selectedBranchId}
+          onClose={() => setShowAddModal(false)}
+          onSuccess={() => showToast('success', 'تم تسجيل دفعة الرسوم السنوية بنجاح.')}
+        />
+      )}
 
       {/* Header */}
       <PageHeader
         title="الرسوم السنوية"
-        description="عرض حالة الرسوم السنوية للطلاب بعد التحقق والموافقة."
+        description="سجّل دفعة الرسوم السنوية لأي طالب وتابع المدفوعات المؤكدة."
       >
+        <button
+          onClick={() => setShowAddModal(true)}
+          className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary/90"
+        >
+          <Plus className="h-4 w-4" /> إضافة دفعة الرسوم السنوية
+        </button>
         <button
           onClick={handleExport}
           className="inline-flex items-center gap-1.5 rounded-xl border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"

@@ -1,12 +1,13 @@
 /**
  * FileViewerModal — full-bleed image / PDF viewer.
  *
- * Shared by every admin page that needs to preview a payment receipt or ID image,
- * so there is a single lightbox implementation instead of per-page copies.
+ * Shared by every admin page that needs to preview an uploaded document image
+ * (e.g. a student's ID card), so there is a single lightbox implementation
+ * instead of per-page copies.
  *
  * Rendered through a portal at the "top" stacking tier (z-1200) so it always appears
- * above base modals (z-1000) and confirmation dialogs (z-1100) — e.g. when a receipt
- * is opened from inside a registration detail modal.
+ * above base modals (z-1000) and confirmation dialogs (z-1100) — e.g. when an image
+ * is opened from inside a detail modal.
  *
  * API: <FileViewerModal url={string|null} onClose={fn} />  (falsy url = closed)
  */

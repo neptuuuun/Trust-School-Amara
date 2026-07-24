@@ -109,6 +109,18 @@ app.use(errorHandler);
 app.listen(PORT, () => {
   console.log(`School backend running on http://localhost:${PORT}`);
   console.log(`Health: http://localhost:${PORT}/health`);
+
+  // Surface the Chargily secret key + the endpoint it resolves to. Prints prefix +
+  // length only, never the body. Makes a missing/wrong/test-vs-live key obvious on
+  // boot instead of surfacing as a runtime 401 "Unauthenticated" from Chargily.
+  try {
+    const { maskKey, resolveApi } = require('./services/chargilyService');
+    const { baseUrl, mode } = resolveApi();
+    console.log(`Chargily: ${maskKey(process.env.CHARGILY_SECRET_KEY)} → ${mode.toUpperCase()} endpoint ${baseUrl}`);
+  } catch (e) {
+    console.warn(`⚠️  Chargily: ${e.message} — checkouts will fail.`);
+  }
+
   startCronJobs();
 });
 

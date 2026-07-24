@@ -4,7 +4,11 @@ const { writeAudit, resolveActor } = require('../services/auditService');
 const academicYear = require('../services/academicYear');
 const supportEligibility = require('../services/supportEligibility');
 const financeSettings = require('../services/financeSettings');
+const { recordManualPaymentOrder } = require('../services/paymentOrderLog');
 const { normalizeSchool, isValidSchool } = require('../constants');
+// Support seats are recounted live (verified AND not expired) — reuse the single
+// implementation instead of duplicating the expiry rule here.
+const { recomputeSupportClassEnrollment } = require('./registrationController');
 
 const VALID_BRANCHES = ['boumerdes', 'bordj_menaiel'];
 
@@ -154,282 +158,15 @@ const createStudent = async (req, res, next) => {
   }
 };
 
-// ── Verify annual payment (atomically) ────────────────────────────────────────
-/**
- * POST /api/admin/verify-annual-payment
- *
- * Atomically verifies an annual payment and all linked support-lesson
- * registrations. Uses Admin SDK so it can write to the otherwise
- * client-write-protected supportLessonRegistrations collection.
- *
- * Body: { branchId, paymentId }
- */
-const verifyAnnualPayment = async (req, res, next) => {
-  try {
-    const adminUid   = req.user.uid;
-    const adminEmail = req.user.email || '';
-    const { branchId, paymentId } = req.body;
+// NOTE: POST /api/admin/verify-annual-payment and /reject-annual-payment used to
+// live here. They belonged to the deleted receipt-upload workflow, where a student
+// uploaded a payment proof and an admin approved or rejected it. Chargily writes
+// annualPayments already-verified (chargilyController._createAnnualFeeReg) and the
+// admin-side equivalent is recordAnnualFee below, so both handlers had been
+// unreachable since the Payments Verification page was removed — while still
+// offering an admin-authenticated way to flip a paid record into a state nothing
+// else in the system produces.
 
-    if (!branchId)
-      return res.status(400).json({ code: 'missing-branch',  message: 'branchId is required.' });
-    if (!paymentId)
-      return res.status(400).json({ code: 'missing-payment', message: 'paymentId is required.' });
-
-    // ── Load the payment document ─────────────────────────────────────────────
-    const paymentRef  = db.collection('branches').doc(branchId).collection('annualPayments').doc(paymentId);
-    const paymentSnap = await paymentRef.get();
-    if (!paymentSnap.exists)
-      return res.status(404).json({ code: 'not-found', message: 'Annual payment not found.' });
-
-    const paymentData = paymentSnap.data() || {};
-    if (paymentData.status === 'verified')
-      return res.status(409).json({ code: 'already-verified', message: 'Payment already verified.' });
-
-    const adminInfo    = { uid: adminUid, email: adminEmail };
-    const nextPayDate  = new Date();
-    nextPayDate.setFullYear(nextPayDate.getFullYear() + 1);
-
-    // ── Load linked registrations from branches/{branchId}/registrations ──────
-    const regsRef  = db.collection('branches').doc(branchId).collection('registrations');
-    const regsSnap = await regsRef.where('paymentId', '==', paymentId).get();
-
-    // ── Compute studyYear patch for the user doc ──────────────────────────────
-    const userId = paymentData.userId || null;
-    let userStudyYearPatch = {};
-    if (userId) {
-      const userSnap = await db.collection('branches').doc(branchId).collection('users').doc(userId).get();
-      if (userSnap.exists) {
-        const userData = userSnap.data() || {};
-        const existingLevel = String(userData.schoolLevel || '').trim();
-        const payYearId     = String(paymentData.academicYear || '').trim();
-        const payLevel      = payYearId.startsWith('mid') ? 'middle'
-                            : payYearId.startsWith('sec') ? 'high'
-                            : null;
-        if (payYearId)              userStudyYearPatch.studyYear   = payYearId;
-        if (!existingLevel && payLevel) userStudyYearPatch.schoolLevel = payLevel;
-      }
-    }
-
-    // ── Build the atomic batch ────────────────────────────────────────────────
-    const batch = db.batch();
-
-    // 1. Update payment status
-    batch.update(paymentRef, {
-      status:          'verified',
-      verifiedAt:      admin.firestore.FieldValue.serverTimestamp(),
-      verifiedBy:      adminInfo,
-      nextPaymentDate: admin.firestore.Timestamp.fromDate(nextPayDate),
-    });
-
-    // 2. Update branch-scoped registration summaries + global enrollment records.
-    //    Annual-fee access lasts until the END of the current academic year
-    //    (30 June), per services/academicYear.js — the single source of truth.
-    const now           = new Date();
-    const endBoundary   = admin.firestore.Timestamp.fromDate(academicYear.getAcademicYear(now).end);
-
-    regsSnap.docs.forEach((docSnap) => {
-      const regData   = docSnap.data() || {};
-      const studentId = regData.userId   || '';
-      const subjectId = regData.subjectId || '';
-      const yearId    = regData.year || regData.yearId || regData.yearLabel || regData.metadata?.year || 'unknown';
-      const subjectName = regData.subjectName || regData.courseName || '';
-
-      // Update the branch-scoped summary record
-      batch.update(docSnap.ref, {
-        status:        'verified',
-        paymentStatus: 'verified',
-        updatedAt:     admin.firestore.FieldValue.serverTimestamp(),
-      });
-
-      // Write global enrollment record (Admin SDK bypasses the deny rule)
-      if (studentId && subjectId) {
-        const enrollId  = ['annualFee', branchId, studentId, subjectId, yearId].join('_');
-        const enrollRef = db.collection('supportLessonRegistrations').doc(enrollId);
-        batch.set(enrollRef, {
-          branchId,
-          userId:       studentId,
-          lessonId:     subjectId,
-          subjectName,
-          lessonName:   subjectName || 'درس دعم',
-          source:       'annualFee',
-          status:       'verified',
-          paymentId,
-          yearId,
-          academicYear: yearId,
-          startDate:    admin.firestore.Timestamp.fromDate(now),
-          endDate:      endBoundary,
-          createdAt:    regData.createdAt || admin.firestore.FieldValue.serverTimestamp(),
-          verifiedAt:   admin.firestore.FieldValue.serverTimestamp(),
-          verifiedBy:   adminInfo,
-          updatedAt:    admin.firestore.FieldValue.serverTimestamp(),
-        }, { merge: true });
-      }
-    });
-
-    // 3. Update user profile
-    if (userId) {
-      const userRef = db.collection('branches').doc(branchId).collection('users').doc(userId);
-      batch.update(userRef, {
-        isVerified:      true,
-        yearlyFeePaid:   true,
-        paymentVerified: true,
-        nextPaymentDate: admin.firestore.Timestamp.fromDate(nextPayDate),
-        updatedAt:       admin.firestore.FieldValue.serverTimestamp(),
-        ...userStudyYearPatch,
-        'registrations.annualFee': paymentData.year || paymentData.level || new Date().getFullYear(),
-        'registrations.annualFeeHistory': admin.firestore.FieldValue.arrayUnion({
-          registrationId: paymentId,
-          year:           paymentData.year || paymentData.level || null,
-          registeredAt:   Date.now(),
-        }),
-      });
-    }
-
-    // 4. Write annualFeeRegistered archive entry
-    const archivedRef = db.collection('branches').doc(branchId).collection('annualFeeRegistered').doc(paymentId);
-    batch.set(archivedRef, {
-      ...paymentData,
-      branchId,
-      userId,
-      registrationId: paymentId,
-      status:         'registered',
-      registeredAt:   admin.firestore.FieldValue.serverTimestamp(),
-      verifiedAt:     admin.firestore.FieldValue.serverTimestamp(),
-      verifiedBy:     adminInfo,
-    });
-
-    // ── Commit everything atomically ──────────────────────────────────────────
-    await batch.commit();
-
-    // ── Append to the immutable financial ledger + audit log ──────────────────
-    // One ledger entry per annual payment (the annual fee IS the revenue; the
-    // bundled support enrollments are free access, not separate revenue, so we do
-    // not double-count them). Best-effort: never fail the request on a log error.
-    try {
-      await ledger.recordPayment({
-        branchId,
-        studentId:   userId,
-        studentName: paymentData.userName || paymentData.studentName || null,
-        serviceType: 'annualFee',
-        amount:      paymentData.amount ?? paymentData.price,
-        period:      ledger.academicYearLabel(),
-        sourceCollection: 'annualPayments',
-        sourceDocId: paymentId,
-        recordedBy:  { uid: adminUid, email: adminEmail, role: 'admin' },
-        paidAt:      new Date(),
-      });
-      await writeAudit({
-        branchId,
-        actor: { uid: adminUid, email: adminEmail, role: 'admin' },
-        action: 'payment.verify',
-        targetType: 'annualPayment',
-        targetId: paymentId,
-        after: { status: 'verified', amount: paymentData.amount ?? null, userId },
-      });
-    } catch (logErr) {
-      console.error('[verifyAnnualPayment] ledger/audit error:', logErr.message);
-    }
-
-    return res.status(200).json({ success: true });
-  } catch (err) {
-    next(err);
-  }
-};
-
-// ── Reject annual payment (atomically) ────────────────────────────────────────
-/**
- * POST /api/admin/reject-annual-payment
- *
- * Body: { branchId, paymentId, notes? }
- */
-const rejectAnnualPayment = async (req, res, next) => {
-  try {
-    const adminUid   = req.user?.uid || '';
-    const adminEmail = req.user?.email || '';
-    const { branchId, paymentId, notes } = req.body;
-
-    if (!branchId)
-      return res.status(400).json({ code: 'missing-branch',  message: 'branchId is required.' });
-    if (!paymentId)
-      return res.status(400).json({ code: 'missing-payment', message: 'paymentId is required.' });
-
-    const paymentRef  = db.collection('branches').doc(branchId).collection('annualPayments').doc(paymentId);
-    const paymentSnap = await paymentRef.get();
-    if (!paymentSnap.exists)
-      return res.status(404).json({ code: 'not-found', message: 'Annual payment not found.' });
-
-    // Do not reject an already-verified payment — that would leave the student's
-    // yearlyFeePaid / paymentVerified flags inconsistent. Block instead.
-    const paymentData = paymentSnap.data() || {};
-    if (String(paymentData.status || '').toLowerCase() === 'verified')
-      return res.status(409).json({ code: 'already-verified', message: 'Cannot reject an already-verified payment.' });
-
-    // ── Load linked registrations ─────────────────────────────────────────────
-    const regsRef  = db.collection('branches').doc(branchId).collection('registrations');
-    const regsSnap = await regsRef.where('paymentId', '==', paymentId).get();
-
-    const batch = db.batch();
-
-    batch.update(paymentRef, {
-      status:    'rejected',
-      notes:     notes || null,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    regsSnap.docs.forEach((docSnap) => {
-      const regData   = docSnap.data() || {};
-      const studentId = regData.userId    || '';
-      const subjectId = regData.subjectId || '';
-      const yearId    = regData.year || regData.yearId || regData.yearLabel || regData.metadata?.year || 'unknown';
-
-      batch.update(docSnap.ref, {
-        status:        'rejected',
-        feePaid:       false,
-        paymentStatus: 'rejected',
-        updatedAt:     admin.firestore.FieldValue.serverTimestamp(),
-      });
-
-      if (studentId && subjectId) {
-        const enrollId  = ['annualFee', branchId, studentId, subjectId, yearId].join('_');
-        const enrollRef = db.collection('supportLessonRegistrations').doc(enrollId);
-        batch.set(enrollRef, {
-          branchId,
-          userId:       studentId,
-          lessonId:     subjectId,
-          source:       'annualFee',
-          status:       'rejected',
-          paymentId,
-          notes:        notes || null,
-          updatedAt:    admin.firestore.FieldValue.serverTimestamp(),
-          verifiedAt:   null,
-          verifiedBy:   null,
-        }, { merge: true });
-      }
-    });
-
-    await batch.commit();
-
-    // Audit the rejection (no ledger entry — a rejected payment was never recorded
-    // as revenue; verified payments are blocked from rejection above).
-    try {
-      await writeAudit({
-        branchId,
-        actor: { uid: adminUid, email: adminEmail, role: 'admin' },
-        action: 'payment.reject',
-        targetType: 'annualPayment',
-        targetId: paymentId,
-        reason: notes || null,
-        after: { status: 'rejected' },
-      });
-    } catch (logErr) {
-      console.error('[rejectAnnualPayment] audit error:', logErr.message);
-    }
-
-    return res.status(200).json({ success: true });
-  } catch (err) {
-    next(err);
-  }
-};
 
 // ── Record an annual fee payment (standalone, ANY student) ────────────────────
 /**
@@ -523,7 +260,6 @@ const recordAnnualFee = async (req, res, next) => {
       status:        'verified',
       paymentStatus: 'verified',
       notes:         notes || 'تم تسجيل الرسوم السنوية يدوياً من قبل الإدارة',
-      receiptUrl:    null,
       createdAt:     paidTs,
       verifiedAt:    nowTs,
       verifiedBy:    { uid: adminUid, email: adminEmail, name: '' },
@@ -573,6 +309,16 @@ const recordAnnualFee = async (req, res, next) => {
         targetId: payRef.id,
         after: { status: 'verified', amount, userId, academicYear: label },
       });
+      // Operational receipt in the branch payment log (the ledger above stays the
+      // single revenue record — this is only so an admin can find/reconcile the
+      // cash they took at the desk in سجل المدفوعات).
+      await recordManualPaymentOrder({
+        branchId, serviceType: 'annualFee',
+        sourceCollection: 'annualPayments', sourceDocId: payRef.id,
+        regData: { userId, studentName, subjectName: `الرسوم السنوية ${label}` },
+        amount,
+        actor: { uid: adminUid, email: adminEmail },
+      });
     } catch (logErr) {
       console.error('[recordAnnualFee] ledger/audit error:', logErr.message);
     }
@@ -584,15 +330,118 @@ const recordAnnualFee = async (req, res, next) => {
 };
 
 // ── Delete student ────────────────────────────────────────────────────────────
+
+/**
+ * Cascade a student deletion across every record that keeps them "alive" in the
+ * owner's analytics.
+ *
+ * Deleting only the user profile used to leave the student's registrations, their
+ * class seats and their ledger revenue fully intact — so the owner dashboard kept
+ * counting a deleted student as enrolled and as paying, and the state-based
+ * alerts derived from that never changed.
+ *
+ * For each registration this: appends a ledger REVERSAL (history preserved, net
+ * revenue drops), deletes the archive doc, and marks the class for a recount.
+ *
+ * @returns {Promise<{registrations:number, reversals:number, classes:string[]}>}
+ */
+async function cascadeStudentRecords(branchId, userId, actor) {
+  const summary = { registrations: 0, reversals: 0, classes: [] };
+  const touchedClasses = new Set();
+
+  const reverseAndDelete = async (ref, sourceCollection, sourceDocId) => {
+    try {
+      await ledger.recordReversal(
+        ledger.ledgerId(sourceCollection, branchId, sourceDocId),
+        { recordedBy: actor, reason: 'student deleted' }
+      );
+      summary.reversals += 1;
+    } catch (e) {
+      console.error('[deleteStudent] reversal error:', sourceDocId, e.message);
+    }
+    await ref.delete();
+    summary.registrations += 1;
+  };
+
+  // Language + training archives (branch-scoped, one doc per enrollment).
+  for (const col of ['languagesRegistered', 'trainingsRegistered']) {
+    try {
+      const snap = await db.collection('branches').doc(branchId).collection(col)
+        .where('userId', '==', userId).get();
+      for (const d of snap.docs) {
+        const x = d.data() || {};
+        if (x.classId) touchedClasses.add(`${col}:${x.classId}`);
+        await reverseAndDelete(d.ref, col, d.id);
+      }
+    } catch (e) { console.error(`[deleteStudent] ${col} cascade error:`, e.message); }
+  }
+
+  // Annual fee payments (branch-scoped).
+  try {
+    const snap = await db.collection('branches').doc(branchId).collection('annualPayments')
+      .where('userId', '==', userId).get();
+    for (const d of snap.docs) await reverseAndDelete(d.ref, 'annualPayments', d.id);
+  } catch (e) { console.error('[deleteStudent] annualPayments cascade error:', e.message); }
+
+  // Support subscriptions (TOP-LEVEL collection; ledger ids carry a per-cycle
+  // `_YYYY-MM` suffix, so reverse every cycle this registration ever billed).
+  const supportClasses = [];
+  try {
+    const snap = await db.collection('supportLessonRegistrations')
+      .where('userId', '==', userId).get();
+    for (const d of snap.docs) {
+      const x = d.data() || {};
+      if ((x.branchId || null) !== branchId) continue;
+      const classId = x.classId || x.lessonId || null;
+      if (classId) supportClasses.push(classId);
+
+      const cycles = new Set([x.cycleMonthKey].filter(Boolean));
+      (Array.isArray(x.billedCycles) ? x.billedCycles : []).forEach((c) => c && cycles.add(c));
+      for (const cycle of cycles) {
+        try {
+          await ledger.recordReversal(
+            ledger.ledgerId('supportLessonRegistrations', branchId, `${d.id}_${cycle}`),
+            { recordedBy: actor, reason: 'student deleted' }
+          );
+          summary.reversals += 1;
+        } catch (e) { console.error('[deleteStudent] support reversal error:', e.message); }
+      }
+      await d.ref.delete();
+      summary.registrations += 1;
+    }
+  } catch (e) { console.error('[deleteStudent] support cascade error:', e.message); }
+
+  // Recount every freed seat from the live archive (never a blind decrement).
+  for (const marker of touchedClasses) {
+    const [col, classId] = marker.split(':');
+    try {
+      const snap = await db.collection('branches').doc(branchId).collection(col)
+        .where('classId', '==', classId).get();
+      await db.collection('branches').doc(branchId).collection('classes').doc(classId)
+        .update({ enrollmentCount: snap.size, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+      summary.classes.push(classId);
+    } catch (e) { console.warn('[deleteStudent] recount failed:', classId, e.message); }
+  }
+  for (const classId of new Set(supportClasses)) {
+    await recomputeSupportClassEnrollment(branchId, classId);
+    summary.classes.push(classId);
+  }
+
+  return summary;
+}
+
 /**
  * POST /api/admin/delete-student
  *
- * Permanently removes a student from Firebase Auth AND Firestore.
+ * Permanently removes a student from Firebase Auth AND Firestore, and cascades
+ * the deletion through their registrations, class seats and ledger revenue (see
+ * cascadeStudentRecords) so the owner dashboard stops counting them.
+ *
  * Returns the student's Supabase file URLs so the caller can clean up
  * storage client-side (best-effort; does not block the response).
  *
  * Body: { branchId, userId }
- * Response 200: { success: true, photoUrl, idCardUrl }
+ * Response 200: { success: true, photoUrl, idCardUrl, cascade }
  */
 const deleteStudent = async (req, res, next) => {
   const { branchId, userId } = req.body;
@@ -632,13 +481,20 @@ const deleteStudent = async (req, res, next) => {
       if (e.code !== 'auth/user-not-found') throw e;
     });
 
-    // 2. Delete the Firestore profile.
+    // 2. Cascade registrations + revenue BEFORE dropping the profile, so a
+    //    mid-way failure leaves the profile behind as a recovery handle rather
+    //    than orphaning the registrations that reference it.
+    const actor = { uid: req.user?.uid || '', email: req.user?.email || '', role: 'admin' };
+    const cascade = await cascadeStudentRecords(branchId, userId, actor);
+
+    // 3. Delete the Firestore profile.
     await userRef.delete();
 
     await writeAudit({
-      branchId, actor: { uid: req.user?.uid || '', email: req.user?.email || '', role: 'admin' },
+      branchId, actor,
       action: 'student.delete', targetType: 'user', targetId: userId,
       before: { name: userData.name || userData.fullName || null, email: userData.email || null },
+      after: { cascade },
     });
 
     // Return file URLs so the frontend can clean up Supabase storage.
@@ -646,6 +502,7 @@ const deleteStudent = async (req, res, next) => {
       success:   true,
       photoUrl:  userData.photoUrl   || null,
       idCardUrl: userData.idCardUrl  || null,
+      cascade,
     });
   } catch (err) {
     next(err);
@@ -712,4 +569,4 @@ const setStudentDistinguishedAverage = async (req, res, next) => {
   }
 };
 
-module.exports = { createStudent, verifyAnnualPayment, rejectAnnualPayment, recordAnnualFee, deleteStudent, setStudentDistinguishedAverage };
+module.exports = { createStudent, recordAnnualFee, deleteStudent, setStudentDistinguishedAverage };

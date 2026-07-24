@@ -9,6 +9,10 @@ import useSupportLessonRegistrationStatus from '../hooks/useSupportLessonRegistr
 import { streamSubjects, streamClasses } from '../services/firestoreService';
 import SubjectGrid from '../components/academic/SubjectGrid';
 import ClassCard from '../components/academic/ClassCard';
+import AverageGateModal from '../components/academic/AverageGateModal';
+import {
+  classificationFromProfile, visibleClassesFor, hasLowLevelSibling,
+} from '../utils/supportClassification';
 import { Button } from '../components/ui/button';
 import { Alert, LoadingState } from '../components/ui/feedback';
 
@@ -38,9 +42,15 @@ function YearPage() {
   const [loading, setLoading] = useState(true);
   const [selectedSubject, setSelectedSubject] = useState(null);
   const [modal, setModal] = useState(null); // 'login' | 'fee' | null
+  // Support-level classification. localClassification holds the freshly-saved
+  // value after the average gate (the AuthContext profileDoc may lag a tick).
+  const [localClassification, setLocalClassification] = useState(null);
+  const [pendingSubject, setPendingSubject] = useState(null);
+  const [showAverageGate, setShowAverageGate] = useState(false);
 
   // CRITICAL: studyYear is the source of truth (not schoolLevel which is middle/high).
   const userStudyYear = String(profileDoc?.studyYear || '').trim() || null;
+  const classification = localClassification || classificationFromProfile(profileDoc);
   const feeVerified = annualFeeStatus.status === 'verified';
   const canBrowse = Boolean(selectedBranchId);
 
@@ -69,10 +79,38 @@ function YearPage() {
     return map;
   }, [classes]);
 
-  const classesForSelected = useMemo(
+  // All of the selected subject's classes (this year, active) — the sibling set
+  // used for per-subject routing.
+  const subjectAllClasses = useMemo(
     () => (selectedSubject ? classes.filter((c) => c.subjectId === selectedSubject.id) : []),
     [classes, selectedSubject],
   );
+
+  // What the student may actually see/join, after RULE A/B routing. Guests (and
+  // not-yet-classified users) see the full list — they hit the gate before
+  // enrolling. A classified student only sees their eligible group types.
+  const classesForSelected = useMemo(() => {
+    if (!user || classification == null) return subjectAllClasses;
+    return visibleClassesFor(classification, subjectAllClasses);
+  }, [subjectAllClasses, user, classification]);
+
+  // A support-level student is routed to dedicated groups when the subject has at
+  // least one active low-level group → show a respectful explanatory notice.
+  const showSupportRoutedNotice =
+    classification === 'support_level'
+    && selectedSubject
+    && hasLowLevelSibling({ subjectId: selectedSubject.id, studyYear: yearParam }, subjectAllClasses);
+
+  // Subject selection: a logged-in student with no stored average must enter it
+  // once (the gate) before the group list is filtered for them.
+  const handleSelectSubject = (subject) => {
+    if (user && classification == null) {
+      setPendingSubject(subject);
+      setShowAverageGate(true);
+      return;
+    }
+    setSelectedSubject(subject);
+  };
 
   const handleRegister = (cls) => {
     if (!user) { setModal('login'); return; }
@@ -156,7 +194,7 @@ function YearPage() {
               <SubjectGrid
                 subjects={subjects}
                 getClassCount={(id) => classCountBySubject[id] || 0}
-                onSelect={setSelectedSubject}
+                onSelect={handleSelectSubject}
                 emptyText="لا توجد مواد مضافة بعد لهذه السنة"
               />
             </>
@@ -166,6 +204,11 @@ function YearPage() {
                 <h2 className="text-2xl font-bold text-primary">{selectedSubject.name}</h2>
                 {selectedSubject.description && <p className="mt-1 text-gray-600">{selectedSubject.description}</p>}
               </div>
+              {showSupportRoutedNotice && (
+                <Alert variant="info" className="mb-6">
+                  تم توجيهك إلى مجموعات الدعم المخصصة لمستواك الدراسي لضمان أفضل متابعة وتحسين النتائج.
+                </Alert>
+              )}
               {classesForSelected.length === 0 ? (
                 <p className="py-8 text-center text-gray-500">لا توجد مجموعات متاحة لهذه المادة بعد.</p>
               ) : (
@@ -186,6 +229,19 @@ function YearPage() {
           )}
         </div>
       </div>
+
+      {/* Distinguished-subjects average gate — required once before browsing groups */}
+      {showAverageGate && (
+        <AverageGateModal
+          branchId={selectedBranchId}
+          onClose={() => { setShowAverageGate(false); setPendingSubject(null); }}
+          onClassified={({ classification: c }) => {
+            setLocalClassification(c);
+            setShowAverageGate(false);
+            if (pendingSubject) { setSelectedSubject(pendingSubject); setPendingSubject(null); }
+          }}
+        />
+      )}
 
       {/* Login required modal */}
       {modal === 'login' && (

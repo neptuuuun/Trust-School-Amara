@@ -5,10 +5,11 @@ import { completeGoogleProfile } from '../services/googleAuthService';
 import { uploadToSupabase } from '../services/userService';
 import { validateImageFile } from '../utils/imageOptimizer';
 import UploadGuide from '../components/UploadGuide';
-import { Camera, Upload, Building2, CheckCircle } from 'lucide-react';
+import { Camera, Upload, Building2, CheckCircle, GraduationCap } from 'lucide-react';
 import { Button, buttonClasses } from '../components/ui/button';
 import { Input, Label } from '../components/ui/input';
 import { Alert, LoadingState, Spinner } from '../components/ui/feedback';
+import { SCHOOL_HINT_AR, isValidSchool } from '../utils/personData';
 
 const CompleteRegistrationPage = () => {
   const { user, profileDoc, loading, completedProfile } = useAuth();
@@ -18,6 +19,7 @@ const CompleteRegistrationPage = () => {
   const [birthDate, setBirthDate] = useState('');
   const [birthPlace, setBirthPlace] = useState('');
   const [address, setAddress] = useState('');
+  const [school, setSchool] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [profilePic, setProfilePic] = useState(null);
   const [idCard, setIdCard] = useState(null);
@@ -63,6 +65,10 @@ const CompleteRegistrationPage = () => {
       setError('يرجى ملء جميع الحقول المطلوبة');
       return;
     }
+    if (!isValidSchool(school)) {
+      setError('يرجى إدخال المؤسسة التعليمية (اكتب «حر» إن لم تكن منتسباً إلى مدرسة)');
+      return;
+    }
     if (!profilePic) {
       setError('الرجاء رفع صورة شخصية');
       return;
@@ -96,6 +102,7 @@ const CompleteRegistrationPage = () => {
         birthDate,
         birthPlace,
         address,
+        school: school.trim(),
         phoneNumber,
         phone: phoneNumber,
         photoUrl,
@@ -233,6 +240,20 @@ const CompleteRegistrationPage = () => {
               onChange={(e) => setPhoneNumber(e.target.value)}
               placeholder="0XXXXXXXXX"
             />
+          </div>
+
+          {/* Educational institution / school */}
+          <div>
+            <Label htmlFor="cr-school" required>المؤسسة التعليمية / المدرسة</Label>
+            <Input
+              id="cr-school"
+              type="text"
+              required
+              value={school}
+              onChange={(e) => setSchool(e.target.value)}
+              placeholder="اسم المؤسسة التعليمية"
+            />
+            <p className="mt-1 text-xs text-gray-500">{SCHOOL_HINT_AR}</p>
           </div>
 
           {/* Registration number (display only) */}

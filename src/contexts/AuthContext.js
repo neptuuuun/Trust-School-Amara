@@ -14,6 +14,8 @@ import { doc, getDoc, onSnapshot, setDoc, serverTimestamp } from 'firebase/fires
 import { useBranch } from './BranchContext';
 import { recordUserActivity } from '../services/userLifecycleService';
 import { getAdminByUid, onAdminSnapshot, validateBranchAccess } from '../services/adminService';
+import { getOwnerByUid, onOwnerSnapshot } from '../services/ownerAuthService';
+import { normalizeSchool } from '../utils/personData';
 
 const AuthContext = createContext(null);
 
@@ -37,6 +39,19 @@ export const AuthProvider = ({ children }) => {
   const [emailVerificationSyncing, setEmailVerificationSyncing] = useState(false);
   const [adminData, setAdminData] = useState(null);
   const [completedProfile, setCompletedProfile] = useState(null);
+  // Admin-resolution state — the single source of truth for "is this user an admin?".
+  //   null  = not yet determined (auth observer is still running checkIfAdmin)
+  //   true  = admin  → the auth observer owns all profile state
+  //   false = regular user → the profile-listener effect below owns profile state
+  // The profile listener MUST wait for this to leave `null` before touching role,
+  // otherwise it races the admin check and queries branches/<b>/users/<uid> for an
+  // admin (no doc there) → role wrongly reset to null → wrong navbar after refresh.
+  const [isAdmin, setIsAdmin] = useState(null);
+  // Owner = cross-branch read-only role (root `owners/{uid}` doc). Like admins,
+  // the owner has no branch user doc, so the profile listener must skip them.
+  const [ownerData, setOwnerData] = useState(null);
+  const isOwnerRef = useRef(false);
+  const ownerListenerRef = useRef(null);
 
   // FIX: consume setBranchFromAuth (the single write path) instead of
   // selectedBranchId + window events + direct localStorage writes.
@@ -65,6 +80,12 @@ export const AuthProvider = ({ children }) => {
       const adminDoc = await getAdminByUid(uid);
       console.log('[ADMIN DEBUG] ADMIN USER:', { uid, email });
       console.log('[ADMIN DEBUG] ADMIN DOC from Firestore admins/', uid, ':', adminDoc);
+      // A deactivated employee (active:false) is refused admin access. A missing
+      // `active` field defaults to active (backward compat with legacy admin docs).
+      if (adminDoc && adminDoc.active === false) {
+        console.warn('🚫 Admin account is deactivated:', uid);
+        return null;
+      }
       if (adminDoc && adminDoc.role === 'admin') {
         console.log('👑 User is admin for branch:', adminDoc.branchId);
         const VALID_BRANCHES = ['boumerdes', 'bordj_menaiel'];
@@ -80,6 +101,17 @@ export const AuthProvider = ({ children }) => {
       return null;
     } catch (error) {
       console.error('Error checking admin status:', error);
+      return null;
+    }
+  };
+
+  const checkIfOwner = async (uid) => {
+    if (!uid) return null;
+    try {
+      const ownerDoc = await getOwnerByUid(uid);
+      return ownerDoc && ownerDoc.role === 'owner' ? ownerDoc : null;
+    } catch (error) {
+      console.error('Error checking owner status:', error);
       return null;
     }
   };
@@ -105,13 +137,33 @@ export const AuthProvider = ({ children }) => {
       setProfileDocPath(null);
       setAccountStatus(null);
       setCompletedProfile(null);
-      setLoading(false);
+      // NOTE: `loading` is owned exclusively by the auth observer. Do NOT end it
+      // here: on initial mount `user` is null only because onAuthStateChanged has
+      // not fired yet. Ending loading now would flash the guest/student navbar
+      // before the real auth state (and role) is known.
       return;
     }
 
-    if (isAdminRef.current) {
-      console.log('⏭️ User is admin, skipping listener setup');
-      setLoading(false);
+    // Wait until the auth observer has finished determining admin status.
+    // `null` = still checking. Creating the branch listener before this is known
+    // is the root cause of the navbar bug: an admin would be queried against
+    // branches/<branch>/users/<uid> (where no admin document exists), the snapshot
+    // returns "missing" and resets role → null, so the navbar showed the regular
+    // "الملف الشخصي / خروج" UI instead of "لوحة الإدارة".
+    if (isAdmin === null) {
+      console.log('⏳ Admin status not resolved yet — deferring profile listener');
+      return;
+    }
+
+    if (isAdmin === true) {
+      console.log('⏭️ User is admin — observer owns profile state, skipping listener');
+      return;
+    }
+
+    // Owners have no branch user doc — the observer owns their state. Reading
+    // branches/<b>/users/<ownerUid> here would 404 and wrongly reset role → null.
+    if (isOwnerRef.current) {
+      console.log('⏭️ User is owner — observer owns profile state, skipping listener');
       return;
     }
 
@@ -210,7 +262,7 @@ export const AuthProvider = ({ children }) => {
         activeListenerRef.current = null;
       }
     };
-  }, [user, selectedBranchId]); // ← role intentionally excluded: snapshot sets role, which would re-trigger this effect
+  }, [user, selectedBranchId, isAdmin]); // role intentionally excluded (snapshot sets it → would re-trigger). isAdmin is set ONLY by the observer, so it's loop-safe.
 
   // ---------------------------------------------------------------------------
   // Auth-state observer
@@ -229,6 +281,11 @@ export const AuthProvider = ({ children }) => {
       prevUserUidRef.current = currentUser?.uid ?? null;
       if (currentUser && currentUser.uid !== prevUid) {
         setLoading(true);
+        // New user signed in → admin status is unknown again. Reset so the
+        // profile listener defers until checkIfAdmin (below) resolves it.
+        setIsAdmin(null);
+        isAdminRef.current = false;
+        isOwnerRef.current = false;
       }
 
       setUser(currentUser);
@@ -248,9 +305,13 @@ export const AuthProvider = ({ children }) => {
         setAuthEmailVerified(null);
         setAccountStatus(null);
         setAdminData(null);
+        setOwnerData(null);
         setCompletedProfile(null);
         setLoading(false);
         isAdminRef.current = false;
+        isOwnerRef.current = false;
+        if (ownerListenerRef.current) { ownerListenerRef.current(); ownerListenerRef.current = null; }
+        setIsAdmin(null);
         return;
       }
 
@@ -265,6 +326,7 @@ export const AuthProvider = ({ children }) => {
           setAdminData(adminInfo);
           setLoading(false);
           isAdminRef.current = true;
+          setIsAdmin(true);
 
           // FIX: set branch through the single authoritative write path.
           // Replaces the window.dispatchEvent('adminBranchSet') pattern — no
@@ -289,12 +351,52 @@ export const AuthProvider = ({ children }) => {
         console.error('Error checking admin status:', e);
       }
 
+      // ── Owner check (cross-branch, read-only) ────────────────────────────────
+      // Runs only when the user is not an admin. Owners have no branch user doc,
+      // so the observer owns all their state and the profile listener skips them.
+      try {
+        const ownerInfo = await checkIfOwner(currentUser.uid);
+        if (ownerInfo) {
+          console.log('🏛️ User is the school owner');
+          setRole('owner');
+          setOwnerData(ownerInfo);
+          setProfileBranch(null);          // owner is cross-branch — never branch-bound
+          setVerified(true);
+          setVerificationStatus('verified');
+          setAccountStatus('owner');
+          setCompletedProfile(true);
+          isAdminRef.current = false;
+          setIsAdmin(false);               // not an admin
+          isOwnerRef.current = true;       // but the listener must still skip them
+          setLoading(false);
+
+          if (ownerListenerRef.current) ownerListenerRef.current();
+          ownerListenerRef.current = onOwnerSnapshot(currentUser.uid, (updated) => {
+            if (updated) setOwnerData(updated);
+            else signOut(auth);            // owner doc removed → revoke access
+          });
+          return;
+        }
+      } catch (e) {
+        console.error('Error checking owner status:', e);
+      }
+
+      // Not an admin or owner — clean up any stale owner listener/state.
+      isOwnerRef.current = false;
+      if (ownerListenerRef.current) { ownerListenerRef.current(); ownerListenerRef.current = null; }
+      setOwnerData(null);
+
       // Not an admin — clean up any stale admin listener
       if (adminListenerRef.current) {
         adminListenerRef.current();
         adminListenerRef.current = null;
       }
       setAdminData(null);
+      isAdminRef.current = false;
+      // Definitively mark as non-admin. This is what unblocks the profile-listener
+      // effect to create the branches/<branch>/users/<uid> listener and resolve
+      // role + loading for regular students.
+      setIsAdmin(false);
 
       // For non-admin users, the separate useEffect above handles the listener.
       // DON'T set loading to false here — let the listener do it.
@@ -308,6 +410,7 @@ export const AuthProvider = ({ children }) => {
     return () => {
       unsubscribe();
       if (adminListenerRef.current) adminListenerRef.current();
+      if (ownerListenerRef.current) ownerListenerRef.current();
     };
   // IMPORTANT: selectedBranchId is intentionally NOT in this dependency array.
   // Adding it would cause the entire auth check to re-run on every branch switch,
@@ -400,8 +503,26 @@ export const AuthProvider = ({ children }) => {
       setVerified(true);
       setAccountStatus('admin');
       setAdminData(adminInfo);
+      isAdminRef.current = true;
+      setIsAdmin(true);
       // FIX: use the single write path — no window event, no direct localStorage
       setBranchFromAuth(adminInfo.branchId);
+      return cred.user;
+    }
+
+    // Owner login — cross-branch, no branch binding required.
+    const ownerInfo = await checkIfOwner(cred.user.uid);
+    if (ownerInfo) {
+      setRole('owner');
+      setOwnerData(ownerInfo);
+      setProfileBranch(null);
+      setVerified(true);
+      setVerificationStatus('verified');
+      setAccountStatus('owner');
+      setCompletedProfile(true);
+      isAdminRef.current = false;
+      setIsAdmin(false);
+      isOwnerRef.current = true;
       return cred.user;
     }
 
@@ -431,6 +552,8 @@ export const AuthProvider = ({ children }) => {
       setProfileDoc({ id: branchSnap.id, ...data });
       setProfileDocPath(`branches/${selectedBranchId}/users/${cred.user.uid}`);
       setAccountStatus(data?.status || null);
+      isAdminRef.current = false;
+      setIsAdmin(false);
 
       try { await syncEmailVerificationIfNeeded(selectedBranchId); } catch (e) { /* silent */ }
 
@@ -511,6 +634,7 @@ export const AuthProvider = ({ children }) => {
       setAuthEmailVerified(true);
       setCompletedProfile(true);
       isAdminRef.current = true;
+      setIsAdmin(true);
       setBranchFromAuth(adminInfo.branchId);
       return { user: googleUser, completedProfile: true };
     }
@@ -532,6 +656,8 @@ export const AuthProvider = ({ children }) => {
       setAccountStatus(data.status || null);
       setAuthEmailVerified(true);
       setCompletedProfile(isProfileComplete);
+      isAdminRef.current = false;
+      setIsAdmin(false);
       return { user: googleUser, completedProfile: isProfileComplete };
     }
 
@@ -599,6 +725,7 @@ export const AuthProvider = ({ children }) => {
       setAuthEmailVerified(true);
       setCompletedProfile(true);
       isAdminRef.current = true;
+      setIsAdmin(true);
       setBranchFromAuth(adminInfo.branchId);
       return { user: googleUser, isNewUser: false, completedProfile: true };
     }
@@ -620,6 +747,8 @@ export const AuthProvider = ({ children }) => {
       setAccountStatus(data.status || null);
       setAuthEmailVerified(true);
       setCompletedProfile(isProfileComplete);
+      isAdminRef.current = false;
+      setIsAdmin(false);
       return { user: googleUser, isNewUser: false, completedProfile: isProfileComplete };
     }
 
@@ -644,6 +773,8 @@ export const AuthProvider = ({ children }) => {
     setAccountStatus('incomplete');
     setAuthEmailVerified(true);
     setCompletedProfile(false);
+    isAdminRef.current = false;
+    setIsAdmin(false);
 
     return { user: googleUser, isNewUser: true, completedProfile: false };
   };
@@ -701,6 +832,9 @@ export const AuthProvider = ({ children }) => {
       birthDate: extraData.birthDate || null,
       birthPlace: extraData.birthPlace || null,
       address: extraData.address || null,
+      // Educational institution is REQUIRED on every person record. Defaults to
+      // «حر» (unaffiliated) as a safety net so it is never empty/null.
+      school: normalizeSchool(extraData.school),
       phoneNumber: extraData.phoneNumber || null,
       phone: extraData.phoneNumber || null,
       registrationNumber: extraData.registrationNumber || null,
@@ -750,6 +884,8 @@ export const AuthProvider = ({ children }) => {
     setProfileBranch(branchId);
     setAuthEmailVerified(false);
     setAccountStatus('email_pending');
+    isAdminRef.current = false;
+    setIsAdmin(false);
 
     return cred.user;
   };
@@ -771,7 +907,11 @@ export const AuthProvider = ({ children }) => {
     setAccountStatus(null);
     setEmailVerificationSyncing(false);
     setAdminData(null);
+    setOwnerData(null);
     setCompletedProfile(null);
+    isAdminRef.current = false;
+    isOwnerRef.current = false;
+    setIsAdmin(null);
 
     // FIX: resetBranch() clears context + localStorage without triggering a
     // second signOut (the old clearBranch() called signOut internally, causing
@@ -781,6 +921,10 @@ export const AuthProvider = ({ children }) => {
     if (adminListenerRef.current) {
       adminListenerRef.current();
       adminListenerRef.current = null;
+    }
+    if (ownerListenerRef.current) {
+      ownerListenerRef.current();
+      ownerListenerRef.current = null;
     }
   };
 
@@ -800,6 +944,7 @@ export const AuthProvider = ({ children }) => {
     accountStatus,
     emailVerificationSyncing,
     adminData,
+    ownerData,
     loading,
     login,
     loginWithGoogle,

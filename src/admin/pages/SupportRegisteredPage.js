@@ -1,11 +1,14 @@
-// SupportRegisteredPage — ARCHIVE of APPROVED support-lesson registrations.
+// SupportRegisteredPage — the roll of monthly support-lesson subscriptions.
 //
-// Answers "who is registered in support lessons (after approval)?" — a
-// management/archive view, NOT a verification queue. Pending/rejected requests
-// are handled on the Payments Verification page and are filtered out here:
-// we only show records whose computed status is `active` or `expired`
-// (i.e. already verified). Support lessons are subscription-based, so this page
-// keeps the legitimate management actions renew / print / delete (NOT verify/reject).
+// Support is billed per calendar month, so this page is really a subscription
+// book: who is active, who lapsed, and who needs renewing. Records are shown
+// when their computed status is `active` or `expired`; anything else is a legacy
+// row from the deleted receipt-approval workflow (a support registration now
+// only exists because money was captured) and is filtered out rather than
+// presented as pending work.
+//
+// Actions are management-only: renew, edit (correct a cycle / amount, writing a
+// ledger adjustment), print, delete. There is no verify/reject.
 //
 // Branch isolation: streamSupportLessonRegistrations filters where branchId == ;
 // getUsersByIds is branch-scoped. Early-return when no branch is selected.
@@ -13,7 +16,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   BookOpen, CheckCircle2, Clock3, Layers, Download, UserPlus,
-  Eye, Printer, Trash2, RefreshCw, Phone, Loader2,
+  Eye, Printer, Trash2, RefreshCw, Phone, Loader2, Pencil,
 } from 'lucide-react';
 import { useBranch } from '../../contexts/BranchContext';
 import { useAuth } from '../../contexts/AuthContext';
@@ -27,6 +30,7 @@ import { exportToCsv, generateFilename } from '../../utils/csvExport';
 import { printRecord } from '../../utils/printRecord';
 import { getComputedStatus, getExpiryLabel } from '../../utils/registrationUtils';
 import AddSupportStudentModal from '../components/AddSupportStudentModal';
+import EditSupportRegistrationModal from '../components/EditSupportRegistrationModal';
 import AdminModal from '../components/AdminModal';
 import AdminConfirmDialog from '../components/AdminConfirmDialog';
 import { useToast } from '../components/ToastNotifications';
@@ -58,7 +62,7 @@ const SubBadge = ({ status }) => (
 );
 
 // ── Detail drawer ────────────────────────────────────────────────────────────────
-const DetailDrawer = ({ entry, status, busy, onClose, onRenew, onPrint, onDelete }) => (
+const DetailDrawer = ({ entry, status, busy, onClose, onRenew, onEdit, onPrint, onDelete }) => (
   <AdminModal
     open
     onClose={onClose}
@@ -73,6 +77,13 @@ const DetailDrawer = ({ entry, status, busy, onClose, onRenew, onPrint, onDelete
           className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-secondary-200 bg-secondary-50 py-2.5 text-sm font-semibold text-secondary-700 transition-colors hover:bg-secondary-100 disabled:opacity-60"
         >
           {busy === 'renewing' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} تجديد
+        </button>
+        <button
+          onClick={() => onEdit(entry)}
+          disabled={!!busy}
+          className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-gray-200 py-2.5 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-60"
+        >
+          <Pencil className="h-4 w-4" /> تعديل
         </button>
         <button
           onClick={() => onPrint(entry)}
@@ -131,6 +142,7 @@ const SupportRegisteredPage = () => {
 
   const [drawer, setDrawer] = useState(null);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [editEntry, setEditEntry] = useState(null);
   const [confirm, setConfirm] = useState({ open: false, type: null, entry: null });
   const [busy, setBusy] = useState({});
 
@@ -306,6 +318,7 @@ const SupportRegisteredPage = () => {
           busy={busy[drawer.id]}
           onClose={() => setDrawer(null)}
           onRenew={askRenew}
+          onEdit={(e) => { setDrawer(null); setEditEntry(e); }}
           onPrint={handlePrint}
           onDelete={askDelete}
         />
@@ -315,6 +328,13 @@ const SupportRegisteredPage = () => {
           branchId={selectedBranchId}
           onClose={() => setShowAddModal(false)}
           onSuccess={() => setShowAddModal(false)}
+        />
+      )}
+      {editEntry && (
+        <EditSupportRegistrationModal
+          registration={editEntry}
+          onClose={() => setEditEntry(null)}
+          onSuccess={() => showToast('success', 'تم حفظ التعديلات')}
         />
       )}
       <AdminConfirmDialog
@@ -426,6 +446,9 @@ const SupportRegisteredPage = () => {
                               </button>
                               <button onClick={() => askRenew(e)} disabled={!!b} aria-label="تجديد" title="تجديد" className="inline-flex items-center justify-center rounded-lg border border-secondary-200 bg-secondary-50 p-1.5 text-secondary-600 transition-colors hover:bg-secondary-100 disabled:opacity-60">
                                 {b === 'renewing' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                              </button>
+                              <button onClick={() => setEditEntry(e)} aria-label="تعديل" title="تعديل" className="inline-flex items-center justify-center rounded-lg border border-gray-200 p-1.5 text-gray-500 transition-colors hover:bg-gray-50 hover:text-primary">
+                                <Pencil className="h-4 w-4" />
                               </button>
                               <button onClick={() => handlePrint(e)} aria-label="طباعة" title="طباعة" className="inline-flex items-center justify-center rounded-lg border border-gray-200 p-1.5 text-gray-500 transition-colors hover:bg-gray-50 hover:text-primary">
                                 <Printer className="h-4 w-4" />

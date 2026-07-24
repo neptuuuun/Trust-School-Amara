@@ -83,7 +83,7 @@ app.post('/api/createSupportLessonRegistration', async (req, res) => {
     console.log('🔐 User authenticated:', decoded.uid);
 
     // Extract data
-    const { branchId, lessonId, durationInMonths = 1, paymentProofUrl } = req.body;
+    const { branchId, lessonId, durationInMonths = 1 } = req.body;
     
     if (!branchId || !lessonId) {
       return res.status(400).json({ 
@@ -133,7 +133,6 @@ app.post('/api/createSupportLessonRegistration', async (req, res) => {
       yearName,
       teacherName,
       durationInMonths,
-      paymentProofUrl,
       status: 'pending',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       userName: userData.fullName || userData.name || '',

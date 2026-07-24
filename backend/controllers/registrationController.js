@@ -11,6 +11,7 @@ const { writeAudit } = require('../services/auditService');
 const academicYear = require('../services/academicYear');
 const supportEligibility = require('../services/supportEligibility');
 const financeSettings = require('../services/financeSettings');
+const { recordManualPaymentOrder } = require('../services/paymentOrderLog');
 const { normalizeSchool } = require('../constants');
 
 /**
@@ -18,8 +19,13 @@ const { normalizeSchool } = require('../constants');
  * One entry per (registration, month) — recurring renewals create distinct
  * entries. Deterministic + idempotent id matches the backfill scheme so live and
  * historical recording never double-count. Best-effort (never breaks the verify).
+ *
+ * Only the ADMIN-side support paths (create / verify / renew) reach this helper —
+ * the Chargily support path writes its own ledger entry in chargilyController —
+ * so the paymentOrder receipt written below is always a genuine cash collection.
  */
 async function recordSupportRevenue(registrationId, regData = {}, monthKey, actor, paidAt = new Date()) {
+  const cycleAmount = regData.totalPrice ?? regData.proratedAmount ?? regData.monthlyPrice ?? 0;
   try {
     await ledger.recordPayment({
       branchId:    regData.branchId,
@@ -31,7 +37,7 @@ async function recordSupportRevenue(registrationId, regData = {}, monthKey, acto
       classId:     regData.classId || regData.lessonId || null,
       className:   regData.groupName || null,
       teacherName: regData.teacherName || null,
-      amount:      regData.totalPrice ?? regData.proratedAmount ?? regData.monthlyPrice ?? 0,
+      amount:      cycleAmount,
       period:      monthKey,
       sourceCollection: 'supportLessonRegistrations',
       sourceDocId: `${registrationId}_${monthKey}`,
@@ -41,6 +47,19 @@ async function recordSupportRevenue(registrationId, regData = {}, monthKey, acto
   } catch (e) {
     console.error('[support] ledger error:', e.message);
   }
+
+  // Operational receipt so the cash the admin took for this cycle is findable in
+  // the branch payment log. One order per (registration, cycle) — a renewal is a
+  // new cycle and therefore a new receipt.
+  await recordManualPaymentOrder({
+    branchId: regData.branchId,
+    serviceType: 'support',
+    sourceCollection: 'supportLessonRegistrations',
+    sourceDocId: `${registrationId}_${monthKey}`,
+    regData,
+    amount: cycleAmount,
+    actor,
+  });
 }
 
 // ── Support-level classification + eligibility (UNBYPASSABLE GATE) ────────────
@@ -290,7 +309,7 @@ async function hasPendingAnnualFeeBundle(branchId, userId) {
  * Mirrors the logic of the `createSupportLessonRegistration` Cloud Function.
  *
  * Body: { branchId, lessonId, durationInMonths, startDate, endDate,
- *         academicYear, paymentProofUrl, monthlyPrice, totalPrice, source }
+ *         academicYear, monthlyPrice, totalPrice, source }
  * Response 201: { id }
  */
 const createSupportLessonRegistration = async (req, res, next) => {
@@ -303,7 +322,6 @@ const createSupportLessonRegistration = async (req, res, next) => {
       startDate:        startDateRaw,
       endDate:          endDateRaw,
       academicYear:     academicYearRaw,
-      paymentProofUrl:  paymentProofUrlRaw,
       paymentMethod:    paymentMethodRaw,
       monthlyPrice,
       totalPrice,
@@ -312,7 +330,6 @@ const createSupportLessonRegistration = async (req, res, next) => {
     } = req.body;
 
     const durationInMonths = Number.isInteger(Number(durationRaw)) ? Number(durationRaw) : 1;
-    const paymentProofUrl  = String(paymentProofUrlRaw || '');
     const paymentMethod    = String(paymentMethodRaw   || '').trim();
 
     // ── Validate inputs ──────────────────────────────────────────────────────
@@ -514,7 +531,6 @@ const createSupportLessonRegistration = async (req, res, next) => {
       annualFeeAmount: annualFeeSnapshot,
       totalAmount:    serverTotalPrice + annualFeeSnapshot,
       paymentMethod,
-      paymentProofUrl,
       startDate:      admin.firestore.Timestamp.fromDate(startDateObj),
       endDate:        admin.firestore.Timestamp.fromDate(endDateObj),
       academicYear,
@@ -657,7 +673,6 @@ const adminCreateSupportLessonRegistration = async (req, res, next) => {
       source:         'admin',
       type:           'SUPPORT_REGISTRATION',
       paymentMethod:  'physical',
-      paymentProofUrl: '',
       monthlyPrice:   proration ? proration.monthlyPrice : null,
       totalPrice:     proration ? proration.amountDue    : null,
       ...(proration ? {
@@ -928,7 +943,6 @@ const adminVerifySupportLessonRegistration = async (req, res, next) => {
               amount:        annualFeeDue,
               source:        'supportRegistration',
               triggeredBySupportRegId: registrationId,
-              receiptUrl:    regData.paymentProofUrl || '',
               createdAt:     admin.firestore.FieldValue.serverTimestamp(),
               verifiedAt:    admin.firestore.FieldValue.serverTimestamp(),
               verifiedBy:    { uid: adminUid, email: adminEmail, name: '' },
@@ -1163,6 +1177,13 @@ const adminEditSupportLessonRegistration = async (req, res, next) => {
   try {
     const { id: registrationId } = req.params;
     const body = req.body || {};
+    // The audit + ledger-adjustment block below reads these. They were never
+    // declared in this scope, so ANY successful edit threw a ReferenceError
+    // after the document had already been written — the write landed, the audit
+    // entry did not, and the caller saw a 500. It never surfaced because no UI
+    // reached this endpoint; the support "تعديل" action now does.
+    const adminUid   = req.user?.uid   || '';
+    const adminEmail = req.user?.email || '';
 
     if (!registrationId)
       return res.status(400).json({ code: 'missing-id', message: 'registrationId is required.' });

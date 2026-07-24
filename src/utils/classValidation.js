@@ -44,12 +44,16 @@ export const validateSubject = ({ name } = {}) => {
   return { valid: Object.keys(errors).length === 0, errors };
 };
 
+/** Allowed support group types (mirror of supportClassification.GROUP_TYPES). */
+export const SUPPORT_GROUP_TYPES = ['normal_support', 'low_level_support'];
+
 /**
  * Validate a class's scalar fields (schedules validated separately).
- * @param {{teacherName?: string, groupName?: string, capacity?: any, price?: any}} cls
- * @returns {{ valid: boolean, errors: { teacherName?, groupName?, capacity?, price? } }}
+ * @param {{teacherName?, groupName?, capacity?, price?, groupType?}} cls
+ * @param {{ requireGroupType?: boolean }} [opts] — support classes require a groupType
+ * @returns {{ valid: boolean, errors: { teacherName?, groupName?, capacity?, price?, groupType? } }}
  */
-export const validateClass = ({ teacherName, groupName, capacity, price } = {}) => {
+export const validateClass = ({ teacherName, groupName, capacity, price, groupType } = {}, opts = {}) => {
   const errors = {};
 
   if (!teacherName || !String(teacherName).trim()) {
@@ -57,6 +61,11 @@ export const validateClass = ({ teacherName, groupName, capacity, price } = {}) 
   }
   if (!groupName || !String(groupName).trim()) {
     errors.groupName = 'يرجى إدخال اسم المجموعة';
+  }
+
+  // groupType: required for support classes; must be one of the allowed values.
+  if (opts.requireGroupType && !SUPPORT_GROUP_TYPES.includes(groupType)) {
+    errors.groupType = 'يرجى اختيار نوع المجموعة';
   }
 
   // capacity: optional, but if provided must be a non-negative integer

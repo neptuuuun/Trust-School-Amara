@@ -12,11 +12,13 @@ import SupportLessonsPage from './pages/SupportLessonsPage';
 import YearPage from './pages/YearPage';
 import TrainingsPage from './pages/TrainingsPage';
 import CourseRegistrationPage from './pages/CourseRegistrationPage';
-import PaymentPage from './pages/PaymentPage';
+import PaymentStatusPage from './pages/PaymentStatusPage';
 import RegistrationConfirmationPage from './pages/RegistrationConfirmationPage';
 import BranchSelector from './pages/BranchSelector';
 import StudentDashboard from './pages/StudentDashboard';
 import AdminDashboard from './admin/AdminDashboard';
+import OwnerDashboard from './owner/OwnerDashboard';
+import OwnerLogin from './owner/OwnerLogin';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import AdminLogin from './admin/AdminLogin';
@@ -70,13 +72,15 @@ function BranchGuard() {
 
   const isSelectingBranch = location.pathname === '/select-branch' || location.pathname === '/branch-selector';
   const isAdminRoute = location.pathname.startsWith('/admin');
+  const isOwnerRoute = location.pathname.startsWith('/owner');
   const isLoginRoute = location.pathname === '/login';
   const isProfileRoute = location.pathname === '/profile';
 
   // Require a branch for non-exempt routes.
   // Read from selectedBranchId (context) — kept in sync with localStorage by
   // selectBranch() and setBranchFromAuth(), so no direct localStorage reads needed.
-  if (!selectedBranchId && !isSelectingBranch && !isAdminRoute && !isLoginRoute && !isProfileRoute) {
+  // Owner routes are cross-branch and therefore branch-exempt (like admin routes).
+  if (!selectedBranchId && !isSelectingBranch && !isAdminRoute && !isOwnerRoute && !isLoginRoute && !isProfileRoute) {
     return <Navigate to="/select-branch" replace state={{ from: location }} />;
   }
 
@@ -125,12 +129,41 @@ function RequireAdmin() {
     return <Navigate to="/admin/login" state={{ from: location }} replace />;
   }
 
+  // An owner who lands on an admin route is sent to their own dashboard.
+  if (role === 'owner') {
+    return <Navigate to="/owner" replace />;
+  }
+
   // Enforce branch match: user must belong to selected branch
   if (branch && selectedBranchId && branch !== selectedBranchId) {
     return <Navigate to="/admin/login" replace />;
   }
 
   if (role !== 'admin') {
+    return <Navigate to="/home" replace />;
+  }
+
+  return <Outlet />;
+}
+
+// Owner route guard — only the cross-branch owner role may access /owner/*.
+function RequireOwner() {
+  const { user, role, loading } = useAuth();
+  const location = useLocation();
+
+  if (loading) return <LoadingScreen />;
+
+  if (!user) {
+    return <Navigate to="/owner/login" state={{ from: location }} replace />;
+  }
+
+  // Wait until AuthContext finishes resolving the role.
+  if (role == null) {
+    return <LoadingScreen message="جاري تحميل لوحة المالك..." />;
+  }
+
+  if (role !== 'owner') {
+    if (role === 'admin') return <Navigate to="/admin" replace />;
     return <Navigate to="/home" replace />;
   }
 
@@ -202,6 +235,7 @@ function RequireStudent() {
 
   if (role !== 'student') {
     if (role === 'admin') return <Navigate to={branch ? `/admin/${branch}` : '/admin/login'} replace />;
+    if (role === 'owner') return <Navigate to="/owner" replace />;
     return <Navigate to="/home" replace />;
   }
 
@@ -264,9 +298,17 @@ function App() {
                 {/* Admin Login Route - Public access */}
                 <Route path="/admin/login" element={<AdminLogin />} />
 
+                {/* Owner Login Route - Public access */}
+                <Route path="/owner/login" element={<OwnerLogin />} />
+
                 {/* Admin Routes - Protected by RequireAdmin guard */}
                 <Route element={<RequireAdmin />}>
                   <Route path="/admin/*" element={<AdminDashboard />} />
+                </Route>
+
+                {/* Owner Routes - Protected by RequireOwner guard (cross-branch) */}
+                <Route element={<RequireOwner />}>
+                  <Route path="/owner/*" element={<OwnerDashboard />} />
                 </Route>
 
                 {/* Student Dashboard - Protected by RequireStudent guard */}
@@ -275,13 +317,15 @@ function App() {
                   <Route path="/student-dashboard" element={<Navigate to="/profile" replace />} />
                   <Route element={<PublicLayout />}>
                     <Route path="course-registration" element={<CourseRegistrationPage />} />
-                    <Route path="payment" element={<PaymentPage />} />
                     <Route path="registration-confirmation" element={<RegistrationConfirmationPage />} />
                     <Route path="language-registration" element={<LanguageRegistrationForm />} />
                     <Route path="support-lesson-registration" element={<SupportLessonRegistrationForm />} />
                     <Route path="training-registration" element={<TrainingRegistrationForm />} />
                   </Route>
                 </Route>
+
+                {/* Payment return page — accessible without auth (Chargily redirects here) */}
+                <Route path="/payment/status" element={<PaymentStatusPage />} />
 
                 {/* Public Routes with shared layout */}
                 <Route element={<PublicLayout />}>

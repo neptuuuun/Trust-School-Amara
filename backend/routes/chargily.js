@@ -20,9 +20,6 @@ router.get('/order/:orderId', verifyToken, ctrl.getOrderStatus);
 // Student: manual fallback if webhook was missed (checks Chargily API directly)
 router.post('/verify/:orderId', verifyToken, ctrl.verifyAndProcess);
 
-// Admin: record an in-school cash payment (creates order + registration instantly)
-router.post('/cash', verifyToken, requireAdmin, ctrl.recordCashPayment);
-
 // Admin / Owner: list payment orders
 router.get('/orders', verifyToken, requireAdmin, ctrl.listOrders);
 

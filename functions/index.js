@@ -357,7 +357,6 @@ exports.createSupportLessonRegistration = functions.https.onCall(async (data, co
   const durationInMonthsRaw = Number(data?.durationInMonths);
   const durationInMonths = Number.isFinite(durationInMonthsRaw) ? durationInMonthsRaw : 1;
   const source = String(data?.source || 'manual');
-  const paymentProofUrl = String(data?.paymentProofUrl || '');
   const monthlyPrice = data?.monthlyPrice ?? null;
   const totalPrice = data?.totalPrice ?? null;
 
@@ -453,7 +452,6 @@ exports.createSupportLessonRegistration = functions.https.onCall(async (data, co
     status: 'pending',
     monthlyPrice,
     totalPrice,
-    paymentProofUrl,
     startDate: admin.firestore.Timestamp.fromDate(startDateObj),
     endDate: admin.firestore.Timestamp.fromDate(endDateObj),
     academicYear,
@@ -624,7 +622,6 @@ exports.exportRegistrationsCsv = functions.https.onCall(async (data, context) =>
       'guardianPhone',
       'teacherName',
       'price',
-      'receiptUrl',
       'branchId'
     ];
 
@@ -641,7 +638,6 @@ exports.exportRegistrationsCsv = functions.https.onCall(async (data, context) =>
       guardianPhone: entry.guardianPhone || '',
       teacherName: entry.teacherName || '',
       price: entry.languagePrice || '',
-      receiptUrl: entry.receiptUrl || '',
       branchId: entry.branchId || branchId
     }));
 
@@ -678,7 +674,6 @@ exports.exportRegistrationsCsv = functions.https.onCall(async (data, context) =>
       'studentPhone',
       'trainingId',
       'registrationId',
-      'paymentProof',
       'description',
       'branchId'
     ];
@@ -695,7 +690,6 @@ exports.exportRegistrationsCsv = functions.https.onCall(async (data, context) =>
       studentPhone: entry.studentPhone || '',
       trainingId: entry.trainingId || '',
       registrationId: entry.registrationId || entry.id || '',
-      paymentProof: entry.paymentProof || '',
       description: entry.trainingDescription || '',
       branchId: entry.branchId || branchId
     }));
@@ -854,7 +848,6 @@ exports.exportLanguagesCsv = functions
           'guardianPhone',
           'teacherName',
           'price',
-          'receiptUrl',
           'branchId',
           'studentId'
         ];
@@ -879,7 +872,6 @@ exports.exportLanguagesCsv = functions
             guardianPhone: safeCsvValue(entry.guardianPhone),
             teacherName: safeCsvValue(entry.teacherName),
             price: safeCsvValue(entry.languagePrice),
-            receiptUrl: safeCsvValue(entry.receiptUrl),
             branchId: safeCsvValue(entry.branchId || branchId),
             studentId: safeCsvValue(entry.studentId || entry.userId)
           };
@@ -987,7 +979,6 @@ exports.exportRegistrationsCsvHttp = functions
         guardianPhone: safeCsvValue(entry.guardianPhone),
         teacherName: safeCsvValue(entry.teacherName),
         price: safeCsvValue(entry.languagePrice),
-        receiptUrl: safeCsvValue(entry.receiptUrl),
         branchId: safeCsvValue(entry.branchId || branchId),
         studentId: safeCsvValue(entry.studentId || entry.userId)
       });
@@ -1004,7 +995,6 @@ exports.exportRegistrationsCsvHttp = functions
         studentPhone: safeCsvValue(entry.studentPhone || profile?.phoneNumber || profile?.phone),
         trainingId: safeCsvValue(entry.trainingId || entry.selectedTrainingId),
         registrationId: safeCsvValue(entry.registrationId || entry.formId || entry.id),
-        paymentProof: safeCsvValue(entry.paymentProof || entry.receiptUrl),
         description: safeCsvValue(entry.trainingDescription),
         birthDate: safeCsvValue(entry.birthDate),
         birthPlace: safeCsvValue(entry.birthPlace),
@@ -1042,7 +1032,6 @@ exports.exportRegistrationsCsvHttp = functions
           'guardianPhone',
           'teacherName',
           'price',
-          'receiptUrl',
           'branchId',
           'studentId'
         ];
@@ -1059,7 +1048,6 @@ exports.exportRegistrationsCsvHttp = functions
           'studentPhone',
           'trainingId',
           'registrationId',
-          'paymentProof',
           'description',
           'birthDate',
           'birthPlace',

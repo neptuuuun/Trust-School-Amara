@@ -11,11 +11,8 @@ import {
   orderBy,
   doc,
   getDoc,
-  updateDoc,
 } from 'firebase/firestore';
 import { useBranch } from '../contexts/BranchContext';
-import PaymentUploadForm from '../components/PaymentUploadForm';
-import PaymentCorrectionBanner from '../components/payments/PaymentCorrectionBanner';
 import Header from '../components/Header';
 import Footer from '../components/Footer';
 import { submitVerificationRequest } from '../services/userService';
@@ -26,6 +23,7 @@ import {
 } from '../services/firestoreService';
 import { getYearById } from '../data/studyLevels';
 import { getComputedStatus, getExpiryLabel, STATUS_UI } from '../utils/registrationUtils';
+import { SCHOOL_HINT_AR, isValidSchool } from '../utils/personData';
 import { formatDate, formatMonthYear } from '../utils/dateUtils';
 import {
   User,
@@ -70,8 +68,6 @@ const StudentDashboard = () => {
   // Approved training registrations (from trainingsRegistered collection, incl. admin-created)
   const [registeredTrainings, setRegisteredTrainings] = useState([]);
   const [notifications, setNotifications] = useState([]);
-  const [showPaymentForm, setShowPaymentForm] = useState(false);
-  const [selectedPayment, setSelectedPayment] = useState(null);
   const [loading, setLoading] = useState(true);
   const [annualFeeStatus, setAnnualFeeStatus] = useState({ paid: false, status: 'unpaid' });
   const [registrationSnapshot, setRegistrationSnapshot] = useState({ languages: [], trainings: [], annualFeeHistory: [] });
@@ -83,21 +79,15 @@ const StudentDashboard = () => {
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileDraft, setProfileDraft] = useState({});
   const [profileError, setProfileError] = useState('');
-  const [paymentSuccess, setPaymentSuccess] = useState(false);
   const [verificationFeedback, setVerificationFeedback] = useState({ type: '', message: '' });
 
   const isActiveRef = useRef(false);
   const listenersSetupRef = useRef(false);
-  const supportYearBackfillAttemptRef = useRef(new Set());
 
   // Annual fee computed values - based on SINGLE SOURCE OF TRUTH (branches/{branchId}/annualPayments)
   const isAnnualFeePaid = annualFeeStatus.status === 'verified';
   const isAnnualFeePending = annualFeeStatus.status === 'pending';
-  // needs_correction is its own state: the payment already exists and must be
-  // RESUBMITTED via the correction banner — never treated as unpaid (which would
-  // wrongly prompt the student to create a brand-new payment).
-  const isAnnualFeeNeedsCorrection = annualFeeStatus.status === 'needs_correction';
-  const isAnnualFeeUnpaid = !isAnnualFeePaid && !isAnnualFeePending && !isAnnualFeeNeedsCorrection;
+  const isAnnualFeeUnpaid = !isAnnualFeePaid && !isAnnualFeePending;
   const AnnualFeeIcon = isAnnualFeePaid ? Check : isAnnualFeePending ? Clock : X;
   const annualFeeIconClasses = isAnnualFeePaid
     ? 'bg-green-100 text-green-600'
@@ -445,23 +435,6 @@ const StudentDashboard = () => {
     }
   };
 
-  const handlePaymentUpload = (paymentType, amount, serviceRef, serviceName) => {
-    setSelectedPayment({
-      type: paymentType,
-      amount,
-      serviceRef,
-      serviceName
-    });
-    setShowPaymentForm(true);
-  };
-
-  const handlePaymentComplete = (paymentData) => {
-    setShowPaymentForm(false);
-    setSelectedPayment(null);
-    setPaymentSuccess(true);
-    setTimeout(() => setPaymentSuccess(false), 6000);
-  };
-
   const handleEditProfile = () => {
     const raw = studentData?.birthDate;
     let birthDate = '';
@@ -488,10 +461,15 @@ const StudentDashboard = () => {
 
   const handleSaveProfile = async () => {
     if (!user?.uid || !selectedBranchId) return;
+    // Educational institution is REQUIRED — it may never be cleared to empty.
+    if (!isValidSchool(profileDraft.school)) {
+      setProfileError('المؤسسة التعليمية مطلوبة (اكتب «حر» إن لم تكن منتسباً إلى مدرسة).');
+      return;
+    }
     try {
       setProfileSaving(true);
       setProfileError('');
-      await updateUserProfile(selectedBranchId, user.uid, profileDraft);
+      await updateUserProfile(selectedBranchId, user.uid, { ...profileDraft, school: profileDraft.school.trim() });
       setEditingProfile(false);
       setProfileDraft({});
     } catch (e) {
@@ -580,43 +558,6 @@ const StudentDashboard = () => {
   const pendingTrainingForms  = allTrainingForms.filter((f) => String(f.status || '').toLowerCase() === 'pending');
   const rejectedTrainingForms = allTrainingForms.filter((f) => String(f.status || '').toLowerCase() === 'rejected');
 
-  // Payments the admin has flagged for correction (needs_correction) across every
-  // payment type. The PaymentCorrectionBanner lets the student re-upload a proof,
-  // which returns the payment to 'pending' — the registration is never lost.
-  const isNeedsCorrection = (s) => String(s || '').toLowerCase() === 'needs_correction';
-  const correctionItems = [
-    ...allLanguageForms.filter((f) => isNeedsCorrection(f.status)).map((f) => ({
-      key: `lang-${f.id}`, type: 'language', source: null,
-      serviceName: `${f.languageName || 'دورة لغة'}${f.levelLabel ? ` - ${f.levelLabel}` : ''}`,
-      reason: f.correctionReason || '',
-      requestedAt: f.correctionRequestedAt?.toDate?.() || null,
-      studentId: user?.uid, formId: f.formId || f.id,
-    })),
-    ...allTrainingForms.filter((f) => isNeedsCorrection(f.status)).map((f) => ({
-      key: `train-${f.id}`, type: 'training', source: null,
-      serviceName: f.trainingTitle || f.trainingName || 'دورة تكوينية',
-      reason: f.correctionReason || '',
-      requestedAt: f.correctionRequestedAt?.toDate?.() || null,
-      studentId: user?.uid, entryId: f.id,
-    })),
-    ...supportRegistrations
-      .filter((r) => isNeedsCorrection(r.status) && r.source !== 'annualFee')
-      .map((r) => ({
-        key: `sup-${r.id}`, type: 'supportLesson', source: 'monthly',
-        serviceName: r.subjectName || r.lessonName || 'درس دعم',
-        reason: r.correctionReason || '',
-        requestedAt: r.correctionRequestedAt?.toDate?.() || null,
-        registrationId: r.id,
-      })),
-    ...(isNeedsCorrection(annualFeeStatus.status) && annualFeeStatus.id ? [{
-      key: `annual-${annualFeeStatus.id}`, type: 'annual', source: null,
-      serviceName: 'الرسوم السنوية',
-      reason: annualFeeStatus.correctionReason || '',
-      requestedAt: annualFeeStatus.correctionRequestedAt || null,
-      paymentId: annualFeeStatus.id,
-    }] : []),
-  ];
-
   const normalizedSupportRegistrations = supportRegistrations
     .map((reg) => {
       const start = reg.startDate?.toDate
@@ -681,50 +622,12 @@ const StudentDashboard = () => {
     };
   })();
 
-  useEffect(() => {
-    if (!supportRegistrations || supportRegistrations.length === 0) return;
-
-    const regsMissingYear = supportRegistrations.filter((reg) => {
-      if (!reg || !reg.id) return false;
-      if (supportYearBackfillAttemptRef.current.has(reg.id)) return false;
-      return !reg.studyYearId && !reg.studyYearLabel && Boolean(reg.lessonId);
-    });
-
-    if (regsMissingYear.length === 0) return;
-
-    regsMissingYear.forEach(async (reg) => {
-      supportYearBackfillAttemptRef.current.add(reg.id);
-
-      try {
-        const branchId = reg.branchId || selectedBranchId;
-        if (!branchId) return;
-
-        // New unified catalog: lessonId == classId. Read classes first, then
-        // fall back to the legacy supportLessons collection for old records.
-        let lessonSnap = await getDoc(doc(db, 'branches', branchId, 'classes', reg.lessonId));
-        if (!lessonSnap.exists()) {
-          lessonSnap = await getDoc(doc(db, 'branches', branchId, 'supportLessons', reg.lessonId));
-        }
-        if (!lessonSnap.exists()) return;
-
-        const lesson = lessonSnap.data() || {};
-        const studyYearId = lesson.studyYear || lesson.year || lesson.grade || null;
-        if (!studyYearId) return;
-
-        const studyYearLabel = lesson.studyLevel || '';
-        const studyLevelId = lesson.level || null;
-
-        const registrationRef = doc(db, 'supportLessonRegistrations', reg.id);
-        await updateDoc(registrationRef, {
-          studyYearId,
-          studyYearLabel,
-          studyLevelId
-        });
-      } catch (e) {
-        console.error('Support lesson year backfill failed:', e);
-      }
-    });
-  }, [supportRegistrations, selectedBranchId]);
+  // NOTE: a client-side studyYear backfill used to live here, writing
+  // studyYearId/studyYearLabel/studyLevelId onto supportLessonRegistrations docs.
+  // It was removed because that collection is backend-write-only (Firestore rule
+  // `allow update: if false`), so the updateDoc always failed with permission-denied
+  // and silently logged an error on every dashboard load. If legacy records need
+  // these fields backfilled, do it in the Express backend (Admin SDK), not the client.
 
   useEffect(() => {
     if (!selectedBranchId || !supportRegistrations || supportRegistrations.length === 0) {
@@ -886,13 +789,6 @@ const StudentDashboard = () => {
             pendingLanguageForms={pendingLanguageForms}
             pendingTrainingForms={pendingTrainingForms}
             supportRegistrations={supportRegistrations}
-          />
-
-          {/* Payment correction alert — student must re-upload a corrected proof */}
-          <PaymentCorrectionBanner
-            items={correctionItems}
-            branchId={selectedBranchId}
-            studentId={user?.uid}
           />
 
           {/* Header */}
@@ -1105,15 +1001,21 @@ const StudentDashboard = () => {
                 <div>
                   <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
                     <BookOpen className="w-3.5 h-3.5" />
-                    المدرسة / الثانوية
+                    المؤسسة التعليمية / المدرسة
+                    {editingProfile && <span className="text-red-500">*</span>}
                   </label>
                   {editingProfile ? (
-                    <input
-                      type="text"
-                      value={profileDraft.school}
-                      onChange={(e) => setProfileDraft((p) => ({ ...p, school: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-                    />
+                    <>
+                      <input
+                        type="text"
+                        required
+                        value={profileDraft.school}
+                        onChange={(e) => setProfileDraft((p) => ({ ...p, school: e.target.value }))}
+                        placeholder="اسم المؤسسة التعليمية"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                      />
+                      <p className="mt-1 text-xs text-gray-500">{SCHOOL_HINT_AR}</p>
+                    </>
                   ) : (
                     <p className="text-sm font-medium text-gray-900">{studentData?.school || '—'}</p>
                   )}
@@ -1268,29 +1170,6 @@ const StudentDashboard = () => {
                 </div>
               </div>
             </div>
-          )}
-
-          {/* Payment success toast */}
-          {paymentSuccess && (
-            <div className="bg-green-50 border border-green-200 text-green-800 rounded-xl px-5 py-3 mb-4 flex items-center gap-3">
-              <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0" aria-hidden="true" />
-              <span>تم رفع الدفعة بنجاح. سيتم مراجعتها من قبل الإدارة.</span>
-            </div>
-          )}
-
-          {/* Payment Upload Modal */}
-          {showPaymentForm && selectedPayment && (
-            <PaymentUploadForm
-              paymentType={selectedPayment.type}
-              amount={selectedPayment.amount}
-              serviceRef={selectedPayment.serviceRef}
-              serviceName={selectedPayment.serviceName}
-              onComplete={handlePaymentComplete}
-              onCancel={() => {
-                setShowPaymentForm(false);
-                setSelectedPayment(null);
-              }}
-            />
           )}
 
           {/* Annual Fee Status */}

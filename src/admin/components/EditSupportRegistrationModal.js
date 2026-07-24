@@ -1,40 +1,70 @@
-import React, { useEffect, useState } from 'react';
-import { Edit2, Loader2 } from 'lucide-react';
+/**
+ * EditSupportRegistrationModal — correct a support-lesson subscription.
+ *
+ * WHAT CHANGED AND WHY
+ * This component existed but was wired into nothing, so an admin could DELETE a
+ * support registration (destroying a paid record) but not correct a typo or
+ * extend a cycle. It is now reachable from SupportRegisteredPage.
+ *
+ * Its status dropdown (قيد المراجعة / مؤكد / مرفوض) was also removed. Those
+ * states belong to the deleted receipt-approval workflow: a support registration
+ * now only exists because money was captured, and flipping one to
+ * pending/rejected would hide it from the archive while its ledger revenue
+ * entry stayed on the books — an invisible way to make the numbers disagree.
+ *
+ * Changing the billed amount writes an append-only ledger ADJUSTMENT (the
+ * backend never rewrites history), so a reason is required for that case and is
+ * recorded in the audit log.
+ *
+ * @param {object}   props
+ * @param {object}   props.registration  the registration document (with id)
+ * @param {function} props.onClose
+ * @param {function} props.onSuccess     called with the applied updates
+ */
+
+import React, { useEffect, useMemo, useState } from 'react';
+import { Edit2, Loader2, AlertTriangle } from 'lucide-react';
 import { adminEditSupportLessonRegistration } from '../../services/firestoreService';
 import { toDate } from '../../utils/registrationUtils';
 import AdminModal from './AdminModal';
 
-/**
- * Modal for admins to edit a support lesson registration.
- * Identity fields (branchId, userId, lessonId, createdAt) are read-only.
- *
- * @param {object}   props
- * @param {object}   props.registration  - The registration document (with id)
- * @param {function} props.onClose
- * @param {function} props.onSuccess
- */
-const EDITABLE_STATUSES = ['pending', 'verified', 'rejected'];
+const FIELD_CLASS =
+  'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary focus:ring-2 focus:ring-primary/30';
 
 const toInputDate = (value) => {
   const d = toDate(value);
   if (!d) return '';
-  return d.toISOString().slice(0, 10); // yyyy-mm-dd for <input type="date">
+  // Local date parts — toISOString() would shift the day for eastern offsets.
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 };
 
 const EditSupportRegistrationModal = ({ registration, onClose, onSuccess }) => {
-  const [status, setStatus] = useState('');
-  const [endDateStr, setEndDateStr] = useState('');
+  const [endDateStr,  setEndDateStr]  = useState('');
   const [subjectName, setSubjectName] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState('');
+  const [teacherName, setTeacherName] = useState('');
+  const [totalPrice,  setTotalPrice]  = useState('');
+  const [reason,      setReason]      = useState('');
+  const [submitting,  setSubmitting]  = useState(false);
+  const [error,       setError]       = useState('');
 
-  // Populate form from existing registration
   useEffect(() => {
     if (!registration) return;
-    setStatus(String(registration.status || 'pending').toLowerCase());
     setEndDateStr(toInputDate(registration.endDate ?? registration.expiresAt));
     setSubjectName(registration.subjectName || registration.courseName || '');
+    setTeacherName(registration.teacherName || '');
+    setTotalPrice(registration.totalPrice != null ? String(registration.totalPrice) : '');
+    setReason('');
+    setError('');
   }, [registration]);
+
+  const originalPrice = registration?.totalPrice ?? registration?.proratedAmount ?? null;
+  const priceChanged = useMemo(() => {
+    if (totalPrice === '') return false;
+    const n = Number(totalPrice);
+    if (!Number.isFinite(n)) return false;
+    return n !== Number(originalPrice ?? NaN);
+  }, [totalPrice, originalPrice]);
 
   if (!registration) return null;
 
@@ -42,22 +72,35 @@ const EditSupportRegistrationModal = ({ registration, onClose, onSuccess }) => {
     e.preventDefault();
     setError('');
 
-    const updates = { status };
-    if (subjectName.trim()) updates.subjectName = subjectName.trim();
+    const updates = {};
+    if (subjectName.trim() !== (registration.subjectName || '')) updates.subjectName = subjectName.trim();
+    if (teacherName.trim() !== (registration.teacherName || '')) updates.teacherName = teacherName.trim();
+
     if (endDateStr) {
-      const parsed = new Date(endDateStr);
-      if (!Number.isNaN(parsed.getTime())) {
-        updates.endDate = parsed;
-      }
+      const parsed = new Date(`${endDateStr}T23:59:59`);
+      if (Number.isNaN(parsed.getTime())) { setError('تاريخ الانتهاء غير صالح.'); return; }
+      if (toInputDate(registration.endDate) !== endDateStr) updates.endDate = parsed;
     }
+
+    if (priceChanged) {
+      const n = Number(totalPrice);
+      if (!Number.isFinite(n) || n < 0) { setError('المبلغ غير صالح.'); return; }
+      if (!reason.trim()) { setError('يرجى ذكر سبب تعديل المبلغ — يُسجَّل في سجل التدقيق.'); return; }
+      updates.totalPrice = n;
+    }
+
+    if (reason.trim()) updates.reason = reason.trim();
+
+    // `reason` alone is metadata, not a change.
+    const changedFields = Object.keys(updates).filter((k) => k !== 'reason');
+    if (changedFields.length === 0) { setError('لم تُجرِ أي تعديل.'); return; }
 
     try {
       setSubmitting(true);
       await adminEditSupportLessonRegistration(registration.id, updates);
-      onSuccess?.();
+      onSuccess?.(updates);
       onClose();
     } catch (err) {
-      console.error('adminEditSupportLessonRegistration error:', err);
       setError(err.message || 'حدث خطأ أثناء الحفظ.');
     } finally {
       setSubmitting(false);
@@ -69,7 +112,8 @@ const EditSupportRegistrationModal = ({ registration, onClose, onSuccess }) => {
       <button
         type="button"
         onClick={onClose}
-        className="rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+        disabled={submitting}
+        className="rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-60"
       >
         إلغاء
       </button>
@@ -90,12 +134,11 @@ const EditSupportRegistrationModal = ({ registration, onClose, onSuccess }) => {
   );
 
   return (
-    <AdminModal open onClose={onClose} size="md" icon={Edit2} title="تعديل التسجيل" footer={footer}>
-      {/* Read-only identity info */}
+    <AdminModal open onClose={onClose} size="md" icon={Edit2} title="تعديل الاشتراك" footer={footer}>
       <div className="mb-5 space-y-0.5 rounded-xl border border-gray-100 bg-gray-50 px-4 py-3 text-xs text-gray-500">
-        <p><span className="font-medium">معرف الطالب:</span> {registration.userId || '—'}</p>
-        <p><span className="font-medium">معرف الدرس:</span>  {registration.lessonId || '—'}</p>
-        <p><span className="font-medium">الفرع:</span>       {registration.branchId || '—'}</p>
+        <p><span className="font-medium">الطالب:</span> {registration.studentName || registration.userName || '—'}</p>
+        <p><span className="font-medium">المجموعة:</span> {registration.groupName || '—'}</p>
+        <p><span className="font-medium">دورة الفوترة:</span> {registration.cycleMonthKey || '—'}</p>
       </div>
 
       <form id="edit-support-reg-form" onSubmit={handleSubmit} className="space-y-5">
@@ -105,45 +148,53 @@ const EditSupportRegistrationModal = ({ registration, onClose, onSuccess }) => {
           </div>
         )}
 
-        {/* Status */}
         <div>
-          <label className="mb-1.5 block text-sm font-medium text-gray-700">الحالة</label>
-          <select
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary focus:ring-2 focus:ring-primary/30"
-          >
-            {EDITABLE_STATUSES.map((s) => (
-              <option key={s} value={s}>
-                {s === 'pending'   ? 'قيد المراجعة'
-                  : s === 'verified' ? 'مؤكد'
-                  : 'مرفوض'}
-              </option>
-            ))}
-          </select>
+          <label className="mb-1.5 block text-sm font-medium text-gray-700" htmlFor="sup-end">
+            تاريخ انتهاء الاشتراك
+          </label>
+          <input id="sup-end" type="date" value={endDateStr} onChange={(e) => setEndDateStr(e.target.value)} className={FIELD_CLASS} />
+          <p className="mt-1 text-xs text-gray-500">
+            تمديد التاريخ يُبقي الطالب نشطاً دون دفعة جديدة — استخدمه للتصحيح أو كبادرة حسن نية.
+          </p>
         </div>
 
-        {/* End date */}
         <div>
-          <label className="mb-1.5 block text-sm font-medium text-gray-700">تاريخ انتهاء الاشتراك</label>
+          <label className="mb-1.5 block text-sm font-medium text-gray-700" htmlFor="sup-subject">اسم المادة</label>
+          <input id="sup-subject" type="text" value={subjectName} onChange={(e) => setSubjectName(e.target.value)} className={FIELD_CLASS} />
+        </div>
+
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-gray-700" htmlFor="sup-teacher">الأستاذ</label>
+          <input id="sup-teacher" type="text" value={teacherName} onChange={(e) => setTeacherName(e.target.value)} className={FIELD_CLASS} />
+        </div>
+
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-gray-700" htmlFor="sup-price">
+            المبلغ الإجمالي لهذه الدورة (دج)
+          </label>
           <input
-            type="date"
-            value={endDateStr}
-            onChange={(e) => setEndDateStr(e.target.value)}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary focus:ring-2 focus:ring-primary/30"
+            id="sup-price" type="number" min="0" step="1" inputMode="numeric"
+            value={totalPrice} onChange={(e) => setTotalPrice(e.target.value)} className={FIELD_CLASS}
           />
-          <p className="mt-1 text-xs text-gray-500">اتركه فارغاً للإبقاء على القيمة الحالية.</p>
+          {priceChanged && (
+            <div className="mt-2 flex gap-2 rounded-lg border border-warning-200 bg-warning-50 px-3 py-2 text-xs text-warning-800">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+              <span>
+                تغيير المبلغ يُضيف قيد تسوية إلى السجل المالي (لا يُعدَّل السجل الأصلي أبداً).
+                الفرق: {(Number(totalPrice) - Number(originalPrice || 0)).toLocaleString('en-US')} دج
+              </span>
+            </div>
+          )}
         </div>
 
-        {/* Subject name */}
         <div>
-          <label className="mb-1.5 block text-sm font-medium text-gray-700">اسم المادة</label>
-          <input
-            type="text"
-            value={subjectName}
-            onChange={(e) => setSubjectName(e.target.value)}
-            placeholder={registration.subjectName || 'اسم المادة'}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary focus:ring-2 focus:ring-primary/30"
+          <label className="mb-1.5 block text-sm font-medium text-gray-700" htmlFor="sup-reason">
+            سبب التعديل {priceChanged && <span className="text-danger-600">*</span>}
+          </label>
+          <textarea
+            id="sup-reason" rows={2} value={reason} onChange={(e) => setReason(e.target.value)}
+            placeholder="يُحفظ في سجل التدقيق"
+            className={`${FIELD_CLASS} resize-none`}
           />
         </div>
       </form>

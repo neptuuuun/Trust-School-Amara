@@ -1,5 +1,6 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Frown } from 'lucide-react';
 
 function ErrorPage() {
   const navigate = useNavigate();
@@ -19,9 +20,7 @@ function ErrorPage() {
       <div className="text-center">
         <div className="flex items-center justify-center gap-2 mb-4">
           <span className="text-6xl font-extrabold text-gray-900">404</span>
-          <span className="text-4xl" aria-hidden>
-            😕
-          </span>
+          <Frown className="h-12 w-12 text-gray-400" aria-hidden="true" />
         </div>
         <h1 className="text-2xl md:text-3xl font-bold text-gray-900 mb-2">
           الصفحة غير موجودة

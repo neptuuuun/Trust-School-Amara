@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { auth } from '../../firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import {
@@ -18,15 +18,23 @@ import {
   Users,
   UserPlus,
   Trash2,
+  GraduationCap,
+  Pencil,
 } from 'lucide-react';
 import Breadcrumb from '../components/Breadcrumb';
 import FileViewerModal from '../components/FileViewerModal';
 import AdminCreateStudentModal from '../components/AdminCreateStudentModal';
+import EditStudentAverageModal from '../components/EditStudentAverageModal';
 import AdminConfirmDialog from '../components/AdminConfirmDialog';
+import { classificationFromProfile, classificationBadge } from '../../utils/supportClassification';
+import { branchLabel } from '../../utils/branches';
 import { useBranch } from '../../contexts/BranchContext';
+import OwnershipBadge from '../../components/ui/OwnershipBadge';
+import { useAuth } from '../../contexts/AuthContext';
 import { getUsersByBranch, updateUser } from '../../services/userService';
 import { cleanupRejectedRegistration } from '../../services/storageCleanupService';
 import { useToast } from '../components/ToastNotifications';
+import { logAdminAction } from '../../services/auditService';
 import apiCall from '../../utils/apiClient';
 import { formatDate } from '../../utils/dateUtils';
 import { Button } from '../../components/ui/button';
@@ -35,8 +43,17 @@ import { Alert, LoadingState } from '../../components/ui/feedback';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-const branchLabel = (id) =>
-  id === 'boumerdes' ? 'بومرداس' : id === 'bordj_menaiel' ? 'برج منايل' : id || '—';
+// How often the student list refreshes in the background (documents arrive
+// while the admin is on this page, so a stale list means someone waits).
+const REFRESH_MS = 30_000;
+
+/** Firestore Timestamp | Date | ms | ISO → epoch ms (0 when unusable). */
+const msOf = (v) => {
+  if (!v) return 0;
+  if (typeof v.toDate === 'function') { try { return v.toDate().getTime(); } catch { return 0; } }
+  const t = new Date(v).getTime();
+  return Number.isNaN(t) ? 0 : t;
+};
 
 const getImageUrl = (v) => {
   if (!v) return null;
@@ -79,7 +96,7 @@ const Field = ({ icon: Icon, label, value }) => (
 
 // ─── Single user card ────────────────────────────────────────────────────────
 
-const UserCard = ({ user, onDecision, onDelete, processing, onViewImage }) => {
+const UserCard = ({ user, onDecision, onDelete, onEditAverage, processing, onViewImage }) => {
   const photoUrl   = getImageUrl(user.photoUrl);
   const idCardUrl  = getImageUrl(user.idCardUrl);
   const busy       = processing[`decision-${user.id}`];
@@ -87,6 +104,9 @@ const UserCard = ({ user, onDecision, onDelete, processing, onViewImage }) => {
   const status     = getStatusConfig(user);
   const StatusIcon = status.icon;
   const isPending = String(user?.verificationStatus || '').toLowerCase() === 'pending';
+  const classification = classificationFromProfile(user);
+  const clsBadge = classificationBadge(classification);
+  const average = user?.distinguishedSubjectsAverage;
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex flex-col">
@@ -134,6 +154,46 @@ const UserCard = ({ user, onDecision, onDelete, processing, onViewImage }) => {
         <Field icon={MapPin}    label="العنوان"           value={user.address} />
         <Field icon={Building2} label="الفرع"             value={branchLabel(user.branchId)} />
         <Field icon={Calendar}  label="تاريخ التسجيل"    value={formatDate(user.createdAt)} />
+      </div>
+
+      {/* Accountability — who enrolled / last edited this student (admin-created only). */}
+      {((user.createdBy && typeof user.createdBy === 'object') ||
+        (user.updatedBy && typeof user.updatedBy === 'object')) && (
+        <div className="px-4 pb-2">
+          <OwnershipBadge
+            createdBy={user.createdBy}
+            createdAt={user.createdAt}
+            updatedBy={user.updatedBy}
+            updatedAt={user.updatedAt}
+          />
+        </div>
+      )}
+
+      {/* Support-level classification (دروس الدعم only — does not affect languages/trainings) */}
+      <div className="px-4 pb-3">
+        <div className="flex items-center justify-between gap-2 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2.5">
+          <div className="flex items-center gap-2 min-w-0">
+            <GraduationCap className="h-4 w-4 flex-shrink-0 text-primary" />
+            <div className="min-w-0">
+              <span className="block text-xs text-gray-500">معدل المواد المميزة (دعم)</span>
+              <span className="block text-sm font-semibold text-gray-900" dir="ltr">
+                {average != null ? average : 'غير محدد'}
+              </span>
+            </div>
+            <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${clsBadge.classes}`}>
+              <clsBadge.Icon className={`h-2.5 w-2.5 shrink-0 ${clsBadge.iconClass}`} fill="currentColor" aria-hidden="true" /> {clsBadge.label}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => onEditAverage(user)}
+            className="inline-flex flex-shrink-0 items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-white"
+            title="تعديل المعدل"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+            {average != null ? 'تعديل' : 'تحديد'}
+          </button>
+        </div>
       </div>
 
       {/* ID card thumbnail */}
@@ -211,19 +271,30 @@ const STATUS_FILTERS = [
   { value: 'rejected',      label: 'مرفوض' },
 ];
 
+// Support-level classification filter (دروس الدعم).
+const CLASS_FILTERS = [
+  { value: 'all',           label: 'كل التصنيفات' },
+  { value: 'support_level', label: 'مستوى دعم' },
+  { value: 'normal',        label: 'عادي' },
+  { value: 'unclassified',  label: 'غير محدد' },
+];
+
 const UsersPage = () => {
   const [users,               setUsers]               = useState([]);
   const [loading,             setLoading]             = useState(true);
   const [error,               setError]               = useState('');
   const [searchQuery,         setSearchQuery]         = useState('');
   const [statusFilter,        setStatusFilter]        = useState('all');
+  const [classFilter,         setClassFilter]         = useState('all');
+  const [averageModal,        setAverageModal]        = useState({ open: false, student: null });
   const [processing,          setProcessing]          = useState({});
-  const [imageModal,          setImageModal]          = useState({ open: false, url: null });
+  const [imageModal,          setImageModal]          = useState({ open: false, url: null, title: '' });
   const [showCreateModal,     setShowCreateModal]     = useState(false);
   const [currentUser,         setCurrentUser]         = useState(null);
   const [rejectDialog,        setRejectDialog]        = useState({ open: false, userId: null, branchId: null, userName: '' });
   const [deleteDialog,        setDeleteDialog]        = useState({ open: false, userId: null, branchId: null, userName: '' });
   const { selectedBranchId } = useBranch();
+  const { adminData } = useAuth();
   const { show: showToast } = useToast();
 
   useEffect(() => {
@@ -237,46 +308,50 @@ const UsersPage = () => {
     return () => unsub();
   }, []);
 
+  // Reload the branch's students. `background: true` skips the full-page spinner
+  // — the early-return spinner unmounts open modals and would destroy whatever
+  // the admin has typed into a form.
+  const loadUsers = useCallback(async ({ background = false } = {}) => {
+    if (!selectedBranchId) return;
+    if (!background) setLoading(true);
+    try {
+      const data = await getUsersByBranch(selectedBranchId);
+      setUsers(data);
+      setError('');
+    } catch (err) {
+      setError(
+        err.code === 'permission-denied'
+          ? 'ليس لديك صلاحية للوصول إلى قائمة المستخدمين.'
+          : 'فشل في تحميل المستخدمين: ' + err.message
+      );
+    } finally {
+      if (!background) setLoading(false);
+    }
+  }, [selectedBranchId]);
+
   useEffect(() => {
-    if (!currentUser || !selectedBranchId) return;
+    if (!currentUser || !selectedBranchId) return undefined;
 
-    let isFirstLoad = true;
+    loadUsers();
 
-    const load = async () => {
-      // Only show the full-page spinner on the very first fetch.
-      // Background refreshes must NOT call setLoading(true) because that
-      // triggers the early-return spinner, which unmounts the modal and
-      // destroys any in-progress form data the admin may have typed.
-      if (isFirstLoad) setLoading(true);
-      try {
-        console.log('[ADMIN DEBUG] ADMIN USER:', currentUser?.uid, currentUser?.email);
-        console.log('[ADMIN DEBUG] ADMIN BRANCH ID:', selectedBranchId);
-        const data = await getUsersByBranch(selectedBranchId);
-        console.log('[ADMIN DEBUG] RAW USERS returned to UsersPage:', data.length);
-        const TARGET_UID = 'gZ7QAUB3t8NAl1rivLyMWrz5kUk2';
-        const pendingUsers = data.filter(u => String(u?.verificationStatus || '').toLowerCase() === 'pending');
-        console.log('[ADMIN DEBUG] PENDING USERS:', pendingUsers.length);
-        console.log('[ADMIN DEBUG] STUDENT IN PENDING:', pendingUsers.find(u => u.id === TARGET_UID || u.uid === TARGET_UID) || 'NOT FOUND');
-        setUsers(data);
-        setError('');
-      } catch (err) {
-        setError(
-          err.code === 'permission-denied'
-            ? 'ليس لديك صلاحية للوصول إلى قائمة المستخدمين.'
-            : 'فشل في تحميل المستخدمين: ' + err.message
-        );
-      } finally {
-        if (isFirstLoad) {
-          setLoading(false);
-          isFirstLoad = false;
-        }
-      }
+    // Students appear here as soon as they submit documents, so a stale list
+    // means someone waits. Poll in the background — but pause while the tab is
+    // hidden so a dashboard left open overnight doesn't burn quota.
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') loadUsers({ background: true });
+    }, REFRESH_MS);
+
+    // Catch up immediately when the admin comes back to the tab.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') loadUsers({ background: true });
     };
+    document.addEventListener('visibilitychange', onVisible);
 
-    load();
-    const interval = setInterval(load, 30000);
-    return () => clearInterval(interval);
-  }, [currentUser, selectedBranchId]);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [currentUser, selectedBranchId, loadUsers]);
 
   const filteredUsers = useMemo(() => {
     let list = users;
@@ -290,6 +365,15 @@ const UsersPage = () => {
         if (statusFilter === 'email_pending') return st === 'email_pending';
         if (statusFilter === 'pending')       return vs === 'pending' && st !== 'email_pending';
         return vs === statusFilter || st === statusFilter;
+      });
+    }
+
+    // Support-level classification filter
+    if (classFilter !== 'all') {
+      list = list.filter((u) => {
+        const c = classificationFromProfile(u);
+        if (classFilter === 'unclassified') return c == null;
+        return c === classFilter;
       });
     }
 
@@ -308,8 +392,29 @@ const UsersPage = () => {
       );
     }
 
-    return list;
-  }, [users, searchQuery, statusFilter]);
+    // Students awaiting a decision come FIRST, newest first. This page is the
+    // only remaining approval queue in the dashboard; burying the three people
+    // who are waiting among hundreds of already-verified accounts made the admin
+    // reach for a filter before they could do their actual job.
+    return [...list].sort((a, b) => {
+      const aPending = String(a?.verificationStatus || '').toLowerCase() === 'pending' ? 0 : 1;
+      const bPending = String(b?.verificationStatus || '').toLowerCase() === 'pending' ? 0 : 1;
+      if (aPending !== bPending) return aPending - bPending;
+      return msOf(b.createdAt) - msOf(a.createdAt);
+    });
+  }, [users, searchQuery, statusFilter, classFilter]);
+
+  // Counts per classification for the support filter pills.
+  const classCounts = useMemo(() => {
+    const c = { all: users.length, support_level: 0, normal: 0, unclassified: 0 };
+    users.forEach((u) => {
+      const cl = classificationFromProfile(u);
+      if (cl === 'support_level') c.support_level += 1;
+      else if (cl === 'normal') c.normal += 1;
+      else c.unclassified += 1;
+    });
+    return c;
+  }, [users]);
 
   // Counts per status for the filter pills
   const counts = useMemo(() => {
@@ -346,13 +451,28 @@ const UsersPage = () => {
       if (!resolved) throw new Error('branchId is required');
 
       const targetUser = users.find((u) => u.id === userId);
+      // Canonical actor {uid,name,email} — records WHICH employee made the decision.
+      const reviewer = {
+        uid: adminData?.uid || '',
+        name: adminData?.name || '',
+        email: adminData?.email || '',
+      };
       await updateUser(
         userId,
         approve
-          ? { status: 'active', verificationStatus: 'verified', verificationRequest: null, verified: true, accountVerified: true }
-          : { status: 'rejected', verificationStatus: 'rejected', verificationRequest: null, verified: false, accountVerified: false, uploadedDocs: [], photoUrl: null, idCardUrl: null },
+          ? { status: 'active', verificationStatus: 'verified', verificationRequest: null, verified: true, accountVerified: true, verifiedBy: reviewer, verifiedAt: new Date() }
+          : { status: 'rejected', verificationStatus: 'rejected', verificationRequest: null, verified: false, accountVerified: false, uploadedDocs: [], photoUrl: null, idCardUrl: null, rejectedBy: reviewer, rejectedAt: new Date() },
         resolved
       );
+
+      // Immutable audit trail — actor name resolved server-side from admins/owners.
+      logAdminAction({
+        action: approve ? 'document.approve' : 'document.reject',
+        branchId: resolved,
+        targetType: 'student',
+        targetId: userId,
+        after: { verificationStatus: approve ? 'verified' : 'rejected' },
+      });
 
       // When a registration is rejected, immediately remove the applicant's
       // uploaded identity media from Supabase Storage (spec §4).
@@ -438,6 +558,18 @@ const UsersPage = () => {
     if (url) setImageModal({ open: true, url, title });
   };
 
+  const handleEditAverage = (student) => setAverageModal({ open: true, student });
+
+  const handleAverageSaved = ({ average, classification }) => {
+    const { student } = averageModal;
+    if (!student) return;
+    setUsers((prev) => prev.map((u) =>
+      u.id === student.id
+        ? { ...u, distinguishedSubjectsAverage: average, supportClassification: classification }
+        : u));
+    showToast('success', 'تم تحديث معدل المواد المميزة');
+  };
+
   if (loading) {
     return <LoadingState label="جاري تحميل المستخدمين..." />;
   }
@@ -466,12 +598,16 @@ const UsersPage = () => {
         onCancel={() => setDeleteDialog({ open: false, userId: null, branchId: null, userName: '' })}
       />
 
-      <Breadcrumb trail={['المستخدمون']} />
+      <Breadcrumb trail={['الطلاب']} />
 
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-3xl font-bold text-primary">قائمة المستخدمين</h1>
-          <p className="text-gray-600 mt-1">جميع المستخدمين المسجلين في الفرع مع معلوماتهم الكاملة</p>
+          <h1 className="text-3xl font-bold text-primary">الطلاب</h1>
+          <p className="text-gray-600 mt-1">
+            {counts.pending > 0
+              ? `${counts.pending} طالب بانتظار مراجعة وثائقه — يظهرون في أعلى القائمة.`
+              : 'جميع طلاب الفرع. لا توجد وثائق بانتظار المراجعة حالياً.'}
+          </p>
         </div>
         <Button variant="primary" size="sm" onClick={() => setShowCreateModal(true)}>
           <UserPlus className="h-4 w-4" />
@@ -514,6 +650,29 @@ const UsersPage = () => {
         ))}
       </div>
 
+      {/* Support-level classification filter (دروس الدعم) */}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs font-medium text-gray-500">تصنيف الدعم:</span>
+        {CLASS_FILTERS.map((f) => (
+          <button
+            key={f.value}
+            onClick={() => setClassFilter(f.value)}
+            className={`px-3.5 py-1.5 rounded-full text-sm font-medium transition-colors ${
+              classFilter === f.value
+                ? 'bg-primary text-white shadow-sm'
+                : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            {f.label}
+            <span className={`ms-1.5 text-xs px-1.5 py-0.5 rounded-full ${
+              classFilter === f.value ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-600'
+            }`}>
+              {classCounts[f.value] ?? 0}
+            </span>
+          </button>
+        ))}
+      </div>
+
       {/* Results count */}
       <div className="flex items-center gap-2 text-sm text-gray-500">
         <Users className="w-4 h-4" />
@@ -540,6 +699,7 @@ const UsersPage = () => {
               user={user}
               onDecision={handleDecision}
               onDelete={handleDeleteStudent}
+              onEditAverage={handleEditAverage}
               processing={processing}
               onViewImage={openImage}
             />
@@ -550,7 +710,16 @@ const UsersPage = () => {
       {imageModal.open && imageModal.url && (
         <FileViewerModal
           url={imageModal.url}
-          onClose={() => setImageModal({ open: false, url: null })}
+          onClose={() => setImageModal({ open: false, url: null, title: '' })}
+        />
+      )}
+
+      {averageModal.open && averageModal.student && (
+        <EditStudentAverageModal
+          branchId={averageModal.student.branchId || selectedBranchId}
+          student={averageModal.student}
+          onClose={() => setAverageModal({ open: false, student: null })}
+          onSaved={handleAverageSaved}
         />
       )}
 
@@ -560,14 +729,9 @@ const UsersPage = () => {
           onClose={() => setShowCreateModal(false)}
           onSuccess={() => {
             setShowCreateModal(false);
-            // Reload user list after creation
-            if (currentUser && selectedBranchId) {
-              setLoading(true);
-              getUsersByBranch(selectedBranchId)
-                .then((data) => setUsers(data))
-                .catch(() => {})
-                .finally(() => setLoading(false));
-            }
+            // Background refresh: a foreground reload would blank the page to a
+            // spinner right after a successful create, hiding the new student.
+            loadUsers({ background: true });
           }}
         />
       )}

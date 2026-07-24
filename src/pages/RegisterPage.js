@@ -2,11 +2,12 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useBranch } from '../contexts/BranchContext';
-import { UserPlus, Mail, Lock, Building2, Eye, EyeOff } from 'lucide-react';
+import { UserPlus, Mail, Lock, Building2, Eye, EyeOff, GraduationCap } from 'lucide-react';
 import GoogleSignInButton from '../components/GoogleSignInButton';
 import { Button } from '../components/ui/button';
 import { Input, Label } from '../components/ui/input';
 import { Alert } from '../components/ui/feedback';
+import { SCHOOL_HINT_AR, isValidSchool } from '../utils/personData';
 
 const RegisterPage = () => {
   const { user, role, signup, registerWithGoogle, loading, completedProfile } = useAuth();
@@ -21,6 +22,7 @@ const RegisterPage = () => {
   const [birthDate, setBirthDate] = useState('');
   const [birthPlace, setBirthPlace] = useState('');
   const [address, setAddress] = useState('');
+  const [school, setSchool] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -57,6 +59,7 @@ const RegisterPage = () => {
         setBirthDate(formData.birthDate || '');
         setBirthPlace(formData.birthPlace || '');
         setAddress(formData.address || '');
+        setSchool(formData.school || '');
         setPhoneNumber(formData.phoneNumber || '');
         setRulesAccepted(formData.rulesAccepted || false);
       }
@@ -74,14 +77,15 @@ const RegisterPage = () => {
       birthDate,
       birthPlace,
       address,
+      school,
       phoneNumber,
       rulesAccepted,
     };
 
-    if (fullName || email || password || birthDate || birthPlace || address || phoneNumber) {
+    if (fullName || email || password || birthDate || birthPlace || address || school || phoneNumber) {
       sessionStorage.setItem('registerFormData', JSON.stringify(formData));
     }
-  }, [fullName, email, password, birthDate, birthPlace, address, phoneNumber, rulesAccepted]);
+  }, [fullName, email, password, birthDate, birthPlace, address, school, phoneNumber, rulesAccepted]);
 
   // Generate registration number
   const registrationNumber = useMemo(() => {
@@ -151,6 +155,11 @@ const RegisterPage = () => {
       return;
     }
 
+    if (!isValidSchool(school)) {
+      setError('يرجى إدخال المؤسسة التعليمية (اكتب «حر» إن لم تكن منتسباً إلى مدرسة)');
+      return;
+    }
+
     setSubmitting(true);
 
     try {
@@ -171,6 +180,7 @@ const RegisterPage = () => {
         birthDate,
         birthPlace,
         address,
+        school: school.trim(),
         phoneNumber,
       });
 
@@ -270,6 +280,20 @@ const RegisterPage = () => {
               onChange={(e) => setAddress(e.target.value)}
               placeholder="العنوان الكامل"
             />
+          </div>
+
+          <div>
+            <Label htmlFor="reg-school" required>المؤسسة التعليمية / المدرسة</Label>
+            <Input
+              id="reg-school"
+              type="text"
+              required
+              value={school}
+              onChange={(e) => setSchool(e.target.value)}
+              placeholder="اسم المؤسسة التعليمية"
+              startIcon={<GraduationCap className="h-5 w-5" />}
+            />
+            <p className="mt-1 text-xs text-gray-500">{SCHOOL_HINT_AR}</p>
           </div>
 
           <div>

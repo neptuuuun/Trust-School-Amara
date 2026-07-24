@@ -16,6 +16,7 @@ const notifyRoutes   = require('./routes/notify');
 const auditRoutes    = require('./routes/audit');
 const { verifyToken, requireAdmin } = require('./middleware/auth');
 const { logAudit }   = require('./controllers/ledgerController');
+const { handleWebhook } = require('./controllers/chargilyController');
 const errorHandler   = require('./middleware/errorHandler');
 const { startCronJobs } = require('./services/cronService');
 
@@ -75,6 +76,34 @@ const sensitiveLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, max: 30,
   standardHeaders: true, legacyHeaders: false, message: rlMessage,
 });
+// Payment-provider callbacks get their own high ceiling — protection against a
+// flood, but far above any real delivery volume. See the webhook mount below.
+const webhookLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, max: 1000,
+  standardHeaders: true, legacyHeaders: false, message: rlMessage,
+});
+
+// ── Chargily webhook — mounted BEFORE the general/sensitive limiters ──────────
+// Chargily delivers every callback from its own small, fixed set of egress IPs, so
+// an IP-keyed limiter puts ALL of our incoming payment notifications into ONE
+// bucket. Under the 30-per-15-min sensitive cap that /api/chargily otherwise
+// carries, an enrollment rush would start returning 429 to Chargily — and a
+// dropped webhook means a student who paid is never enrolled and never appears in
+// the stuck-payment queue.
+//
+// Rate limiting adds no security here: the endpoint is authenticated by HMAC-SHA256
+// over the raw request body (verified in chargilyController.handleWebhook via
+// chargilyService.verifyWebhookSignature), not by origin IP. An unsigned request is
+// rejected with 401 before any work happens. webhookLimiter is retained purely as a
+// flood backstop.
+//
+// Registered here — before `app.use('/api', generalLimiter)` — so Express matches
+// this handler first and the request reaches neither limiter. The equivalent route
+// inside routes/chargily.js is left in place but is now unreachable in this app;
+// it stays valid if that router is ever mounted standalone.
+// express.raw() for this path is already applied above (before express.json), so
+// req.body is the untouched Buffer the signature check requires.
+app.post('/api/chargily/webhook', webhookLimiter, handleWebhook);
 
 app.use('/api', generalLimiter);
 

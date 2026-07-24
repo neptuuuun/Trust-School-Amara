@@ -1,0 +1,139 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Render Blueprint — Trust School Amara backend (Express)
+# ═══════════════════════════════════════════════════════════════════════════════
+#  This file is the SOURCE OF TRUTH for the backend's production configuration.
+#  Values marked `sync: false` are secrets: Render prompts for them once in the
+#  dashboard and never stores them here. Everything else is declared literally so
+#  a redeploy can never silently drift back to a development value.
+#
+#  Apply with:  Render Dashboard → New → Blueprint → select this repo
+#  (An existing service can also be pointed at this file via Settings → Blueprint.)
+#
+#  ⚠️  BEFORE FIRST DEPLOY — confirm the service name below.
+#      `name: trust-school-backend` produces the public URL
+#          https://trust-school-backend.onrender.com
+#      which BACKEND_URL is set to. The two MUST agree — BACKEND_URL is what gets
+#      registered as the Chargily webhook endpoint on every checkout. If you keep
+#      an existing Render service under a different name, change BOTH the `name`
+#      field and the BACKEND_URL value to match it.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+services:
+  - type: web
+    name: trust-school-backend
+    runtime: node
+    # Frankfurt is Render's closest region to Algeria. Region cannot be changed on
+    # an existing service — it is only honoured when the service is first created.
+    region: frankfurt
+
+    # NOT `free`. Free instances spin down after ~15 minutes idle, which breaks two
+    # things: (1) the node-cron jobs in services/cronService.js — the 05:00 UTC daily
+    # expiry check and the monthly lifecycle run would simply never fire, and
+    # node-cron does not replay missed runs; (2) Chargily webhook delivery, where a
+    # cold start can exceed the provider's timeout and drop the callback.
+    plan: starter
+
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+
+    # Implemented at backend/server.js — returns {status:'ok'} with no auth and no
+    # database round-trip, so it is safe as a liveness probe.
+    healthCheckPath: /health
+
+    envVars:
+      # ── Runtime ──────────────────────────────────────────────────────────────
+      # backend/package.json declares only `>=18`, which lets a rebuild jump major
+      # versions unannounced. Pin it here.
+      - key: NODE_VERSION
+        value: 22.11.0
+
+      # PORT is injected by Render automatically and is already honoured by
+      # server.js (`process.env.PORT || 3001`). Do NOT declare it here.
+
+      # ── Public URLs ──────────────────────────────────────────────────────────
+      # Read by controllers/chargilyController.js:36. Used to build the per-checkout
+      # `webhook_endpoint`. If this is EMPTY, no webhook is registered on any
+      # checkout and the only path that finalises a payment is the student's browser
+      # poll — close the tab and a paid student is never enrolled.
+      - key: BACKEND_URL
+        value: https://trust-school-backend.onrender.com
+
+      # Read by controllers/chargilyController.js:35. Builds the success_url and
+      # failure_url Chargily redirects the payer back to.
+      - key: FRONTEND_URL
+        value: https://trustschoolamara.com
+
+      # ── CORS ─────────────────────────────────────────────────────────────────
+      # Read by server.js:35. Comma-separated exact-match allowlist; an origin not
+      # in this list is rejected. Both the apex and www forms are listed so the
+      # allowlist keeps working regardless of which one you make canonical in Vercel.
+      #
+      # Vercel preview deployments get a unique random hostname per deploy and will
+      # therefore fail CORS against this backend. That is the safe default. If you
+      # need previews to reach production data, append the specific preview URL —
+      # do not use a wildcard, and never add it permanently.
+      - key: ALLOWED_ORIGINS
+        value: https://trustschoolamara.com,https://www.trustschoolamara.com
+
+      # Printed in outbound email footers and buttons (services/emailService.js).
+      # Previously pointed at the retired trust-school.web.app host.
+      - key: WEBSITE_URL
+        value: https://trustschoolamara.com
+
+      # ── Firebase ─────────────────────────────────────────────────────────────
+      - key: FIREBASE_PROJECT_ID
+        value: trust-school
+
+      # Base64 of the Admin SDK service-account JSON (Option B in
+      # backend/.env.example). Decoded by config/firebase.js:5-9.
+      # Generate with:
+      #   PowerShell: [Convert]::ToBase64String([IO.File]::ReadAllBytes('key.json'))
+      #   bash:       base64 -w0 key.json
+      - key: FIREBASE_SERVICE_ACCOUNT_BASE64
+        sync: false
+
+      # ── Chargily (LIVE) ──────────────────────────────────────────────────────
+      # services/chargilyService.js:27-33 selects the API endpoint from the key
+      # PREFIX: live_sk_ → https://pay.chargily.net/api/v2
+      #         test_sk_ → https://pay.chargily.net/test/api/v2
+      # A key on the wrong endpoint returns 401 "Unauthenticated" — that is an
+      # endpoint mismatch, not a bad key.
+      - key: CHARGILY_SECRET_KEY
+        sync: false
+      - key: CHARGILY_PUBLIC_KEY
+        sync: false
+
+      # ── Email / deliverability ───────────────────────────────────────────────
+      # services/emailService.js prefers generic SMTP_* and only falls back to the
+      # discouraged consumer-Gmail transport when SMTP_HOST is blank. Use a
+      # transactional provider on a domain you own (Brevo / Resend / SendGrid) and
+      # add the SPF + DKIM + DMARC DNS records, or mail will be filtered as spam.
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: MAIL_FROM_ADDRESS
+        value: noreply@trustschoolamara.com
+      - key: MAIL_FROM_NAME
+        value: Trust School Amara
+      - key: MAIL_REPLY_TO
+        value: contact@trustschoolamara.com
+      - key: MAIL_SUPPORT_EMAIL
+        value: contact@trustschoolamara.com
+      - key: MAIL_ORG_ADDRESS
+        value: بومرداس / برج منايل، الجزائر
+      - key: MAIL_ORG_PHONE
+        value: "0554 56 29 97"
+
+      # ── Deliberately NOT declared ────────────────────────────────────────────
+      # SUPPORT_LESSON_EXPIRY_MINUTES — a testing override that shortens every
+      #   student subscription. It must never exist in production.
+      # CHARGILY_DEBUG — logs full Chargily request/response bodies
+      #   (services/chargilyService.js:44-58). Leave unset.
+      # Both are listed here only so their absence is a documented decision rather
+      # than an oversight.

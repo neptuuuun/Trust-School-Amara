@@ -12,6 +12,7 @@ const academicRoutes = require('./routes/academic');
 const chargilyRoutes = require('./routes/chargily');
 const ledgerRoutes   = require('./routes/ledger');
 const ownerRoutes    = require('./routes/owner');
+const publicRoutes   = require('./routes/public');
 const notifyRoutes   = require('./routes/notify');
 const auditRoutes    = require('./routes/audit');
 const { verifyToken, requireAdmin } = require('./middleware/auth');
@@ -124,6 +125,9 @@ app.post('/api/ledger/audit',               verifyToken, requireAdmin, logAudit)
 // Ledger recorder (admin-bound) + owner analytics (owner-only, read).
 app.use('/api/ledger',                      sensitiveLimiter, ledgerRoutes);
 app.use('/api/owner',                       ownerRoutes);
+// Public website content — no auth (the anonymous site reads it). Under the
+// general limiter (300/15min on /api) which is ample for a read endpoint.
+app.use('/api/public',                      publicRoutes);
 app.use('/api/notify',                      notifyRoutes);
 // Per-entity audit history (owner = any branch, admin = own branch; enforced in handler).
 app.use('/api/audit',                       auditRoutes);

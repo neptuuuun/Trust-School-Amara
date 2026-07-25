@@ -5,9 +5,19 @@ import heroBg from '../assets/images/home.jpg';
 import { Book, Globe, GraduationCap, Users, BarChart3, Target, Play, Phone } from 'lucide-react';
 import { useBranch } from '../contexts/BranchContext';
 import { buttonClasses } from '../components/ui/button';
+import { useWebsiteSettings } from '../contexts/WebsiteSettingsContext';
+import GallerySection from '../components/GallerySection';
+
+// A hero button link may be an internal route ('/contact') or an external URL.
+const isInternalLink = (href) => typeof href === 'string' && href.startsWith('/');
 
 const HomePage = () => {
     const { selectedBranchId } = useBranch();
+    const { settings } = useWebsiteSettings();
+    const { hero, gallery } = settings;
+
+    // Fall back to the bundled asset when no custom hero image is set.
+    const heroImage = hero.imageUrl || heroBg;
 
     const handleScrollToDemo = (e) => {
         e.preventDefault();
@@ -68,31 +78,44 @@ const HomePage = () => {
 
     return (
         <div className="home-page">
-            {/* Hero Section */}
+            {/* Hero Section — content managed by the owner (Website Management) */}
             <section
                 className="relative flex min-h-[calc(100vh-5rem)] items-center overflow-hidden text-white"
-                style={{ backgroundImage: `url(${heroBg})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
+                style={{ backgroundImage: `url(${heroImage})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
             >
                 <div className="absolute inset-0 bg-primary-900/60" aria-hidden="true"></div>
                 <div className="container relative mx-auto px-6 py-20 text-center" dir="rtl">
                     <h1 className="mb-6 text-4xl font-extrabold leading-tight md:text-5xl lg:text-6xl">
-                        مرحباً بكم في Trust School Amara
+                        {hero.title}
                     </h1>
                     <p className="mx-auto mb-10 max-w-2xl text-lg leading-relaxed text-white/90 md:text-2xl">
-                        الثقة في التعليم هو شغفنا، وبناء مستقبل مشرق هو هدفنا
+                        {hero.subtitle}
                     </p>
                     <div className="flex flex-col items-center justify-center gap-4 sm:flex-row">
                         <a href="#demo" onClick={handleScrollToDemo} className={buttonClasses({ variant: 'warning', size: 'lg' })}>
                             <Play className="h-5 w-5" aria-hidden="true" />
                             شاهد عرضنا التعريفي
                         </a>
-                        <Link
-                            to="/contact"
-                            className="inline-flex items-center justify-center gap-2 rounded-lg border-2 border-white/80 px-8 py-4 text-lg font-semibold text-white transition-colors hover:bg-white hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 focus-visible:ring-offset-2 focus-visible:ring-offset-primary-800"
-                        >
-                            <Phone className="h-5 w-5" aria-hidden="true" />
-                            تواصل معنا
-                        </Link>
+                        {hero.buttonText && (
+                            isInternalLink(hero.buttonLink) ? (
+                                <Link
+                                    to={hero.buttonLink}
+                                    className="inline-flex items-center justify-center gap-2 rounded-lg border-2 border-white/80 px-8 py-4 text-lg font-semibold text-white transition-colors hover:bg-white hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 focus-visible:ring-offset-2 focus-visible:ring-offset-primary-800"
+                                >
+                                    <Phone className="h-5 w-5" aria-hidden="true" />
+                                    {hero.buttonText}
+                                </Link>
+                            ) : (
+                                <a
+                                    href={hero.buttonLink}
+                                    target="_blank" rel="noopener noreferrer"
+                                    className="inline-flex items-center justify-center gap-2 rounded-lg border-2 border-white/80 px-8 py-4 text-lg font-semibold text-white transition-colors hover:bg-white hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 focus-visible:ring-offset-2 focus-visible:ring-offset-primary-800"
+                                >
+                                    <Phone className="h-5 w-5" aria-hidden="true" />
+                                    {hero.buttonText}
+                                </a>
+                            )
+                        )}
                     </div>
                 </div>
             </section>
@@ -176,6 +199,9 @@ const HomePage = () => {
                     </div>
                 </div>
             </section>
+
+            {/* Gallery Section — managed by the owner; only shown when images exist */}
+            <GallerySection images={gallery} />
         </div>
     );
 };

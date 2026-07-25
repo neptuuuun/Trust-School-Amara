@@ -427,6 +427,11 @@ export const AuthProvider = ({ children }) => {
   const getVerificationRateLimitKey = (uid) => `emailVerificationLastSentAt:${uid}`;
 
   const resendVerificationEmail = async () => {
+    // NOTE: this deliberately reuses the currently authenticated user and NEVER
+    // recreates the account. Re-running createUserWithEmailAndPassword here is
+    // what produces the spurious `auth/email-already-in-use` errors.
+    console.log('[verify] Resend requested. Current user:', auth.currentUser?.email || null);
+    console.log('[verify] Email verified:', auth.currentUser?.emailVerified);
     if (!auth.currentUser) throw new Error('No authenticated user.');
     const uid = auth.currentUser.uid;
     const lastSentRaw = localStorage.getItem(getVerificationRateLimitKey(uid));
@@ -434,10 +439,21 @@ export const AuthProvider = ({ children }) => {
     const now = Date.now();
     if (lastSentAt && now - lastSentAt < EMAIL_VERIFICATION_RATE_LIMIT_MS) {
       const secondsLeft = Math.ceil((EMAIL_VERIFICATION_RATE_LIMIT_MS - (now - lastSentAt)) / 1000);
-      throw new Error(`Please wait ${secondsLeft}s before resending.`);
+      const waitErr = new Error(`Please wait ${secondsLeft}s before resending.`);
+      waitErr.code = 'client/rate-limited';
+      throw waitErr;
     }
-    await sendEmailVerification(auth.currentUser);
-    localStorage.setItem(getVerificationRateLimitKey(uid), String(now));
+    try {
+      console.log('[verify] Sending verification email...');
+      await sendEmailVerification(auth.currentUser);
+      localStorage.setItem(getVerificationRateLimitKey(uid), String(now));
+      console.log('[verify] Verification email sent successfully.');
+    } catch (error) {
+      // Surface the REAL Firebase reason (e.g. auth/too-many-requests → HTTP 400).
+      // Previously this bubbled up as a generic failure with no diagnostic value.
+      console.error('[verify] Verification failed:', error?.code, error?.message, error);
+      throw error;
+    }
   };
 
   const syncEmailVerificationIfNeeded = async (branchId) => {
@@ -854,10 +870,20 @@ export const AuthProvider = ({ children }) => {
       console.log('✅ Initial user document saved to Firestore');
 
       try {
+        console.log('[verify] Current user:', cred.user?.email);
+        console.log('[verify] Email verified:', cred.user?.emailVerified);
+        console.log('[verify] Sending verification email...');
         await sendEmailVerification(cred.user);
         localStorage.setItem(getVerificationRateLimitKey(cred.user.uid), String(Date.now()));
+        console.log('[verify] Verification email sent successfully.');
       } catch (e) {
-        console.warn('Failed to send verification email:', e);
+        // DO NOT silently swallow. This is the exact point where a Firebase 400
+        // (e.g. auth/too-many-requests) would otherwise vanish, leaving the user
+        // on the "check your email" screen with nothing ever sent. We keep signup
+        // succeeding (the account + Firestore doc are valid, and the user can hit
+        // "Resend"), but we log the real reason AND flag it for the UI.
+        console.error('[verify] Verification failed:', e?.code, e?.message, e);
+        try { localStorage.setItem(`emailVerificationSendFailed:${cred.user.uid}`, e?.code || 'unknown'); } catch (_) {}
       }
 
       const verifyDoc = await getDoc(userRef);

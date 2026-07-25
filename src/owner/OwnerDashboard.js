@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Routes, Route, Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
-import { Home, Bell, Building2, PieChart, LineChart, GraduationCap, FileBarChart2, ShieldCheck, Menu, X, ChevronRight, LogOut, BarChart3 } from 'lucide-react';
+import { Home, Bell, Building2, PieChart, LineChart, GraduationCap, FileBarChart2, ShieldCheck, Globe, Menu, X, ChevronRight, LogOut, BarChart3 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import useScrollToTop from '../hooks/useScrollToTop';
 import { OwnerFiltersProvider, useOwnerFilters } from './ownerFilters';
@@ -18,6 +18,7 @@ import Team from './pages/Team';
 import AuditLog from './pages/AuditLog';
 import Alerts from './pages/Alerts';
 import Settings from './pages/Settings';
+import WebsiteManagement from './pages/website/WebsiteManagement';
 import { Button } from '../components/ui/button';
 
 // Executive navigation. Operational registers (students, groups) live under
@@ -31,6 +32,7 @@ const NAV = [
   { name: 'الإيرادات',        href: '/owner/revenue',    icon: PieChart,      match: (p) => p.startsWith('/owner/revenue') },
   { name: 'الاحتفاظ والنمو',  href: '/owner/retention',  icon: LineChart,     match: (p) => p.startsWith('/owner/retention') },
   { name: 'أداء الأساتذة',    href: '/owner/teachers',   icon: GraduationCap, match: (p) => p.startsWith('/owner/teachers') },
+  { name: 'إدارة الموقع',     href: '/owner/website',    icon: Globe,         match: (p) => p.startsWith('/owner/website') },
   { name: 'التقارير',         href: '/owner/reports',    icon: FileBarChart2, match: (p) => ['/owner/reports', '/owner/students', '/owner/groups'].some((x) => p.startsWith(x)) },
   { name: 'الحوكمة',          href: '/owner/governance', icon: ShieldCheck,   match: (p) => ['/owner/governance', '/owner/team', '/owner/audit', '/owner/settings', '/owner/admins', '/owner/admin-activity'].some((x) => p.startsWith(x)) },
 ];
@@ -162,6 +164,9 @@ const OwnerDashboard = () => {
               <Route path="revenue" element={<RevenueBreakdown />} />
               <Route path="retention" element={<Retention />} />
               <Route path="teachers" element={<TeacherPerformance />} />
+
+              {/* Website management — owner-only public-site content editor. */}
+              <Route path="website" element={<WebsiteManagement />} />
 
               {/* Reports — detailed registers reached from alerts or the Reports hub. */}
               <Route path="reports" element={<Reports />} />

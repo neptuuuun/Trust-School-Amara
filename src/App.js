@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Outlet, useLocation, Navigate, useNavigate } from 'react-router-dom';
 import { BranchProvider, useBranch } from './contexts/BranchContext';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { WebsiteSettingsProvider } from './contexts/WebsiteSettingsContext';
 import Header from './components/Header';
 import Footer from './components/Footer';
 import ErrorPage from './components/ErrorPage';
@@ -173,13 +174,35 @@ function RequireOwner() {
 // Email verification screen with inline feedback (no alert())
 function EmailVerificationScreen({ resendVerificationEmail }) {
   const [resendStatus, setResendStatus] = React.useState('');
+  const [resendError, setResendError] = React.useState('');
+
+  // Translate the real Firebase error code into an actionable Arabic message,
+  // so a hidden HTTP 400 (e.g. rate limiting) is no longer invisible.
+  const messageForError = (err) => {
+    switch (err?.code) {
+      case 'auth/too-many-requests':
+        return 'تم إرسال عدد كبير من الطلبات. يرجى الانتظار بضع دقائق ثم إعادة المحاولة.';
+      case 'client/rate-limited':
+        return err.message; // "Please wait Ns before resending."
+      case 'auth/network-request-failed':
+        return 'تعذر الاتصال بالخادم. تحقق من اتصالك بالإنترنت وحاول مجدداً.';
+      case 'auth/user-token-expired':
+      case 'auth/user-disabled':
+        return 'انتهت صلاحية الجلسة. يرجى تسجيل الخروج ثم الدخول من جديد.';
+      default:
+        return `تعذر الإرسال${err?.code ? ` (${err.code})` : ''}. حاول مرة أخرى.`;
+    }
+  };
 
   const handleResend = async () => {
     setResendStatus('sending');
+    setResendError('');
     try {
       await resendVerificationEmail();
       setResendStatus('success');
-    } catch {
+    } catch (err) {
+      console.error('[verify] Resend failed in UI:', err?.code, err?.message);
+      setResendError(messageForError(err));
       setResendStatus('error');
     }
   };
@@ -197,7 +220,7 @@ function EmailVerificationScreen({ resendVerificationEmail }) {
       )}
       {resendStatus === 'error' && (
         <p className="text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-sm mb-3">
-          تعذر الإرسال. حاول مرة أخرى.
+          {resendError || 'تعذر الإرسال. حاول مرة أخرى.'}
         </p>
       )}
       <button
@@ -270,6 +293,7 @@ function App() {
   return (
     <BranchProvider>
       <AuthProvider>
+        <WebsiteSettingsProvider>
         <Router>
           <div className="App" dir="rtl">
             <ScrollToTop />
@@ -345,6 +369,7 @@ function App() {
             </Routes>
           </div>
         </Router>
+        </WebsiteSettingsProvider>
       </AuthProvider>
     </BranchProvider>
   );

@@ -3,15 +3,42 @@ import { MapPin, Phone, Mail, Clock, MessageCircle, Wrench, Building2 } from 'lu
 import FAQItem from '../components/FAQItem';
 import { useBranch } from '../contexts/BranchContext';
 import { createContactMessage } from '../services/firestoreService';
+import { useWebsiteSettings } from '../contexts/WebsiteSettingsContext';
 
 // ─── Developer contact details ─────────────────────────────────────
-const DEV_WHATSAPP = '+213783215507';  
+const DEV_WHATSAPP = '+213783215507';
 const DEV_EMAIL    = 'marouabenzaoui48@gmail.com';
-const DEV_PHONE    = '0783 21 55 07';  
+const DEV_PHONE    = '0783 21 55 07';
 // ───────────────────────────────────────────────────────────────────
+
+// Build a `tel:` href from a display phone number, and a Google Maps embed URL
+// from a free-text address (reliable for any query, unlike a stored share link).
+const telHref = (phone) => `tel:${String(phone || '').replace(/[^\d+]/g, '')}`;
+const mapEmbed = (q) => `https://www.google.com/maps?q=${encodeURIComponent(q || '')}&output=embed`;
+
+// Alternate the two brand accents across branch cards. Full literal class strings
+// (not `bg-${accent}`) so Tailwind's JIT keeps them in the compiled CSS.
+const ACCENTS = [
+    {
+        panel: 'bg-gradient-to-br from-primary/10 to-primary/5',
+        iconWrap: 'bg-primary/20',
+        icon: 'text-primary',
+        title: 'text-primary',
+        button: 'bg-primary hover:bg-primary-600',
+    },
+    {
+        panel: 'bg-gradient-to-br from-secondary/10 to-secondary/5',
+        iconWrap: 'bg-secondary/20',
+        icon: 'text-secondary',
+        title: 'text-secondary',
+        button: 'bg-secondary hover:bg-secondary-600',
+    },
+];
 
 const ContactPage = () => {
     const { selectedBranchId } = useBranch();
+    const { settings } = useWebsiteSettings();
+    const { contact, branches } = settings;
 
     const faqItems = [
         {
@@ -69,43 +96,48 @@ const ContactPage = () => {
                             {/* Contact items grid */}
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                 {/* Phone - Primary CTA */}
-                                <a href="tel:0554562997"
-                                   className="group bg-gradient-to-l from-primary/5 to-primary/10 flex items-center gap-6 p-6 rounded-2xl border-2 border-primary/20 hover:border-primary hover:bg-primary/10 transition-all duration-300 hover:shadow-lg">
-                                    <div className="bg-primary rounded-xl p-4 group-hover:scale-110 transition-transform duration-300">
-                                        <Phone className="w-7 h-7 text-white" />
-                                    </div>
-                                    <div className="flex-1">
-                                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">رقم الهاتف</p>
-                                        <p className="text-3xl font-bold text-primary tracking-wide" dir="ltr">0554 56 29 97</p>
-                                        <p className="text-sm text-gray-600 mt-1">متاح لكلا الفرعين • اتصل مباشرة</p>
-                                    </div>
-                                </a>
+                                {contact.phone && (
+                                    <a href={telHref(contact.phone)}
+                                       className="group bg-gradient-to-l from-primary/5 to-primary/10 flex items-center gap-6 p-6 rounded-2xl border-2 border-primary/20 hover:border-primary hover:bg-primary/10 transition-all duration-300 hover:shadow-lg">
+                                        <div className="bg-primary rounded-xl p-4 group-hover:scale-110 transition-transform duration-300">
+                                            <Phone className="w-7 h-7 text-white" />
+                                        </div>
+                                        <div className="flex-1">
+                                            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">رقم الهاتف</p>
+                                            <p className="text-3xl font-bold text-primary tracking-wide" dir="ltr">{contact.phone}</p>
+                                            <p className="text-sm text-gray-600 mt-1">متاح لكلا الفرعين • اتصل مباشرة</p>
+                                        </div>
+                                    </a>
+                                )}
 
                                 {/* Email - Secondary CTA */}
-                                <a href="mailto:trustschoolamara@gmail.com"
-                                   className="group flex items-center gap-6 p-6 rounded-2xl border-2 border-gray-100 hover:border-primary hover:bg-primary/5 transition-all duration-300 hover:shadow-lg">
-                                    <div className="bg-primary-100 group-hover:bg-primary rounded-xl p-4 transition-colors duration-300">
-                                        <Mail className="w-7 h-7 text-primary group-hover:text-white transition-colors duration-300" />
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">البريد الإلكتروني</p>
-                                        <p className="text-lg font-bold text-gray-800 truncate" dir="ltr">trustschoolamara@gmail.com</p>
-                                        <p className="text-sm text-gray-600 mt-1">سنرد على رسالتك في أقرب وقت</p>
-                                    </div>
-                                </a>
+                                {contact.email && (
+                                    <a href={`mailto:${contact.email}`}
+                                       className="group flex items-center gap-6 p-6 rounded-2xl border-2 border-gray-100 hover:border-primary hover:bg-primary/5 transition-all duration-300 hover:shadow-lg">
+                                        <div className="bg-primary-100 group-hover:bg-primary rounded-xl p-4 transition-colors duration-300">
+                                            <Mail className="w-7 h-7 text-primary group-hover:text-white transition-colors duration-300" />
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">البريد الإلكتروني</p>
+                                            <p className="text-lg font-bold text-gray-800 truncate" dir="ltr">{contact.email}</p>
+                                            <p className="text-sm text-gray-600 mt-1">سنرد على رسالتك في أقرب وقت</p>
+                                        </div>
+                                    </a>
+                                )}
                             </div>
 
                             {/* Hours - Highlighted */}
-                            <div className="bg-gradient-to-l from-warning/10 to-warning/5 flex items-center gap-6 p-6 rounded-2xl border-2 border-warning/20">
-                                <div className="bg-warning/20 rounded-xl p-4">
-                                    <Clock className="w-7 h-7 text-warning-600" />
+                            {contact.workingHours && (
+                                <div className="bg-gradient-to-l from-warning/10 to-warning/5 flex items-center gap-6 p-6 rounded-2xl border-2 border-warning/20">
+                                    <div className="bg-warning/20 rounded-xl p-4">
+                                        <Clock className="w-7 h-7 text-warning-600" />
+                                    </div>
+                                    <div>
+                                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">ساعات العمل</p>
+                                        <p className="text-2xl font-bold text-warning-600">{contact.workingHours}</p>
+                                    </div>
                                 </div>
-                                <div>
-                                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">ساعات العمل</p>
-                                    <p className="text-base font-bold text-gray-800 mb-0.5">السبت – الخميس</p>
-                                    <p className="text-2xl font-bold text-warning-600" dir="ltr">8:00 ص – 8:00 م</p>
-                                </div>
-                            </div>
+                            )}
 
                         </div>
                     </div>
@@ -119,65 +151,48 @@ const ContactPage = () => {
                     </div>
 
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                        {/* First Location Card */}
-                        <div className="bg-white rounded-3xl shadow-lg overflow-hidden hover:shadow-2xl transition-all duration-300 border border-gray-100">
-                            <div className="bg-gradient-to-br from-primary/10 to-primary/5 p-8 md:p-10">
-                                <div className="flex items-center gap-4 mb-6">
-                                    <div className="bg-primary/20 rounded-2xl p-4">
-                                        <MapPin className="w-8 h-8 text-primary" />
+                        {branches.map((branch, index) => {
+                            const accent = ACCENTS[index % ACCENTS.length];
+                            const mapsLink = branch.mapsLink || `https://maps.google.com/?q=${encodeURIComponent(branch.address || branch.name)}`;
+                            return (
+                                <div key={branch.id || index} className="bg-white rounded-3xl shadow-lg overflow-hidden hover:shadow-2xl transition-all duration-300 border border-gray-100">
+                                    <div className={`${accent.panel} p-8 md:p-10`}>
+                                        <div className="flex items-center gap-4 mb-6">
+                                            <div className={`${accent.iconWrap} rounded-2xl p-4`}>
+                                                <MapPin className={`w-8 h-8 ${accent.icon}`} />
+                                            </div>
+                                            <h3 className={`text-2xl md:text-3xl font-bold ${accent.title}`}>{branch.name}</h3>
+                                        </div>
+                                        {branch.address && (
+                                            <p className="text-lg text-gray-700 font-semibold mb-4">{branch.address}</p>
+                                        )}
+                                        {branch.phone && (
+                                            <a href={telHref(branch.phone)} className="inline-flex items-center gap-2 text-gray-700 font-semibold mb-6 hover:text-primary transition-colors" dir="ltr">
+                                                <Phone className="w-5 h-5" />
+                                                {branch.phone}
+                                            </a>
+                                        )}
+                                        <div className="bg-white rounded-2xl p-2 mb-6 overflow-hidden shadow-md">
+                                            <iframe
+                                                src={mapEmbed(branch.address || branch.name)}
+                                                width="100%" height="250"
+                                                style={{ border: 0 }}
+                                                allowFullScreen="" loading="lazy"
+                                                title={`Trust School Amara - ${branch.name}`}
+                                            />
+                                        </div>
+                                        <a
+                                            href={mapsLink}
+                                            target="_blank" rel="noopener noreferrer"
+                                            className={`inline-flex items-center w-full justify-center gap-2 ${accent.button} text-white font-bold py-4 px-6 rounded-xl transition-all duration-300 hover:shadow-lg`}
+                                        >
+                                            <MapPin className="w-5 h-5" />
+                                            عرض على خرائط جوجل
+                                        </a>
                                     </div>
-                                    <h3 className="text-2xl md:text-3xl font-bold text-primary">الفرع الأول</h3>
                                 </div>
-                                <p className="text-lg text-gray-700 font-semibold mb-6">إقامة يسرف بومرداس مركز المدينة</p>
-                                <div className="bg-white rounded-2xl p-2 mb-6 overflow-hidden shadow-md">
-                                    <iframe
-                                        src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3323.987479674473!2d3.4734!2d36.7538!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x0%3A0x0!2zMzbCsDQ1JzEzLjciTiAzwrAyOCcyNC4yIkU!5e0!3m2!1sen!2sdz!4v1620000000000!5m2!1sen!2sdz"
-                                        width="100%" height="250"
-                                        style={{ border: 0 }}
-                                        allowFullScreen="" loading="lazy"
-                                        title="Trust School Amara - الفرع الأول"
-                                    />
-                                </div>
-                                <a
-                                    href="https://maps.google.com/?q=إقامة+يسرف+بومرداس+مركز+المدينة"
-                                    target="_blank" rel="noopener noreferrer"
-                                    className="inline-flex items-center w-full justify-center gap-2 bg-primary hover:bg-primary-600 text-white font-bold py-4 px-6 rounded-xl transition-all duration-300 hover:shadow-lg"
-                                >
-                                    <MapPin className="w-5 h-5" />
-                                    عرض على خرائط جوجل
-                                </a>
-                            </div>
-                        </div>
-
-                        {/* Second Location Card */}
-                        <div className="bg-white rounded-3xl shadow-lg overflow-hidden hover:shadow-2xl transition-all duration-300 border border-gray-100">
-                            <div className="bg-gradient-to-br from-secondary/10 to-secondary/5 p-8 md:p-10">
-                                <div className="flex items-center gap-4 mb-6">
-                                    <div className="bg-secondary/20 rounded-2xl p-4">
-                                        <MapPin className="w-8 h-8 text-secondary" />
-                                    </div>
-                                    <h3 className="text-2xl md:text-3xl font-bold text-secondary">الفرع الثاني</h3>
-                                </div>
-                                <p className="text-lg text-gray-700 font-semibold mb-6">التعاونية العقارية الياسمين برج منايل</p>
-                                <div className="bg-white rounded-2xl p-2 mb-6 overflow-hidden shadow-md">
-                                    <iframe
-                                        src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3323.987479674473!2d3.4734!2d36.7538!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x0%3A0x0!2zMzbCsDQ1JzEzLjciTiAzwrAyOCcyNC4yIkU!5e0!3m2!1sen!2sdz!4v1620000000001!5m2!1sen!2sdz"
-                                        width="100%" height="250"
-                                        style={{ border: 0 }}
-                                        allowFullScreen="" loading="lazy"
-                                        title="Trust School Amara - الفرع الثاني"
-                                    />
-                                </div>
-                                <a
-                                    href="https://maps.google.com/?q=التعاونية+العقارية+الياسمين+برج+منايل"
-                                    target="_blank" rel="noopener noreferrer"
-                                    className="inline-flex items-center w-full justify-center gap-2 bg-secondary hover:bg-secondary-600 text-white font-bold py-4 px-6 rounded-xl transition-all duration-300 hover:shadow-lg"
-                                >
-                                    <MapPin className="w-5 h-5" />
-                                    عرض على خرائط جوجل
-                                </a>
-                            </div>
-                        </div>
+                            );
+                        })}
                     </div>
                 </div>
                            

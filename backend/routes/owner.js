@@ -7,6 +7,10 @@ const { getAuditLog, getAdminActivity } = require('../controllers/ownerAuditCont
 const { getAlerts } = require('../controllers/ownerAlertsController');
 const { listAdmins, createAdmin, deactivateAdmin, reactivateAdmin } = require('../controllers/ownerAdminController');
 const { getSettings, updateAnnualFee } = require('../controllers/ownerSettingsController');
+const {
+  getWebsite, updateHero, updateContact, updateSocial, updateBranches,
+  addGalleryImage, deleteGalleryImage, reorderGallery,
+} = require('../controllers/ownerWebsiteController');
 
 // All owner analytics are cross-branch and owner-only.
 router.get('/summary',  verifyToken, requireOwner, getSummary);
@@ -37,5 +41,16 @@ router.patch('/admins/:uid/reactivate',   verifyToken, requireOwner, reactivateA
 // Financial settings — owner-controlled annual fee amount (cross-branch policy).
 router.get('/settings',     verifyToken, requireOwner, getSettings);
 router.patch('/annual-fee', verifyToken, requireOwner, updateAnnualFee);
+
+// Website management — owner-controlled PUBLIC website content (hero, contact,
+// social, branches, gallery). All owner-only + audit-logged in the controller.
+router.get('/website',                    verifyToken, requireOwner, getWebsite);
+router.patch('/website/hero',             verifyToken, requireOwner, updateHero);
+router.patch('/website/contact',          verifyToken, requireOwner, updateContact);
+router.patch('/website/social',           verifyToken, requireOwner, updateSocial);
+router.patch('/website/branches',         verifyToken, requireOwner, updateBranches);
+router.post('/website/gallery',           verifyToken, requireOwner, addGalleryImage);
+router.patch('/website/gallery/order',    verifyToken, requireOwner, reorderGallery);
+router.delete('/website/gallery/:id',     verifyToken, requireOwner, deleteGalleryImage);
 
 module.exports = router;

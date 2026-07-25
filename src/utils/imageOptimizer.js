@@ -12,7 +12,7 @@ export function validateImageFile(file) {
   return { valid: true };
 }
 
-export async function optimizeImage(file) {
+export async function optimizeImage(file, { maxDim = 1200, quality = 0.85 } = {}) {
   return new Promise((resolve) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
@@ -20,7 +20,7 @@ export async function optimizeImage(file) {
     img.onload = () => {
       URL.revokeObjectURL(url);
       try {
-        const MAX_DIM = 1200;
+        const MAX_DIM = maxDim;
         let { width, height } = img;
         if (width > MAX_DIM || height > MAX_DIM) {
           if (width > height) {
@@ -43,7 +43,7 @@ export async function optimizeImage(file) {
             resolve(new File([blob], name, { type: 'image/webp' }));
           },
           'image/webp',
-          0.85
+          quality
         );
       } catch {
         resolve(file);

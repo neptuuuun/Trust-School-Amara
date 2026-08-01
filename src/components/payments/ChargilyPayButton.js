@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { CreditCard, Loader2, Info } from 'lucide-react';
 import { createChargilyCheckout } from '../../services/paymentOrderService';
+import { safeErrorMessage } from '../../utils/apiErrors';
 import { Button } from '../ui/button';
 import { Alert } from '../ui/feedback';
 
@@ -42,7 +43,8 @@ const ChargilyPayButton = ({
       // Full-page redirect to Chargily hosted checkout.
       window.location.href = checkoutUrl;
     } catch (err) {
-      setError(err.message || 'حدث خطأ أثناء إنشاء طلب الدفع. يرجى المحاولة لاحقاً.');
+      // Never surface raw fetch/CORS/exception text to the user.
+      setError(safeErrorMessage(err, 'حدث خطأ أثناء إنشاء طلب الدفع. يرجى المحاولة لاحقاً.'));
       setLoading(false);
     }
   };

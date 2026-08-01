@@ -3,10 +3,11 @@ import { Link } from 'react-router-dom';
 import { Phone, Mail, Clock, MapPin, Facebook, Instagram } from 'lucide-react';
 import { useWebsiteSettings } from '../contexts/WebsiteSettingsContext';
 import { SOCIAL_PLATFORMS } from '../config/websiteDefaults';
+import TikTokIcon from './icons/TikTokIcon';
 
-// Map the platform registry's icon names to concrete lucide components. Adding a
+// Map the platform registry's icon names to concrete icon components. Adding a
 // new platform is just an entry in SOCIAL_PLATFORMS + one line here.
-const SOCIAL_ICONS = { Facebook, Instagram };
+const SOCIAL_ICONS = { Facebook, Instagram, TikTok: TikTokIcon };
 
 // Build a `tel:` href from a display phone number (strip spaces/formatting).
 const telHref = (phone) => `tel:${String(phone || '').replace(/[^\d+]/g, '')}`;

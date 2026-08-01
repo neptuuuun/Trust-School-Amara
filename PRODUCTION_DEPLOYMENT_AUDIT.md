@@ -283,7 +283,15 @@ Four independent layers:
 Paid-but-unseatable orders are flagged `needsAttention: true` (`:526-533`) and surfaced in
 the admin recovery desk (`backend/routes/admin.js:22`). Good design.
 
-### 🟠 H1 — The webhook is behind the strict rate limiter
+### 🟠 H1 — The webhook is behind the strict rate limiter — ✅ RESOLVED
+
+> **Resolved in code.** The webhook is now mounted before the limiters with its own
+> `webhookLimiter` (1000/15min), and the student poll routes (`POST /verify/:orderId`,
+> `GET /order/:orderId`) are mounted before `generalLimiter` with a dedicated
+> `pollLimiter` (300/15min) — so neither the 30/15min `sensitiveLimiter` nor the
+> general cap can 429 a paying student off their confirmation. See `server.js`
+> (webhook + poll mounts) and `pollLimiter`. `/checkout` and `/orders` keep the
+> strict cap. The original finding is retained below for context.
 
 **Files:** `backend/server.js:74-77, 89`
 
@@ -411,7 +419,13 @@ to destruction. Both outcomes are bad; check which one you have.
 > uploads — if it is "allow anon insert", any anonymous party can write to the bucket.
 > This warrants a dedicated look before launch.
 
-### 🟡 M1 — Dead staff-bypass branch in `getOrderStatus`
+### 🟡 M1 — Dead staff-bypass branch in `getOrderStatus` — ✅ RESOLVED
+
+> **Resolved in code.** The dead `req.user.role` clause was removed; the check is
+> now `order.studentId !== req.user.uid` with a comment explaining that staff read
+> orders through `/orders` (requireAdmin), since this project carries no custom
+> claims. Behavior is unchanged (the clause was always `undefined` → fail-closed);
+> the misleading dead code is gone.
 
 **File:** `backend/controllers/chargilyController.js:347`
 
@@ -508,7 +522,9 @@ Start Command:   npm start
 Health Check:    /health          ← already implemented at server.js:61-63
 ```
 
-### 🟡 M7 — Server-only packages in the frontend manifest
+### 🟡 M7 — Server-only packages in the frontend manifest — ✅ RESOLVED
+> Removed `express`, `firebase-admin`, `body-parser`, `cors` from the frontend
+> `package.json` (re-verified: no `src/` import of any of them).
 
 `package.json:11-16` lists `express@^5.2.1`, `firebase-admin@^13.6.1`, `body-parser`, and
 `cors` as **frontend** dependencies. Verified: nothing in `src/` imports them, so webpack
@@ -516,7 +532,10 @@ does not bundle them — no leak. But they inflate install time and `firebase-ad
 browser project is a loaded footgun (one stray import ships Admin SDK code to the client).
 Move them out.
 
-### 🟡 M8 — Dev/test leftovers tracked in git
+### 🟡 M8 — Dev/test leftovers tracked in git — ✅ RESOLVED
+> All six files deleted (`server-minimal.js`, `test-server.js`, `test-backend.js`,
+> `test-price-input.html`, `backend-package.json`, `backend/_verify_email.js`);
+> stale `test-backend.js` references in `QUICK_START_BACKEND.md` updated.
 
 `server-minimal.js`, `test-server.js`, `test-backend.js`, `test-price-input.html`,
 `backend-package.json`, `backend/_verify_email.js` (self-described at line 1 as
@@ -524,7 +543,9 @@ Move them out.
 repo root is an alternate Express server that could be started by mistake by a
 misconfigured host. Delete them.
 
-### 🟡 M9 — Orphaned Cloud Functions directory
+### 🟡 M9 — Orphaned Cloud Functions directory — ✅ RESOLVED
+> `functions/` deleted. Confirmed `firebase.json` has no functions target, so the
+> directory was never shipped by `firebase deploy`.
 
 `functions/` is tracked and contains a live nodemailer transporter with hardcoded
 placeholder credentials (`functions/index.js:14-20`). `firebase.json` has **no** functions
@@ -697,14 +718,40 @@ crawlers can't reach the data, but add `Disallow: /admin`, `Disallow: /owner` an
 - [ ] 🟠 Supabase: make `user-uploads` private; switch to signed URLs; audit RLS policies (H3)
 - [ ] Seed `config/finance.annualFeeAmount`, provision owner + admins, create branch docs
 
-### Phase 5 — Code fixes (awaiting your approval)
+### Phase 5 — Code fixes
 
-- [ ] 🟠 H1 — move the webhook outside `sensitiveLimiter`; separate poll limiter
-- [ ] 🟠 H2 — `vercel.json` rewrites
-- [ ] 🟠 H3 — signed URLs + backend-side deletion
-- [ ] 🟡 M1 — remove/replace the dead `req.user.role` check
-- [ ] 🟡 M7/M8/M9 — remove server deps from the frontend manifest; delete leftovers and `functions/`
-- [ ] 🟢 L1/L2/L5 — delete `.env.local`, strip prod console logs, clean CORS rejection
+- [x] 🟠 H1 — webhook mounted before the limiters (own `webhookLimiter`); student
+      poll routes (`/verify/:orderId`, `/order/:orderId`) moved to a dedicated
+      `pollLimiter` (300/15min), off the 30/15min `sensitiveLimiter` — `server.js`
+- [x] 🟠 H2 — `vercel.json` has `rewrites` (SPA fallback) + `framework: null`
+- [~] 🟠 H3 — **backend-side deletion done** (`services/supabaseStorage.js` +
+      `adminController.deleteStudent`, server-authoritative, idempotent, uid-scoped).
+      Still MANUAL: make the `user-uploads` bucket private + switch to signed URLs,
+      and set `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` on Render to activate.
+- [x] 🟡 M1 — dead `req.user.role` staff bypass removed from `getOrderStatus`
+      (this project has no custom claims; staff read orders via `/orders`)
+- [x] 🟡 M7/M8/M9 — **done.** M7: removed `express`, `firebase-admin`, `body-parser`,
+      `cors` from the frontend `package.json` (verified unimported in `src/`). M8:
+      deleted `server-minimal.js`, `test-server.js`, `test-backend.js`,
+      `test-price-input.html`, `backend-package.json`, `backend/_verify_email.js`
+      (+ updated the stale `test-backend.js` references in `QUICK_START_BACKEND.md`).
+      M9: deleted the orphaned `functions/` directory (`firebase.json` has no
+      functions target, so nothing shipped it).
+- [~] 🟢 L1/L2/L5 — `L1` **done** (deleted the dead, gitignored `.env.local` —
+      stale `NEXT_PUBLIC_*` Firebase client config unused by this CRA app).
+      `L2` **PII-leaking** console logs removed: the canonical-doc
+      snapshot dumps (`AuthContext`, `StudentDashboard`), the `[ADMIN DEBUG] RAW
+      USERS FROM FIRESTORE` dump of every user's full record + its hardcoded
+      target-UID probe (`userService`), the email-logging save (`userService`), the
+      `[ADMIN DEBUG]` admin-doc/email dump (`AuthContext`), and the `TEMPORARY DEBUG`
+      uid/email effect (`Header`). Remaining decorative flow logs (emoji step
+      traces, no PII) are cosmetic and left for a separate hygiene pass. `L1`
+      (delete dead `.env.local`) / `L5` (CORS rejection cleanup) still open.
+
+**Also hardened this pass (not originally listed):** `StudentDashboard` now runs
+the stored `idCardUrl` through a `resolveSafeImageUrl()` allowlist (http(s) only)
+before using it as a link `href`, so a tampered client-writable
+`javascript:`/`data:` value can never become an executable link.
 
 ### Phase 6 — Post-deploy smoke test (live money, small amount)
 

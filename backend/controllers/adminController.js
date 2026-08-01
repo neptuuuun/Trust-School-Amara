@@ -9,6 +9,7 @@ const { normalizeSchool, isValidSchool } = require('../constants');
 // Support seats are recounted live (verified AND not expired) — reuse the single
 // implementation instead of duplicating the expiry rule here.
 const { recomputeSupportClassEnrollment } = require('./registrationController');
+const { deleteUserFiles } = require('../services/supabaseStorage');
 
 const VALID_BRANCHES = ['boumerdes', 'bordj_menaiel'];
 
@@ -460,7 +461,13 @@ const deleteStudent = async (req, res, next) => {
       await auth.deleteUser(userId).catch((e) => {
         if (e.code !== 'auth/user-not-found') throw e;
       });
-      return res.status(200).json({ success: true, photoUrl: null, idCardUrl: null });
+      // Idempotent sweep: even with the profile already gone, remove any storage
+      // objects still sitting at this user's deterministic paths.
+      const storageCleanup = await deleteUserFiles(userId);
+      return res.status(200).json({
+        success: true, photoUrl: null, idCardUrl: null,
+        storageCleaned: storageCleanup.configured && storageCleanup.ok,
+      });
     }
 
     const userData      = userSnap.data() || {};
@@ -487,6 +494,26 @@ const deleteStudent = async (req, res, next) => {
     const actor = { uid: req.user?.uid || '', email: req.user?.email || '', role: 'admin' };
     const cascade = await cascadeStudentRecords(branchId, userId, actor);
 
+    // 2.5. Delete the student's Supabase Storage media (ID card + photo) BEFORE
+    //      dropping the profile, so their identity documents never outlive the
+    //      record. Server-authoritative, idempotent, best-effort (never throws),
+    //      and keyed on the deterministic per-user paths so a missing/null stored
+    //      reference cannot leave an orphan.
+    //
+    //      Deletion is NOT aborted when this fails: revoking access + removing the
+    //      record are the security-critical operations and must not be held hostage
+    //      by a best-effort side-system (a failed photo delete leaves a RECOVERABLE
+    //      orphan at a known deterministic path; a refused deletion leaves the
+    //      account fully live). Instead, a failure is recorded durably in the
+    //      immutable audit log below so the orphan is traceable and reclaimable by
+    //      re-running this endpoint (the idempotent sweep above).
+    const storageCleanup = await deleteUserFiles(userId, [
+      userData.photoUrl,
+      userData.idCardUrl,
+      ...(Array.isArray(userData.uploadedDocs) ? userData.uploadedDocs : []),
+    ]);
+    const storageCleanupFailed = storageCleanup.configured && !storageCleanup.ok;
+
     // 3. Delete the Firestore profile.
     await userRef.delete();
 
@@ -494,14 +521,16 @@ const deleteStudent = async (req, res, next) => {
       branchId, actor,
       action: 'student.delete', targetType: 'user', targetId: userId,
       before: { name: userData.name || userData.fullName || null, email: userData.email || null },
-      after: { cascade },
+      after: { cascade, storageCleanupFailed },
     });
 
-    // Return file URLs so the frontend can clean up Supabase storage.
+    // Return file URLs so the frontend can run its best-effort fallback cleanup
+    // (idempotent — a no-op once the server-side sweep above has removed them).
     return res.status(200).json({
       success:   true,
       photoUrl:  userData.photoUrl   || null,
       idCardUrl: userData.idCardUrl  || null,
+      storageCleaned: storageCleanup.configured && storageCleanup.ok,
       cascade,
     });
   } catch (err) {

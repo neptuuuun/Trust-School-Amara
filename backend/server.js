@@ -17,7 +17,7 @@ const notifyRoutes   = require('./routes/notify');
 const auditRoutes    = require('./routes/audit');
 const { verifyToken, requireAdmin } = require('./middleware/auth');
 const { logAudit }   = require('./controllers/ledgerController');
-const { handleWebhook } = require('./controllers/chargilyController');
+const { handleWebhook, getOrderStatus, verifyAndProcess } = require('./controllers/chargilyController');
 const errorHandler   = require('./middleware/errorHandler');
 const { startCronJobs } = require('./services/cronService');
 
@@ -83,6 +83,17 @@ const webhookLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, max: 1000,
   standardHeaders: true, legacyHeaders: false, message: rlMessage,
 });
+// Student payment-status polling gets its own generous bucket. After returning
+// from Chargily, PaymentStatusPage fires POST /verify/:orderId up to ~13× per
+// payment (1 initial + 12 retries at 5s), and Algerian mobile carriers put many
+// students behind one CGNAT public IP. Under the 30/15min sensitiveLimiter those
+// polls would otherwise share, a paid student can be 429'd off their own
+// confirmation — the poll swallows the error and gives up ("verification took too
+// long"), leaving them paid but unenrolled. See the poll mount below.
+const pollLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, max: 300,
+  standardHeaders: true, legacyHeaders: false, message: rlMessage,
+});
 
 // ── Chargily webhook — mounted BEFORE the general/sensitive limiters ──────────
 // Chargily delivers every callback from its own small, fixed set of egress IPs, so
@@ -105,6 +116,23 @@ const webhookLimiter = rateLimit({
 // express.raw() for this path is already applied above (before express.json), so
 // req.body is the untouched Buffer the signature check requires.
 app.post('/api/chargily/webhook', webhookLimiter, handleWebhook);
+
+// ── Student payment-status polling — mounted BEFORE the general/sensitive limiters ──
+// After returning from Chargily, PaymentStatusPage polls POST /verify/:orderId up
+// to ~13× per payment. Mounting these here (like the webhook above, before
+// `app.use('/api', generalLimiter)`) matches them first, so they get their own
+// dedicated pollLimiter bucket and reach neither the 300/15min general cap nor the
+// 30/15min sensitive cap that /api/chargily otherwise carries. Without this, many
+// students behind one CGNAT IP exhaust the shared bucket and get 429'd off their
+// own confirmation — paid but unenrolled.
+//
+// Both routes are verifyToken-gated (unauthenticated floods are rejected at the
+// token check before any work). /verify is finalize-capable but idempotent — the
+// four-layer duplicate-payment guard in verifyAndProcess makes re-runs safe. The
+// equivalent routes inside routes/chargily.js stay in place but are unreachable in
+// this app; they remain valid if that router is ever mounted standalone.
+app.post('/api/chargily/verify/:orderId', pollLimiter, verifyToken, verifyAndProcess);
+app.get('/api/chargily/order/:orderId',   pollLimiter, verifyToken, getOrderStatus);
 
 app.use('/api', generalLimiter);
 

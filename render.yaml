@@ -93,6 +93,15 @@ services:
       - key: FIREBASE_SERVICE_ACCOUNT_BASE64
         sync: false
 
+      # ── Supabase Storage (server-side cleanup of student ID/photo files) ──────
+      # backend/services/supabaseStorage.js removes a deleted student's files from
+      # the `user-uploads` bucket. Use the SERVICE-ROLE key (server only, never the
+      # anon key). Leave unset to disable server-side cleanup (client fallback runs).
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+
       # ── Chargily (LIVE) ──────────────────────────────────────────────────────
       # services/chargilyService.js:27-33 selects the API endpoint from the key
       # PREFIX: live_sk_ → https://pay.chargily.net/api/v2

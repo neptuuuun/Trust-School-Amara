@@ -78,8 +78,6 @@ export const AuthProvider = ({ children }) => {
     if (!uid || !email) return null;
     try {
       const adminDoc = await getAdminByUid(uid);
-      console.log('[ADMIN DEBUG] ADMIN USER:', { uid, email });
-      console.log('[ADMIN DEBUG] ADMIN DOC from Firestore admins/', uid, ':', adminDoc);
       // A deactivated employee (active:false) is refused admin access. A missing
       // `active` field defaults to active (backward compat with legacy admin docs).
       if (adminDoc && adminDoc.active === false) {
@@ -87,11 +85,10 @@ export const AuthProvider = ({ children }) => {
         return null;
       }
       if (adminDoc && adminDoc.role === 'admin') {
-        console.log('👑 User is admin for branch:', adminDoc.branchId);
         const VALID_BRANCHES = ['boumerdes', 'bordj_menaiel'];
         if (!VALID_BRANCHES.includes(adminDoc.branchId)) {
           console.error(
-            '[ADMIN DEBUG] *** CRITICAL: admin branchId "' + adminDoc.branchId + '" is NOT a valid branch. ' +
+            '*** CRITICAL: admin branchId "' + adminDoc.branchId + '" is NOT a valid branch. ' +
             'Expected one of: ' + VALID_BRANCHES.join(', ') + '. ' +
             'Fix the branchId field in Firestore: admins/' + uid
           );
@@ -122,13 +119,11 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     if (activeListenerRef.current) {
-      console.log('🧹 Cleaning up existing listener');
       try { activeListenerRef.current(); } catch (e) { console.error('Error cleaning up listener:', e); }
       activeListenerRef.current = null;
     }
 
     if (!user) {
-      console.log('⏭️ No user, skipping listener setup');
       setRole(null);
       setProfileBranch(null);
       setVerified(null);
@@ -151,19 +146,16 @@ export const AuthProvider = ({ children }) => {
     // returns "missing" and resets role → null, so the navbar showed the regular
     // "الملف الشخصي / خروج" UI instead of "لوحة الإدارة".
     if (isAdmin === null) {
-      console.log('⏳ Admin status not resolved yet — deferring profile listener');
       return;
     }
 
     if (isAdmin === true) {
-      console.log('⏭️ User is admin — observer owns profile state, skipping listener');
       return;
     }
 
     // Owners have no branch user doc — the observer owns their state. Reading
     // branches/<b>/users/<ownerUid> here would 404 and wrongly reset role → null.
     if (isOwnerRef.current) {
-      console.log('⏭️ User is owner — observer owns profile state, skipping listener');
       return;
     }
 
@@ -179,8 +171,6 @@ export const AuthProvider = ({ children }) => {
       // The auth observer owns all state transitions; this block just waits.
       return;
     }
-
-    console.log('✅ Creating listener for:', { branchId: selectedBranchId, userId: user.uid });
 
     try {
       const branchRef = doc(db, 'branches', selectedBranchId, 'users', user.uid);
@@ -213,14 +203,6 @@ export const AuthProvider = ({ children }) => {
           if (!vs && (data?.verified === true || data?.accountVerified === true)) {
             setDoc(branchRef, { verificationStatus: 'verified', updatedAt: serverTimestamp() }, { merge: true }).catch(() => {});
           }
-
-          console.log('[AuthContext] Canonical user doc snapshot', {
-            path: userDocPath,
-            verificationStatus: data?.verificationStatus,
-            status: data?.status,
-            doc: { id: snap.id, ...data },
-          });
-          console.log('📥 User profile updated:', { userRole, branchId, isVerified });
 
           setRole(userRole);
           setProfileBranch(branchId);
@@ -257,7 +239,6 @@ export const AuthProvider = ({ children }) => {
 
     return () => {
       if (activeListenerRef.current) {
-        console.log('🧹 Cleanup: unsubscribing listener');
         try { activeListenerRef.current(); } catch (e) { console.error('Error during cleanup:', e); }
         activeListenerRef.current = null;
       }
@@ -270,7 +251,6 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      console.log('🔐 Auth state changed:', currentUser?.email || 'logged out');
 
       // Only re-enter the loading state on a genuine sign-in event — when the
       // UID changes from null/undefined to a real value, or switches to a different
@@ -318,7 +298,6 @@ export const AuthProvider = ({ children }) => {
       try {
         const adminInfo = await checkIfAdmin(currentUser.uid, currentUser.email);
         if (adminInfo) {
-          console.log('👑 User is admin for branch:', adminInfo.branchId);
           setRole('admin');
           setProfileBranch(adminInfo.branchId);
           setVerified(true);
@@ -357,7 +336,6 @@ export const AuthProvider = ({ children }) => {
       try {
         const ownerInfo = await checkIfOwner(currentUser.uid);
         if (ownerInfo) {
-          console.log('🏛️ User is the school owner');
           setRole('owner');
           setOwnerData(ownerInfo);
           setProfileBranch(null);          // owner is cross-branch — never branch-bound
@@ -400,8 +378,6 @@ export const AuthProvider = ({ children }) => {
 
       // For non-admin users, the separate useEffect above handles the listener.
       // DON'T set loading to false here — let the listener do it.
-      console.log('👤 Regular user - profile listener will be set up by separate effect');
-
       if (currentUser && selectedBranchId) {
         try { await syncEmailVerificationIfNeeded(selectedBranchId); } catch (e) { /* silent */ }
       }
@@ -430,8 +406,6 @@ export const AuthProvider = ({ children }) => {
     // NOTE: this deliberately reuses the currently authenticated user and NEVER
     // recreates the account. Re-running createUserWithEmailAndPassword here is
     // what produces the spurious `auth/email-already-in-use` errors.
-    console.log('[verify] Resend requested. Current user:', auth.currentUser?.email || null);
-    console.log('[verify] Email verified:', auth.currentUser?.emailVerified);
     if (!auth.currentUser) throw new Error('No authenticated user.');
     const uid = auth.currentUser.uid;
     const lastSentRaw = localStorage.getItem(getVerificationRateLimitKey(uid));
@@ -444,10 +418,8 @@ export const AuthProvider = ({ children }) => {
       throw waitErr;
     }
     try {
-      console.log('[verify] Sending verification email...');
       await sendEmailVerification(auth.currentUser);
       localStorage.setItem(getVerificationRateLimitKey(uid), String(now));
-      console.log('[verify] Verification email sent successfully.');
     } catch (error) {
       // Surface the REAL Firebase reason (e.g. auth/too-many-requests → HTTP 400).
       // Previously this bubbled up as a generic failure with no diagnostic value.
@@ -805,14 +777,6 @@ export const AuthProvider = ({ children }) => {
     // selected a branch on the public selection page before reaching this call.
     const branchId = extraData.branchId || selectedBranchId;
 
-    console.log('🔵 signup called with:', {
-      email,
-      branchId,
-      extraDataBranchId: extraData.branchId,
-      selectedBranchId,
-      extraData
-    });
-
     if (!branchId) throw new Error('يرجى اختيار الفرع قبل إنشاء الحساب.');
 
     const validBranches = ['boumerdes', 'bordj_menaiel'];
@@ -820,9 +784,7 @@ export const AuthProvider = ({ children }) => {
       throw new Error(`Invalid branchId: ${branchId}. Must be one of: ${validBranches.join(', ')}`);
     }
 
-    console.log('🔵 Creating Firebase Auth user...');
     const cred = await createUserWithEmailAndPassword(auth, email, password);
-    console.log('✅ Firebase Auth user created:', cred.user.uid);
 
     const branchName = extraData.branchName ||
       (branchId === 'boumerdes' ? 'بومرداس' :
@@ -859,23 +821,12 @@ export const AuthProvider = ({ children }) => {
       updatedAt: serverTimestamp(),
     };
 
-    console.log('🔵 Saving initial user document to Firestore:', {
-      path: userPath,
-      branchId: payload.branchId,
-      branchName: payload.branchName
-    });
-
     try {
       await setDoc(userRef, payload, { merge: true });
-      console.log('✅ Initial user document saved to Firestore');
 
       try {
-        console.log('[verify] Current user:', cred.user?.email);
-        console.log('[verify] Email verified:', cred.user?.emailVerified);
-        console.log('[verify] Sending verification email...');
         await sendEmailVerification(cred.user);
         localStorage.setItem(getVerificationRateLimitKey(cred.user.uid), String(Date.now()));
-        console.log('[verify] Verification email sent successfully.');
       } catch (e) {
         // DO NOT silently swallow. This is the exact point where a Firebase 400
         // (e.g. auth/too-many-requests) would otherwise vanish, leaving the user
@@ -888,7 +839,6 @@ export const AuthProvider = ({ children }) => {
 
       const verifyDoc = await getDoc(userRef);
       if (!verifyDoc.exists()) throw new Error('User document was not created successfully in signup');
-      console.log('✅ User document verified in Firestore');
     } catch (error) {
       console.error('❌ Error saving initial user document:', {
         path: userPath,

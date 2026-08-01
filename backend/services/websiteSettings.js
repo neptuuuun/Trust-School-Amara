@@ -11,6 +11,7 @@
  *     social:   { facebook, instagram, ... }   // extensible: add tiktok/youtube later
  *     branches: [ { id, name, address, phone, mapsLink } ],
  *     gallery:  [ { id, url, path, caption, order } ],
+ *     faq:      [ { id, question, answer, order, isVisible, createdAt, updatedAt } ],
  *     updatedAt, updatedBy
  *   }
  *
@@ -47,12 +48,14 @@ const DEFAULTS = Object.freeze({
   social: {
     facebook: '',
     instagram: '',
+    tiktok: '',
   },
   branches: [
     { id: 'boumerdes',    name: 'الفرع الأول',  address: 'إقامة يسرف بومرداس مركز المدينة',        phone: '0554 56 29 97', mapsLink: 'https://maps.google.com/?q=إقامة+يسرف+بومرداس+مركز+المدينة' },
     { id: 'bordj_menaiel', name: 'الفرع الثاني', address: 'التعاونية العقارية الياسمين برج منايل', phone: '0554 56 29 97', mapsLink: 'https://maps.google.com/?q=التعاونية+العقارية+الياسمين+برج+منايل' },
   ],
   gallery: [],
+  faq: [],
 });
 
 function websiteRef() {
@@ -72,6 +75,7 @@ function withDefaults(data = {}) {
     social:   { ...DEFAULTS.social,  ...(data.social || {}) },
     branches: Array.isArray(data.branches) && data.branches.length ? data.branches : DEFAULTS.branches,
     gallery:  Array.isArray(data.gallery) ? [...data.gallery].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)) : [],
+    faq:      Array.isArray(data.faq) ? [...data.faq].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)) : [],
     updatedAt: data.updatedAt || null,
     updatedBy: data.updatedBy || null,
     isDefault: !data || Object.keys(data).length === 0,
@@ -167,6 +171,23 @@ function sanitizeGalleryItem(item, order) {
   };
 }
 
+// Normalize one FAQ item. `createdAt`/`updatedAt` are ISO strings (NOT
+// serverTimestamp — Firestore forbids FieldValue sentinels inside array
+// elements). The caller supplies fresh timestamps; existing values are preserved
+// through `item` on edits.
+function sanitizeFaqItem(item = {}, order = 0) {
+  const now = new Date().toISOString();
+  return {
+    id:        str(item.id).trim(),
+    question:  str(item.question).trim(),
+    answer:    str(item.answer).trim(),
+    order:     Number.isFinite(Number(order)) ? Number(order) : 0,
+    isVisible: item.isVisible === undefined ? true : Boolean(item.isVisible),
+    createdAt: str(item.createdAt).trim() || now,
+    updatedAt: str(item.updatedAt).trim() || now,
+  };
+}
+
 module.exports = {
   DEFAULTS,
   getWebsiteSettings,
@@ -176,5 +197,6 @@ module.exports = {
   sanitizeSocial,
   sanitizeBranches,
   sanitizeGalleryItem,
+  sanitizeFaqItem,
   websiteRef,
 };

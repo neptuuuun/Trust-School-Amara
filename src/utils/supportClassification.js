@@ -42,6 +42,23 @@ export const REASON_MESSAGES = {
 // ── Average parsing / validation ───────────────────────────────────────────────
 
 /**
+ * Normalize a raw decimal string the way real (esp. mobile / Arabic-keyboard)
+ * users type it into a plain text field, WITHOUT changing the stored format —
+ * the result is still parsed to a plain Number afterwards.
+ *   - Arabic-Indic (٠-٩) and Persian (۰-۹) digits  → Latin 0-9
+ *   - comma (,) and Arabic decimal separator (٫)    → dot (.)  ← the mobile fix
+ *   - Arabic thousands separator (٬) and whitespace → removed
+ * Keep byte-for-byte in lockstep with backend/services/supportEligibility.js.
+ */
+export const normalizeDecimalInput = (raw) =>
+  String(raw)
+    .trim()
+    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06F0))
+    .replace(/[٫,]/g, '.')
+    .replace(/[٬\s]/g, '');
+
+/**
  * Validate a raw average input (string or number).
  * @returns {{ valid: boolean, value: number|null, error: string|null }}
  */
@@ -49,7 +66,7 @@ export const validateAverage = (raw) => {
   if (raw === '' || raw == null) {
     return { valid: false, value: null, error: 'يرجى إدخال معدل المواد المميزة.' };
   }
-  const n = typeof raw === 'number' ? raw : Number(String(raw).trim().replace(',', '.'));
+  const n = typeof raw === 'number' ? raw : Number(normalizeDecimalInput(raw));
   if (!Number.isFinite(n)) {
     return { valid: false, value: null, error: 'المعدل يجب أن يكون رقماً صحيحاً.' };
   }

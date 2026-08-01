@@ -7,6 +7,7 @@ import { getAdminByUid } from '../services/adminService';
 import { Button } from '../components/ui/button';
 import { Input, Label } from '../components/ui/input';
 import { Alert, Spinner } from '../components/ui/feedback';
+import { getFriendlyLoginError, LOGIN_ERROR_MESSAGES } from '../utils/authErrors';
 
 const AdminLogin = () => {
   const [email, setEmail] = useState('');
@@ -97,7 +98,6 @@ const AdminLogin = () => {
           return;
         }
         branchId = adminInfo.branchId;
-        console.log('Admin login successful for branch:', branchId);
       } catch (err) {
         console.error('Error verifying admin status:', err);
         await auth.signOut();
@@ -112,27 +112,14 @@ const AdminLogin = () => {
       navigate(`/admin/${branchId}`, { replace: true });
 
     } catch (err) {
-      console.error('Login error:', err);
-
-      switch (err.code) {
-        case 'auth/user-not-found':
-          setError('المستخدم غير موجود');
-          break;
-        case 'auth/wrong-password':
-          setError('كلمة المرور غير صحيحة');
-          break;
-        case 'auth/invalid-email':
-          setError('البريد الإلكتروني غير صالح');
-          break;
-        case 'auth/too-many-requests':
-          setError('تم تجاوز عدد المحاولات المسموح. حاول مرة أخرى لاحقاً');
-          break;
-        case 'auth/invalid-credential':
-          setError('بيانات الدخول غير صحيحة');
-          break;
-        default:
-          setError('حدث خطأ أثناء تسجيل الدخول. حاول مرة أخرى');
-      }
+      // Log the real Firebase error for debugging; show a friendly message only.
+      console.error('[admin-login] sign-in failed:', err?.code, err?.message, err);
+      setError(
+        await getFriendlyLoginError(err, {
+          email,
+          notFoundMessage: LOGIN_ERROR_MESSAGES.userNotFoundStaff,
+        })
+      );
       setLoading(false);
     }
   };

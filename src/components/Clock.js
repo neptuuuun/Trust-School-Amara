@@ -27,7 +27,7 @@ const Clock = ({
         hour12: true
       });
     } else {
-      return date.toLocaleTimeString('ar-DZ', {
+      return date.toLocaleTimeString('ar-DZ-u-nu-latn', {
         hour: '2-digit',
         minute: '2-digit',
         second: '2-digit',

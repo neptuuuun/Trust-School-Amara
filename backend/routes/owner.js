@@ -10,6 +10,7 @@ const { getSettings, updateAnnualFee } = require('../controllers/ownerSettingsCo
 const {
   getWebsite, updateHero, updateContact, updateSocial, updateBranches,
   addGalleryImage, deleteGalleryImage, reorderGallery,
+  addFaq, updateFaq, deleteFaq, reorderFaq,
 } = require('../controllers/ownerWebsiteController');
 
 // All owner analytics are cross-branch and owner-only.
@@ -52,5 +53,12 @@ router.patch('/website/branches',         verifyToken, requireOwner, updateBranc
 router.post('/website/gallery',           verifyToken, requireOwner, addGalleryImage);
 router.patch('/website/gallery/order',    verifyToken, requireOwner, reorderGallery);
 router.delete('/website/gallery/:id',     verifyToken, requireOwner, deleteGalleryImage);
+
+// FAQ (Frequently Asked Questions) — owner-managed, shown on the «اتصل بنا» page.
+// `/faq/order` is declared before `/faq/:id` so "order" is never captured as an id.
+router.post('/website/faq',               verifyToken, requireOwner, addFaq);
+router.patch('/website/faq/order',        verifyToken, requireOwner, reorderFaq);
+router.patch('/website/faq/:id',          verifyToken, requireOwner, updateFaq);
+router.delete('/website/faq/:id',         verifyToken, requireOwner, deleteFaq);
 
 module.exports = router;

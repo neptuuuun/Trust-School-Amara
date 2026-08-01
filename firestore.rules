@@ -469,12 +469,14 @@ service cloud.firestore {
     // getCountFromServer(collectionGroup(...)) is evaluated at the query-plan
     // level where {branchId} is unbound; these wildcard rules (no path variables)
     // let admins run aggregate queries. Branch scoping is enforced at the query
-    // level (where('branchId','==',…)). isAdmin() uses no path variables.
+    // level (where('branchId','==',…)). isActiveAdmin() uses no path variables, so
+    // a DEACTIVATED admin (active:false) is denied here too — consistent with every
+    // other admin gate in this ruleset.
     match /{path=**}/languageFormEntries/{entryId} {
-      allow read: if isAdmin();
+      allow read: if isActiveAdmin();
     }
     match /{path=**}/trainingFormEntries/{entryId} {
-      allow read: if isAdmin();
+      allow read: if isActiveAdmin();
     }
 
     // ── Deny everything else ──────────────────────────────────────────────────

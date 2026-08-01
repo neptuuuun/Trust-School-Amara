@@ -86,6 +86,5 @@ export const initializeAdminAccounts = async () => {
     }
   ];
 
-  console.log('Admin accounts to create after user registration:', adminAccounts);
   return adminAccounts;
 };

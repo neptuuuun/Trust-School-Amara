@@ -173,6 +173,111 @@ const reorderGallery = async (req, res, next) => {
   }
 };
 
+// ── POST /api/owner/website/faq ─────────────────────────────────────────────
+// Append one FAQ item. Body: { question, answer, isVisible? }
+const addFaq = async (req, res, next) => {
+  try {
+    const question = String(req.body?.question || '').trim();
+    const answer = String(req.body?.answer || '').trim();
+    if (!question || !answer) {
+      return res.status(400).json({ code: 'invalid-input', message: 'السؤال والجواب مطلوبان.' });
+    }
+    const current = (await ws.getWebsiteSettings()).faq || [];
+    const item = ws.sanitizeFaqItem(
+      {
+        id: crypto.randomUUID(),
+        question,
+        answer,
+        isVisible: req.body?.isVisible === undefined ? true : req.body.isVisible,
+      },
+      current.length
+    );
+    const faq = [...current, item];
+    await ws.setSection('faq', faq, ownerActor(req));
+    await audit(req, 'website.faq.add', { count: current.length }, { added: item.id, count: faq.length });
+    return res.json({ item, faq });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── PATCH /api/owner/website/faq/:id ────────────────────────────────────────
+// Edit question/answer and/or toggle visibility. Body: { question?, answer?, isVisible? }
+const updateFaq = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const current = (await ws.getWebsiteSettings()).faq || [];
+    const existing = current.find((f) => f.id === id);
+    if (!existing) {
+      return res.status(404).json({ code: 'not-found', message: 'السؤال غير موجود.' });
+    }
+
+    // Apply only the provided fields over the existing item, then re-sanitize.
+    const merged = {
+      ...existing,
+      ...(req.body?.question !== undefined ? { question: req.body.question } : {}),
+      ...(req.body?.answer !== undefined ? { answer: req.body.answer } : {}),
+      ...(req.body?.isVisible !== undefined ? { isVisible: req.body.isVisible } : {}),
+      updatedAt: new Date().toISOString(), // force refresh (bypass preserve-existing)
+    };
+    const item = ws.sanitizeFaqItem(merged, existing.order);
+    if (!item.question || !item.answer) {
+      return res.status(400).json({ code: 'invalid-input', message: 'السؤال والجواب مطلوبان.' });
+    }
+
+    const faq = current.map((f) => (f.id === id ? item : f));
+    await ws.setSection('faq', faq, ownerActor(req));
+    await audit(req, 'website.faq.update', existing, item);
+    return res.json({ item, faq });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── DELETE /api/owner/website/faq/:id ───────────────────────────────────────
+const deleteFaq = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const current = (await ws.getWebsiteSettings()).faq || [];
+    const removed = current.find((f) => f.id === id);
+    if (!removed) {
+      return res.status(404).json({ code: 'not-found', message: 'السؤال غير موجود.' });
+    }
+    const faq = current
+      .filter((f) => f.id !== id)
+      .map((f, i) => ({ ...f, order: i }));
+    await ws.setSection('faq', faq, ownerActor(req));
+    await audit(req, 'website.faq.delete', { id, question: removed.question }, { count: faq.length });
+    return res.json({ removed, faq });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── PATCH /api/owner/website/faq/order ──────────────────────────────────────
+// Body: { order: [id1, id2, ...] } — the full ordered list of FAQ ids.
+const reorderFaq = async (req, res, next) => {
+  try {
+    const ids = Array.isArray(req.body?.order) ? req.body.order.map(String) : null;
+    if (!ids) {
+      return res.status(400).json({ code: 'invalid-input', message: 'ترتيب غير صالح.' });
+    }
+    const current = (await ws.getWebsiteSettings()).faq || [];
+    const byId = new Map(current.map((f) => [f.id, f]));
+    // Rebuild in the requested order; append any ids missing from the request
+    // (defensive: never silently drop a question).
+    const ordered = [];
+    ids.forEach((id) => { if (byId.has(id)) { ordered.push(byId.get(id)); byId.delete(id); } });
+    byId.forEach((f) => ordered.push(f));
+    const faq = ordered.map((f, i) => ({ ...f, order: i }));
+    await ws.setSection('faq', faq, ownerActor(req));
+    await audit(req, 'website.faq.reorder', { count: current.length }, { count: faq.length });
+    return res.json({ faq });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   getWebsite,
   updateHero,
@@ -182,4 +287,8 @@ module.exports = {
   addGalleryImage,
   deleteGalleryImage,
   reorderGallery,
+  addFaq,
+  updateFaq,
+  deleteFaq,
+  reorderFaq,
 };

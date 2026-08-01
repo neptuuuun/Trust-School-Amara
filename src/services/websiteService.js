@@ -95,3 +95,18 @@ export const reorderGallery = (order) =>
 
 export const deleteGalleryImage = (id) =>
   apiCall(`/api/owner/website/gallery/${id}`, { method: 'DELETE' });
+
+// ── FAQ (owner-only) ─────────────────────────────────────────────────────────
+
+export const addFaq = ({ question, answer }) =>
+  apiCall('/api/owner/website/faq', { method: 'POST', body: JSON.stringify({ question, answer }) });
+
+/** Patch any subset of { question, answer, isVisible } on one FAQ item. */
+export const updateFaq = (id, patch) =>
+  apiCall(`/api/owner/website/faq/${id}`, { method: 'PATCH', body: JSON.stringify(patch) });
+
+export const deleteFaq = (id) =>
+  apiCall(`/api/owner/website/faq/${id}`, { method: 'DELETE' });
+
+export const reorderFaq = (order) =>
+  apiCall('/api/owner/website/faq/order', { method: 'PATCH', body: JSON.stringify({ order }) });

@@ -9,13 +9,19 @@
 
 import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, GraduationCap, Loader2 } from 'lucide-react';
-import { numberInputGuards } from '../../utils/numberInputGuards';
+import { X, GraduationCap, Loader2, Clock } from 'lucide-react';
 import apiCall from '../../utils/apiClient';
+import { safeErrorMessage } from '../../utils/apiErrors';
 import { validateAverage, AVERAGE_MIN, AVERAGE_MAX } from '../../utils/supportClassification';
+import { useAuth } from '../../contexts/AuthContext';
 import { Button } from '../ui/button';
 
 const AverageGateModal = ({ branchId, onClose, onClassified }) => {
+  // Admin-approval status. The average endpoint is authenticated but only
+  // meaningful for approved students; we must NOT call it for an unapproved
+  // account (see the approval panel below).
+  const { verified } = useAuth();
+
   const [value, setValue] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -23,6 +29,11 @@ const AverageGateModal = ({ branchId, onClose, onClassified }) => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+
+    // Guard: never reach the backend for an account the admin hasn't approved.
+    // The UI already renders the approval panel instead of this form, so this is
+    // purely defensive against the form ever being submitted while unapproved.
+    if (!verified) return;
 
     // Client validation (the backend re-validates authoritatively).
     const v = validateAverage(value);
@@ -36,11 +47,47 @@ const AverageGateModal = ({ branchId, onClose, onClassified }) => {
       });
       onClassified?.({ average: res.average ?? v.value, classification: res.classification });
     } catch (err) {
-      setError(err.message || 'تعذر حفظ المعدل. حاول مرة أخرى.');
+      // Never surface raw fetch/CORS/exception text ("Failed to fetch", …).
+      setError(safeErrorMessage(err, 'تعذر حفظ المعدل. يرجى المحاولة مرة أخرى لاحقاً.'));
     } finally {
       setSubmitting(false);
     }
   };
+
+  // Account not yet approved by the admin → show a friendly explanation and
+  // stop here. No average is collected and no backend request is ever made.
+  if (!verified) {
+    return createPortal(
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" dir="rtl">
+        <div className="relative w-full max-w-md rounded-2xl bg-white p-8 shadow-2xl">
+          <button
+            onClick={onClose}
+            className="absolute top-4 end-4 text-gray-400 hover:text-gray-600"
+            aria-label="إغلاق"
+          >
+            <X className="h-6 w-6" />
+          </button>
+
+          <div className="mb-6 flex flex-col items-center text-center">
+            <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-warning-100">
+              <Clock className="h-7 w-7 text-warning-600" />
+            </div>
+            <h3 className="text-xl font-bold text-gray-900">لم يتم تفعيل الحساب بعد</h3>
+            <p className="mt-3 text-sm leading-relaxed text-gray-600">
+              لم تتم الموافقة على حسابك من قبل الإدارة بعد.
+              <br />
+              يرجى انتظار مراجعة مستنداتك.
+              <br />
+              بعد تفعيل الحساب ستتمكن من التسجيل في دروس الدعم.
+            </p>
+          </div>
+
+          <Button type="button" fullWidth onClick={onClose}>حسناً</Button>
+        </div>
+      </div>,
+      document.body,
+    );
+  }
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" dir="rtl">
@@ -71,12 +118,8 @@ const AverageGateModal = ({ branchId, onClose, onClassified }) => {
             </label>
             <input
               id="distinguished-average"
-              type="number"
+              type="text"
               inputMode="decimal"
-              step="0.01"
-              min={AVERAGE_MIN}
-              max={AVERAGE_MAX}
-              {...numberInputGuards}
               value={value}
               onChange={(e) => { setValue(e.target.value); setError(''); }}
               placeholder="مثال: 9.8"

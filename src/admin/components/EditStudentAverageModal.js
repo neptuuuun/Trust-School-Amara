@@ -9,7 +9,6 @@
 import React, { useState } from 'react';
 import { GraduationCap, Loader2, AlertCircle } from 'lucide-react';
 import apiCall from '../../utils/apiClient';
-import { numberInputGuards } from '../../utils/numberInputGuards';
 import {
   validateAverage, classify, classificationBadge, AVERAGE_MIN, AVERAGE_MAX,
 } from '../../utils/supportClassification';
@@ -87,14 +86,10 @@ const EditStudentAverageModal = ({ branchId, student, onClose, onSaved }) => {
           </label>
           <input
             id="student-average"
-            type="number"
+            type="text"
             inputMode="decimal"
-            step="0.01"
-            min={AVERAGE_MIN}
-            max={AVERAGE_MAX}
             dir="ltr"
             autoFocus
-            {...numberInputGuards}
             value={value}
             onChange={(e) => { setValue(e.target.value); setError(''); }}
             placeholder="مثال: 9.8"

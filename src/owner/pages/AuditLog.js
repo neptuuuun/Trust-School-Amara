@@ -136,7 +136,7 @@ const AuditLog = () => {
         </select>
         <div className="flex items-center gap-3 ms-auto">
           <ExportButtons rows={entries} columns={CSV_COLUMNS} filename={generateFilename(`audit-${branchId}-${days}d`)} />
-          {data && <span className="text-sm text-gray-500">{Number(data.count || 0).toLocaleString('ar-EG')} سجل</span>}
+          {data && <span className="text-sm text-gray-500">{Number(data.count || 0).toLocaleString('en-US')} سجل</span>}
         </div>
       </div>
 

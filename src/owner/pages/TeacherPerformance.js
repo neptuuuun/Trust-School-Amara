@@ -7,7 +7,7 @@ import ExportButtons from '../components/ExportButtons';
 import { generateFilename } from '../../utils/csvExport';
 
 const fmtMoney = (n) => `${Number(n || 0).toLocaleString('en-US')} دج`;
-const fmtNum = (n) => Number(n || 0).toLocaleString('ar-EG');
+const fmtNum = (n) => Number(n || 0).toLocaleString('en-US');
 
 const BRANCH_OPTIONS = [
   { id: 'all', label: 'كل الفروع' },

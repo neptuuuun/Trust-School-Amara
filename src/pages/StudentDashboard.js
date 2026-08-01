@@ -49,6 +49,23 @@ import {
 } from 'lucide-react';
 import { useNavigate, Link } from 'react-router-dom';
 
+// Resolve a stored image reference to a safe href. The value may be a plain URL
+// string (Google-completion flow) or a { publicUrl } object (register / verify
+// resubmit flow) — mirrors the admin getImageUrl() normalization so the "view ID
+// card" link works for both shapes. Only http(s) URLs are returned: the user
+// document's idCardUrl is a client-writable field, so a tampered
+// `javascript:` / `data:` value can never become an executable link.
+const resolveSafeImageUrl = (value) => {
+  const raw =
+    typeof value === 'string'
+      ? value
+      : value && typeof value === 'object'
+        ? value.publicUrl
+        : null;
+  if (typeof raw !== 'string') return null;
+  return /^https?:\/\//i.test(raw.trim()) ? raw : null;
+};
+
 const StudentDashboard = () => {
   const [user] = useAuthState(auth);
   const { logout } = useAuth();
@@ -148,13 +165,6 @@ const StudentDashboard = () => {
             
             if (snapshot.exists()) {
               const data = { id: snapshot.id, ...snapshot.data() };
-
-              console.log('[StudentDashboard] Canonical user doc snapshot', {
-                path: userDocRef.path,
-                verificationStatus: data?.verificationStatus,
-                status: data?.status,
-                doc: data,
-              });
 
               setStudentData(data);
               setRegistrationSnapshot({
@@ -809,9 +819,9 @@ const StudentDashboard = () => {
                   <p className="text-primary-100">
                     {studentData.branchName} - طالب
                   </p>
-                  {studentData.idCardUrl && (
+                  {resolveSafeImageUrl(studentData.idCardUrl) && (
                     <a
-                      href={studentData.idCardUrl}
+                      href={resolveSafeImageUrl(studentData.idCardUrl)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-primary-200 hover:text-white text-sm underline"

@@ -36,7 +36,6 @@ ${registrationData.level ? `المستوى: ${registrationData.level}` : ''}
             templateParams
         );
 
-        console.log('Email sent successfully:', result);
         return { success: true, result };
     } catch (error) {
         console.error('Failed to send email:', error);
@@ -77,7 +76,6 @@ ${registrationData.level ? `المستوى: ${registrationData.level}` : ''}
             templateParams
         );
 
-        console.log('Admin notification sent successfully:', result);
         return { success: true, result };
     } catch (error) {
         console.error('Failed to send admin notification:', error);

@@ -38,22 +38,16 @@ const ACCENTS = [
 const ContactPage = () => {
     const { selectedBranchId } = useBranch();
     const { settings } = useWebsiteSettings();
-    const { contact, branches } = settings;
+    const { contact, branches, faq } = settings;
 
-    const faqItems = [
-        {
-            question: 'ما هي مواعيد الدوام في المدرسة؟',
-            answer: 'الدوام من السبت إلى الخميس من 8 صباحاً حتى 8 مساءً. الجمعة عطلة.'
-        },
-        {
-            question: 'كيف يمكنني التسجيل في الدورات؟',
-            answer: 'يمكنك التسجيل عبر الموقع أو زيارة المدرسة مباشرة.'
-        },
-        {
-            question: 'هل توجد إمكانية للدفع بالتقسيط؟',
-            answer: 'نعم، نوفر خيارات دفع مرنة ومتنوعة لتناسب جميع الطلاب.'
-        }
-    ];
+    // FAQ is fully CMS-driven (owner-managed, stored in Firestore). Only VISIBLE
+    // items (isVisible === true) count — the section below renders solely when at
+    // least one exists, so an all-hidden or empty list hides the section entirely.
+    // The public endpoint already returns visible items sorted by `order`; we
+    // filter/sort again defensively so nothing hidden or out-of-order slips through.
+    const faqItems = (Array.isArray(faq) ? faq : [])
+        .filter((f) => f && f.isVisible === true && f.question && f.answer)
+        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
 
     return (
@@ -196,20 +190,27 @@ const ContactPage = () => {
                     </div>
                 </div>
                            
-                {/* ── FAQ SECTION ── */}
-                <div className="bg-gradient-to-br from-primary/5 to-secondary/5 rounded-3xl border border-gray-100 p-8 md:p-12 mb-12">
-                    <div className="max-w-4xl mx-auto">
-                        <div className="text-center mb-12">
-                            <h2 className="text-4xl md:text-5xl font-bold text-primary mb-4">الأسئلة الشائعة</h2>
-                            <p className="text-gray-600 text-lg">إجابات سريعة على أكثر الأسئلة التي نتلقاها</p>
-                        </div>
-                        <div className="space-y-4">
-                            {faqItems.map((item, index) => (
-                                <FAQItem key={index} question={item.question} answer={item.answer} />
-                            ))}
+                {/* ── FAQ SECTION (fully CMS-driven from Firestore) ──
+                    Rendered ONLY when at least one VISIBLE FAQ exists. With zero
+                    visible items the entire section — title, subtitle, and card —
+                    is omitted from the tree, so the page flows as if it never
+                    existed (no empty state, no reserved whitespace). It reappears
+                    automatically once the owner adds/shows a FAQ. */}
+                {faqItems.length > 0 && (
+                    <div className="bg-gradient-to-br from-primary/5 to-secondary/5 rounded-3xl border border-gray-100 p-8 md:p-12 mb-12">
+                        <div className="max-w-4xl mx-auto">
+                            <div className="text-center mb-12">
+                                <h2 className="text-4xl md:text-5xl font-bold text-primary mb-4">الأسئلة الشائعة</h2>
+                                <p className="text-gray-600 text-lg">إجابات سريعة على أكثر الأسئلة التي نتلقاها</p>
+                            </div>
+                            <div className="space-y-4">
+                                {faqItems.map((item) => (
+                                    <FAQItem key={item.id} question={item.question} answer={item.answer} />
+                                ))}
+                            </div>
                         </div>
                     </div>
-                </div>
+                )}
 
                 {/* ══════════════════════════════════════════
                     AUXILIARY : الدعم التقني

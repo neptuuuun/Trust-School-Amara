@@ -12,7 +12,7 @@ import ForecastWidget from '../components/ForecastWidget';
 import TrendChart from '../components/TrendChart';
 
 const fmtMoney = (n) => `${Number(n || 0).toLocaleString('en-US')} دج`;
-const fmtNum = (n) => Number(n || 0).toLocaleString('ar-EG');
+const fmtNum = (n) => Number(n || 0).toLocaleString('en-US');
 
 const TONES = {
   primary:   { bg: 'bg-primary-50',   text: 'text-primary-600' },

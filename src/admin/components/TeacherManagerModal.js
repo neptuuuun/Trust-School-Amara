@@ -66,8 +66,7 @@ const TeacherManagerModal = ({ branchId, onClose }) => {
       // Never swallow the real cause again — surface it for diagnosis.
       console.error('[TeacherManager] createTeacher failed', {
         branchId,
-        admin: { uid: user?.uid, email: user?.email },
-        name: n,
+        adminUid: user?.uid,
         code: err?.code,
         message: err?.message,
       });

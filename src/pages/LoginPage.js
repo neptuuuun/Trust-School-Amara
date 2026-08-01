@@ -9,6 +9,7 @@ import GoogleSignInButton from '../components/GoogleSignInButton';
 import { Button } from '../components/ui/button';
 import { Input, Label } from '../components/ui/input';
 import { Alert } from '../components/ui/feedback';
+import { getFriendlyLoginError } from '../utils/authErrors';
 
 const LoginPage = () => {
   const { user, role, login, loginWithGoogle, loading: authLoading, completedProfile } = useAuth();
@@ -51,27 +52,10 @@ const LoginPage = () => {
       await login(email, password);
       // Redirect is handled by the useEffect above once context updates
     } catch (err) {
-      console.error(err);
-      if (typeof err.message === 'string' && err.message.includes('غير مسجل في هذا الفرع')) {
-        setError(err.message);
-      } else {
-        switch (err.code) {
-          case 'auth/user-not-found':
-            setError('المستخدم غير موجود');
-            break;
-          case 'auth/wrong-password':
-            setError('كلمة المرور غير صحيحة');
-            break;
-          case 'auth/invalid-email':
-            setError('البريد الإلكتروني غير صالح');
-            break;
-          case 'auth/too-many-requests':
-            setError('عدد محاولات كبير. حاول لاحقاً');
-            break;
-          default:
-            setError('حدث خطأ أثناء تسجيل الدخول');
-        }
-      }
+      // Log the real Firebase error for debugging; only a friendly message
+      // (never a raw `auth/...` code) is shown to the user.
+      console.error('[login] sign-in failed:', err?.code, err?.message, err);
+      setError(await getFriendlyLoginError(err, { email }));
     } finally {
       setSubmitting(false);
     }

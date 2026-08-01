@@ -195,6 +195,26 @@ async function createCheckout(req, res) {
     const webhookUrl = BACKEND_URL ? `${BACKEND_URL}/api/chargily/webhook` : undefined;
 
     const serviceName = serviceData.serviceName || serviceData.subjectName || serviceData.trainingName || '';
+
+    // ═══ TEMP DEBUG — remove after diagnosing the Chargily 422 ═══════════════════
+    // Derived module constants + raw env, captured in the controller scope right
+    // before handing off to the Chargily service layer. Proves whether the
+    // .replace()/fallback at lines 35-36 altered anything vs the raw env value.
+    console.log("========== CHARGILY URL BUILD (controller) ==========");
+    console.log({
+      raw_env_FRONTEND_URL: process.env.FRONTEND_URL,
+      raw_env_BACKEND_URL:  process.env.BACKEND_URL,
+      derived_FRONTEND_URL: FRONTEND_URL,
+      derived_BACKEND_URL:  BACKEND_URL,
+      built_successUrl: `${FRONTEND_URL}/payment/status?orderId=${orderId}&result=success`,
+      built_failureUrl: `${FRONTEND_URL}/payment/status?orderId=${orderId}&result=failure`,
+      built_webhookUrl: webhookUrl,
+      chargeAmount, chargeAmount_type: typeof chargeAmount, chargeAmount_isInteger: Number.isInteger(chargeAmount),
+      serviceType,
+    });
+    console.log("=====================================================");
+    // ═══ END TEMP DEBUG ══════════════════════════════════════════════════════════
+
     const checkout = await chargilyService.createCheckout({
       amount: chargeAmount,
       currency:        'dzd', // Chargily v2 requires the lowercase ISO code; 'DZD' → 422.
@@ -215,6 +235,15 @@ async function createCheckout(req, res) {
 
   } catch (err) {
     console.error('[chargily] createCheckout error:', err.message);
+    // ═══ TEMP DEBUG — remove after diagnosing the Chargily 422 ═══════════════════
+    // The COMPLETE response body Chargily returned (chargilyFetch attaches the
+    // parsed JSON as err.body and the HTTP status as err.status). This is the
+    // authoritative reason for the 422 — the validation message names the field.
+    console.error("========== CHARGILY RESPONSE (error) ==========");
+    console.error("status:", err.status);
+    console.error("body:  ", JSON.stringify(err.body ?? err.response?.data ?? { message: err.message }, null, 2));
+    console.error("===============================================");
+    // ═══ END TEMP DEBUG ══════════════════════════════════════════════════════════
     return res.status(500).json({ code: 'checkout-error', message: err.message });
   }
 }
@@ -343,8 +372,12 @@ async function getOrderStatus(req, res) {
 
     const order = orderSnap.data();
 
-    // Only the student or staff may view the order.
-    if (order.studentId !== req.user.uid && !['admin', 'owner'].includes(req.user.role)) {
+    // Only the owning student may view via this route. This project stores staff
+    // status in Firestore (admins/owners collections), NOT in Firebase custom
+    // claims, so req.user is the raw decoded token and carries no `role` — the old
+    // `req.user.role` staff bypass was always undefined and thus dead. Admins/owners
+    // read payment orders through GET /api/chargily/orders (requireAdmin) instead.
+    if (order.studentId !== req.user.uid) {
       return res.status(403).json({ code: 'forbidden' });
     }
 

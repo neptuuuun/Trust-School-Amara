@@ -13,6 +13,24 @@ const isValidUrl = (v) => {
 };
 
 /**
+ * Validate one platform's value. Empty is always allowed (hides the icon).
+ * A non-empty value must be a valid http/https URL, and — when the registry
+ * entry carries a `validate` regex (e.g. TikTok) — must also match that pattern.
+ * Returns an Arabic error message, or null when valid.
+ */
+const validatePlatform = (platform, value) => {
+  const s = String(value || '').trim();
+  if (!s) return null;
+  if (!isValidUrl(s)) {
+    return `رابط ${platform.label} غير صالح — يجب أن يبدأ بـ http:// أو https://`;
+  }
+  if (platform.validate && !platform.validate.test(s)) {
+    return platform.invalidMsg || `رابط ${platform.label} غير صالح`;
+  }
+  return null;
+};
+
+/**
  * SocialSettings — one field per platform in the SOCIAL_PLATFORMS registry, so
  * adding TikTok/YouTube later is a single registry entry (no change here). Only
  * platforms with a valid URL are shown on the public site.
@@ -31,10 +49,12 @@ const SocialSettings = ({ settings, onSaved }) => {
     e.preventDefault();
     setBanner(null);
 
-    const invalid = SOCIAL_PLATFORMS.find((p) => !isValidUrl(form[p.key]));
-    if (invalid) {
-      setBanner({ variant: 'danger', msg: `رابط ${invalid.label} غير صالح — يجب أن يبدأ بـ http:// أو https://` });
-      return;
+    for (const p of SOCIAL_PLATFORMS) {
+      const error = validatePlatform(p, form[p.key]);
+      if (error) {
+        setBanner({ variant: 'danger', msg: error });
+        return;
+      }
     }
 
     setSaving(true);

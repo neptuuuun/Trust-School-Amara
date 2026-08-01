@@ -34,7 +34,6 @@ export async function cleanupDeletedStudent({ userId, photoUrl, idCardUrl, extra
   }
 
   await Promise.allSettled(tasks);
-  console.log(`[storageCleanup] Cleaned media for deleted student ${userId}`);
 }
 
 export async function cleanupRejectedRegistration({ photoUrl, idCardUrl, documents = [] }) {

@@ -5,7 +5,7 @@ import { useOwnerFilters } from '../ownerFilters';
 import { LoadingState, Alert } from '../../components/ui/feedback';
 import AlertsPanel from '../components/AlertsPanel';
 
-const fmtNum = (n) => Number(n || 0).toLocaleString('ar-EG');
+const fmtNum = (n) => Number(n || 0).toLocaleString('en-US');
 
 const BRANCH_OPTIONS = [
   { id: 'all', label: 'كل الفروع' },

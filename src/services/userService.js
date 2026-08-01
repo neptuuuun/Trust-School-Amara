@@ -50,9 +50,6 @@ export const uploadToSupabase = async (file, userId, fileType) => {
   // Automatic optimization: resize → WebP → compress. Falls back to the
   // original file on any failure so an upload is never blocked.
   const optimizedFile = await optimizeImage(file);
-  console.log(
-    `🖼️ ${fileType} optimized: ${file.size} → ${optimizedFile.size} bytes (${optimizedFile.type})`
-  );
 
   try {
     let filePath;
@@ -62,8 +59,6 @@ export const uploadToSupabase = async (file, userId, fileType) => {
     } else {
       filePath = `${userId}/idPhoto.webp`;
     }
-
-    console.log(`🔵 Uploading ${fileType} to Supabase:`, filePath);
 
     const { error: uploadError } = await supabase.storage
       .from('user-uploads')
@@ -86,7 +81,6 @@ export const uploadToSupabase = async (file, userId, fileType) => {
       throw new Error(`Failed to get public URL for ${fileType}`);
     }
 
-    console.log(`✅ ${fileType} uploaded successfully:`, urlData.publicUrl);
     return {
       publicUrl: urlData.publicUrl,
       path: filePath
@@ -115,7 +109,7 @@ export const saveUser = async (userData) => {
   }
   
   if (!branchId) {
-    console.error('❌ saveUser: branchId is missing:', userData);
+    console.error('❌ saveUser: branchId is missing for uid:', uid);
     throw new Error('branchId is required to save user. Cannot proceed without branch information.');
   }
 
@@ -128,9 +122,7 @@ export const saveUser = async (userData) => {
 
   const userPath = `branches/${branchId}/users/${uid}`;
   const userRef = doc(db, userPath);
-  
-  console.log('🔵 Saving user to Firestore path:', userPath);
-  
+
   try {
     // Check if document exists to preserve createdAt
     const existingDoc = await getDoc(userRef);
@@ -178,27 +170,14 @@ export const saveUser = async (userData) => {
       lastActivityType: 'account_creation'
     };
 
-    console.log('🔵 User document to save:', {
-      uid: userDocument.uid,
-      email: userDocument.email,
-      branchId: userDocument.branchId,
-      branchName: userDocument.branchName,
-      path: userPath
-    });
-
     // Use setDoc with merge to preserve existing fields
     await setDoc(userRef, userDocument, { merge: true });
-    
-    console.log('✅ User saved successfully to Firestore');
-    
+
     // Verify the save by reading back
     const verifyDoc = await getDoc(userRef);
     if (!verifyDoc.exists()) {
       throw new Error('User document was not created successfully');
     }
-    
-    console.log('✅ User document verified in Firestore');
-    
   } catch (error) {
     console.error('❌ Error saving user to Firestore:', {
       path: userPath,
@@ -216,8 +195,6 @@ export const uploadUserFiles = async (uid, userPhoto = null, idCard = null) => {
   let photoUrl = '';
   let idCardUrl = '';
 
-  console.log('🔵 Starting file uploads for user:', uid);
-
   if (userPhoto) {
     photoUrl = await uploadToSupabase(userPhoto, uid, 'userPhoto');
   }
@@ -226,11 +203,6 @@ export const uploadUserFiles = async (uid, userPhoto = null, idCard = null) => {
     idCardUrl = await uploadToSupabase(idCard, uid, 'idPhoto');
   }
 
-  console.log('✅ File uploads complete:', {
-    photoUrl: photoUrl ? 'uploaded' : 'none',
-    idCardUrl: idCardUrl ? 'uploaded' : 'none'
-  });
-
   return { photoUrl, idCardUrl };
 };
 
@@ -238,20 +210,13 @@ export const uploadUserFiles = async (uid, userPhoto = null, idCard = null) => {
  * Register a new user with photos uploaded to Supabase
  */
 export const registerUser = async (userData, firebaseUserId, userPhoto = null, idPhoto = null) => {
-  console.log('🔵 registerUser called with:', {
-    firebaseUserId,
-    branchId: userData.branchId,
-    branchName: userData.branchName,
-    email: userData.email
-  });
-
   // CRITICAL: Validate required fields
   if (!firebaseUserId) {
     throw new Error('firebaseUserId is required');
   }
 
   if (!userData.branchId) {
-    console.error('❌ registerUser: branchId is missing in userData:', userData);
+    console.error('❌ registerUser: branchId is missing for uid:', firebaseUserId);
     throw new Error('branchId is required to register user. Please select a branch first.');
   }
 
@@ -266,19 +231,11 @@ export const registerUser = async (userData, firebaseUserId, userPhoto = null, i
     (userData.branchId === 'boumerdes' ? 'بومرداس' : 
      userData.branchId === 'bordj_menaiel' ? 'برج منايل' : userData.branchId);
 
-  console.log('🔵 Registering user with branch info:', {
-    branchId: userData.branchId,
-    branchName: branchName,
-    uid: firebaseUserId
-  });
-
   try {
     // Step 1: Upload files to Supabase FIRST
-    console.log('🔵 Step 1: Uploading files to Supabase...');
     const { photoUrl, idCardUrl } = await uploadUserFiles(firebaseUserId, userPhoto, idPhoto);
 
     // Step 2: Save user data to Firestore with URLs
-    console.log('🔵 Step 2: Saving user to Firestore...');
     await saveUser({
       ...userData,
       uid: firebaseUserId,
@@ -290,8 +247,6 @@ export const registerUser = async (userData, firebaseUserId, userPhoto = null, i
       paymentVerified: false,
     });
 
-    console.log('✅ User registration completed successfully');
-    
   } catch (error) {
     console.error('❌ Error in registerUser:', {
       error: error.message,
@@ -540,13 +495,11 @@ export const getUsersByBranch = async (branchId) => {
   const VALID_BRANCHES = ['boumerdes', 'bordj_menaiel'];
   if (!VALID_BRANCHES.includes(branchId)) {
     console.error(
-      `[ADMIN DEBUG] getUsersByBranch called with INVALID branchId: "${branchId}".` +
+      `getUsersByBranch called with INVALID branchId: "${branchId}".` +
       ` Valid values: ${VALID_BRANCHES.join(', ')}.` +
       ` This usually means the admins/{uid}.branchId field in Firestore has a typo.`
     );
   }
-
-  console.log(`[ADMIN DEBUG] QUERY BRANCH: "${branchId}"`);
 
   try {
     const usersRef = collection(db, `branches/${branchId}/users`);
@@ -568,23 +521,15 @@ export const getUsersByBranch = async (branchId) => {
       ...doc.data()
     }));
 
-    console.log(`[ADMIN DEBUG] RAW USERS FROM FIRESTORE (branch="${branchId}"):`, users.length, 'docs');
-    console.log('[ADMIN DEBUG] RAW USERS FROM FIRESTORE:', users);
-    const TARGET_UID = 'gZ7QAUB3t8NAl1rivLyMWrz5kUk2';
-    console.log(
-      '[ADMIN DEBUG] MATCHING STUDENT (uid=' + TARGET_UID + '):',
-      users.find(u => u.id === TARGET_UID || u.uid === TARGET_UID) || 'NOT FOUND'
-    );
-
     return users;
   } catch (error) {
     console.error(
-      `[ADMIN DEBUG] getUsersByBranch FAILED for branch="${branchId}":`,
+      `getUsersByBranch FAILED for branch="${branchId}":`,
       error.code, error.message
     );
     if (error.code === 'permission-denied') {
       console.error(
-        '[ADMIN DEBUG] permission-denied — this means isBranchAdmin() returned false in Firestore rules.' +
+        'permission-denied — this means isBranchAdmin() returned false in Firestore rules.' +
         ' The most likely cause: admins/{uid}.branchId in Firestore does NOT match the queried path "' + branchId + '".' +
         ' Check the Firestore admins collection and verify the branchId field.'
       );

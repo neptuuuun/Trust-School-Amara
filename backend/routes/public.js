@@ -19,11 +19,18 @@ const ws = require('../services/websiteSettings');
 router.get('/website', async (_req, res, next) => {
   try {
     const settings = await ws.getWebsiteSettings();
+    // Never leak hidden FAQ items to the public site — the owner can hide a
+    // question without deleting it, and its content must not reach visitors.
+    // Already sorted by `order` in the service.
+    const publicSettings = {
+      ...settings,
+      faq: (settings.faq || []).filter((f) => f.isVisible !== false),
+    };
     // Short shared cache: fast for anonymous visitors, but fresh enough that a
     // save is reflected almost immediately. The client refetches on focus and
     // after an owner save, and uses no-store to bypass this on those explicit reads.
     res.set('Cache-Control', 'public, max-age=15');
-    return res.json({ settings });
+    return res.json({ settings: publicSettings });
   } catch (err) {
     next(err);
   }

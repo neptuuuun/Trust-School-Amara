@@ -29,12 +29,17 @@ export const WEBSITE_DEFAULTS = Object.freeze({
   social: {
     facebook: '',
     instagram: '',
+    tiktok: '',
   },
   branches: [
     { id: 'boumerdes',    name: 'الفرع الأول',  address: 'إقامة يسرف بومرداس مركز المدينة',        phone: '0554 56 29 97', mapsLink: 'https://maps.google.com/?q=إقامة+يسرف+بومرداس+مركز+المدينة' },
     { id: 'bordj_menaiel', name: 'الفرع الثاني', address: 'التعاونية العقارية الياسمين برج منايل', phone: '0554 56 29 97', mapsLink: 'https://maps.google.com/?q=التعاونية+العقارية+الياسمين+برج+منايل' },
   ],
   gallery: [],
+  // FAQ starts empty by default — the public «اتصل بنا» page renders the FAQ
+  // section ONLY when at least one visible FAQ exists, so an empty list simply
+  // omits the section. No hardcoded content anywhere.
+  faq: [],
 });
 
 /**
@@ -61,7 +66,16 @@ export const DEFAULT_HERO_DESTINATION = '/contact';
 export const SOCIAL_PLATFORMS = [
   { key: 'facebook',  label: 'Facebook',  icon: 'Facebook',  placeholder: 'https://facebook.com/...' },
   { key: 'instagram', label: 'Instagram', icon: 'Instagram', placeholder: 'https://instagram.com/...' },
-  // Future: { key: 'tiktok', label: 'TikTok', icon: 'Music2', placeholder: 'https://tiktok.com/@...' },
+  {
+    key: 'tiktok',
+    label: 'TikTok',
+    icon: 'TikTok',
+    placeholder: 'https://www.tiktok.com/@username',
+    // Accepts https://www.tiktok.com/@username and https://tiktok.com/@username
+    // (http/https, optional www, a @handle, optional trailing path/query).
+    validate: /^https?:\/\/(www\.)?tiktok\.com\/@[^/\s?]+(\/[^\s]*)?$/i,
+    invalidMsg: 'رابط TikTok غير صالح — مثال صحيح: https://www.tiktok.com/@username',
+  },
   // Future: { key: 'youtube', label: 'YouTube', icon: 'Youtube', placeholder: 'https://youtube.com/@...' },
 ];
 
@@ -74,6 +88,9 @@ export function mergeWebsiteSettings(data = {}) {
     branches: Array.isArray(data.branches) && data.branches.length ? data.branches : WEBSITE_DEFAULTS.branches,
     gallery:  Array.isArray(data.gallery)
       ? [...data.gallery].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+      : [],
+    faq:      Array.isArray(data.faq)
+      ? [...data.faq].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
       : [],
   };
 }

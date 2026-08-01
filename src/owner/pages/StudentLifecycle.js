@@ -6,7 +6,7 @@ import { LoadingState, Alert, EmptyState } from '../../components/ui/feedback';
 import ExportButtons from '../components/ExportButtons';
 import { generateFilename } from '../../utils/csvExport';
 
-const fmtNum = (n) => Number(n || 0).toLocaleString('ar-EG');
+const fmtNum = (n) => Number(n || 0).toLocaleString('en-US');
 const fmtMoney = (n) => `${Number(n || 0).toLocaleString('en-US')} دج`;
 const fmtDate = (iso) => (iso ? new Date(iso).toLocaleDateString('en-GB') : '—');
 

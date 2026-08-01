@@ -93,8 +93,6 @@ export const updateUserLifecycleStatus = async (userId, branchId, status, metada
   }
 
   await updateDoc(userRef, updateData);
-  
-  console.log(`🔄 Updated user ${userId} lifecycle status to: ${status}`);
 };
 
 /**
@@ -114,8 +112,6 @@ export const recordUserActivity = async (userId, branchId, activityType = 'gener
   };
 
   await updateDoc(userRef, updateData);
-  
-  console.log(`📝 Recorded activity for user ${userId}: ${activityType}`);
 };
 
 /**
@@ -162,8 +158,6 @@ export const getUsersByLifecycleStatus = async (branchId = null, status = null) 
  * @returns {Promise<Object>} - Results of the processing
  */
 export const processAutomaticStatusTransitions = async (dryRun = false) => {
-  console.log(`🔄 Starting automatic status transition processing (${dryRun ? 'DRY RUN' : 'LIVE'})`);
-  
   const results = {
     processed: 0,
     transitions: {
@@ -218,7 +212,6 @@ export const processAutomaticStatusTransitions = async (dryRun = false) => {
             }
           } else {
             results.transitions[newStatus]++;
-            console.log(`📋 DRY RUN: Would transition user ${user.id} from ${currentStatus} to ${newStatus}`);
           }
         }
       }
@@ -231,7 +224,6 @@ export const processAutomaticStatusTransitions = async (dryRun = false) => {
     }
   }
 
-  console.log(`✅ Status transition processing complete:`, results);
   return results;
 };
 
@@ -240,8 +232,6 @@ export const processAutomaticStatusTransitions = async (dryRun = false) => {
  * @param {Object} user - User object
  */
 export const handleUserDeletion = async (user) => {
-  console.log(`🗑️ Handling deletion for user ${user.id} from branch ${user.branchId}`);
-  
   try {
     // 1. Archive user data for statistics before deletion
     await archiveUserDataForStats(user);
@@ -255,8 +245,6 @@ export const handleUserDeletion = async (user) => {
     
     // 3. Anonymize user document (keep only statistical data)
     await anonymizeUserDocument(user);
-    
-    console.log(`✅ Successfully handled deletion for user ${user.id}`);
   } catch (error) {
     console.error(`❌ Error handling deletion for user ${user.id}:`, error);
     throw error;
@@ -293,7 +281,6 @@ export const archiveUserDataForStats = async (user) => {
   };
 
   await setDoc(archiveRef, archiveData);
-  console.log(`📦 Archived user data for statistics: ${user.id}`);
 };
 
 /**
@@ -358,7 +345,6 @@ export const anonymizeUserDocument = async (user) => {
   };
 
   await updateDoc(userRef, anonymizedData);
-  console.log(`🔒 Anonymized user document: ${user.id}`);
 };
 
 /**

@@ -5,7 +5,7 @@ import { useOwnerFilters } from '../ownerFilters';
 import { LoadingState, Alert, EmptyState } from '../../components/ui/feedback';
 
 const fmtMoney = (n) => `${Number(n || 0).toLocaleString('en-US')} دج`;
-const fmtNum = (n) => Number(n || 0).toLocaleString('ar-EG');
+const fmtNum = (n) => Number(n || 0).toLocaleString('en-US');
 
 const Metric = ({ icon: Icon, label, value, tone = 'text-gray-900' }) => (
   <div className="flex items-center justify-between py-2 border-b border-gray-100 last:border-0">

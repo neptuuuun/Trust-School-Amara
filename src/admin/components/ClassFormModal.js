@@ -89,8 +89,7 @@ const ClassFormModal = ({
       // Never swallow the real cause again — surface it for diagnosis.
       console.error('[ClassForm] createTeacher failed', {
         branchId,
-        admin: { uid: user?.uid, email: user?.email },
-        name: n,
+        adminUid: user?.uid,
         code: err?.code,
         message: err?.message,
       });

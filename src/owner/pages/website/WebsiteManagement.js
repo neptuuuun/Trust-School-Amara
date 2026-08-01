@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Image, Phone, Share2, Building2, LayoutGrid, Globe } from 'lucide-react';
+import { Image, Phone, Share2, Building2, LayoutGrid, Globe, HelpCircle } from 'lucide-react';
 import { getWebsiteSettings } from '../../../services/websiteService';
 import { LoadingState, Alert } from '../../../components/ui/feedback';
 import { useWebsiteSettings } from '../../../contexts/WebsiteSettingsContext';
@@ -8,6 +8,7 @@ import ContactSettings from './ContactSettings';
 import SocialSettings from './SocialSettings';
 import BranchSettings from './BranchSettings';
 import GallerySettings from './GallerySettings';
+import FaqSettings from './FaqSettings';
 
 const TABS = [
   { id: 'hero',     label: 'القسم الرئيسي', icon: Image,      Component: HeroSettings },
@@ -15,6 +16,7 @@ const TABS = [
   { id: 'social',   label: 'وسائل التواصل',  icon: Share2,     Component: SocialSettings },
   { id: 'branches', label: 'الفروع',         icon: Building2,   Component: BranchSettings },
   { id: 'gallery',  label: 'معرض الصور',     icon: LayoutGrid,  Component: GallerySettings },
+  { id: 'faq',      label: 'الأسئلة الشائعة', icon: HelpCircle, Component: FaqSettings },
 ];
 
 /**

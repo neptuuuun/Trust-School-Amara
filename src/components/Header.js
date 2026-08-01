@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import LogoImage from '../assets/images/logo.png';
 import { useAuth } from '../contexts/AuthContext';
@@ -30,14 +30,6 @@ const Header = () => {
     //   'admin'   → لوحة الإدارة / خروج
     //   'student' → الملف الشخصي / خروج
     const navbarMode = loading ? 'loading' : !user ? 'guest' : role === 'admin' ? 'admin' : 'student';
-
-    // TEMPORARY DEBUG — remove once the auth/navbar bug is confirmed fixed.
-    useEffect(() => {
-        console.log('Auth Loading:', loading);
-        console.log('Firebase User:', user ? { uid: user.uid, email: user.email } : null);
-        console.log('User Role:', role);
-        console.log('Navbar Mode:', navbarMode);
-    }, [loading, user, role, navbarMode]);
 
     return (
         <header className="sticky top-0 z-50 w-full bg-primary shadow-primary">
@@ -117,21 +109,21 @@ const Header = () => {
                             <>
                                 <button
                                     onClick={() => navigate(role === 'admin' ? '/admin' : '/profile')}
-                                    className="text-white border border-white/40 px-2 py-1 rounded-md text-sm hover:bg-white hover:text-primary transition"
+                                    className="inline-flex items-center justify-center text-white border border-white/40 px-2 py-1 rounded-md text-sm hover:bg-white hover:text-primary transition"
                                 >
                                     {role === 'admin' ? 'الإدارة' : 'حسابي'}
                                 </button>
                                 <button
                                     onClick={async () => { await logout(); navigate('/'); setMobileMenuOpen(false); }}
-                                    className="bg-warning text-primary font-semibold px-3 py-1 rounded-md text-sm hover:opacity-90 transition"
+                                    className="inline-flex items-center justify-center bg-warning text-primary font-semibold px-3 py-1 rounded-md text-sm hover:opacity-90 transition"
                                 >
                                     خروج
                                 </button>
                             </>
                         ) : (
                             <>
-                                <Link onClick={closeMobileMenu} to="/login" className="text-white text-sm hover:text-warning transition">دخول</Link>
-                                <Link onClick={closeMobileMenu} to="/register" className="bg-warning text-primary font-semibold px-3 py-1 rounded-md text-sm hover:opacity-90 transition">
+                                <Link onClick={closeMobileMenu} to="/login" className="inline-flex items-center justify-center text-white text-sm hover:text-warning transition">دخول</Link>
+                                <Link onClick={closeMobileMenu} to="/register" className="inline-flex items-center justify-center bg-warning text-primary font-semibold px-3 py-1 rounded-md text-sm hover:opacity-90 transition">
                                     تسجيل
                                 </Link>
                             </>

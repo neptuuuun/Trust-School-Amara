@@ -5,7 +5,7 @@ import { useOwnerFilters } from '../ownerFilters';
 import { LoadingState, Alert, EmptyState } from '../../components/ui/feedback';
 import TrendChart from '../components/TrendChart';
 
-const fmtNum = (n) => Number(n || 0).toLocaleString('ar-EG');
+const fmtNum = (n) => Number(n || 0).toLocaleString('en-US');
 
 const BRANCH_OPTIONS = [
   { id: 'all', label: 'كل الفروع' },

@@ -10,10 +10,9 @@ import { useAuth } from '../../contexts/AuthContext';
 import { getYearById } from '../../data/studyLevels';
 import {
   classificationFromProfile, classify, validateAverage, classificationBadge,
-  visibleClassesFor, AVERAGE_MIN, AVERAGE_MAX,
+  visibleClassesFor,
 } from '../../utils/supportClassification';
 import AdminModal from './AdminModal';
-import { numberInputGuards } from '../../utils/numberInputGuards';
 
 const AddSupportStudentModal = ({ branchId, onClose, onSuccess }) => {
   const { user: adminUser } = useAuth();
@@ -551,13 +550,9 @@ const AddSupportStudentModal = ({ branchId, onClose, onSuccess }) => {
                 معدل المواد المميزة <span className="text-danger-500">*</span>
               </label>
               <input
-                type="number"
+                type="text"
                 inputMode="decimal"
-                step="0.01"
-                min={AVERAGE_MIN}
-                max={AVERAGE_MAX}
                 dir="ltr"
-                {...numberInputGuards}
                 value={averageInput}
                 onChange={(e) => {
                   const val = e.target.value;

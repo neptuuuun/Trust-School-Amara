@@ -29,9 +29,6 @@ let analytics;
 isSupported().then((yes) => {
   if (yes) {
     analytics = getAnalytics(app);
-    console.log("Firebase Analytics initialized");
-  } else {
-    console.log("Analytics not supported in this environment");
   }
 });
 // Export auth, firestore, and storage
@@ -60,7 +57,6 @@ export async function resetFirestoreLocalCache() {
       localStorage.removeItem('branchId');
       localStorage.removeItem('selectedBranch');
     } catch (_) {}
-    console.log('Requested local Firebase caches reset');
   } catch (e) {
     console.warn('Failed to reset local caches', e);
   }

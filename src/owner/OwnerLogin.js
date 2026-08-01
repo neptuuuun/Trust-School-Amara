@@ -7,6 +7,7 @@ import { getOwnerByUid } from '../services/ownerAuthService';
 import { Button } from '../components/ui/button';
 import { Input, Label } from '../components/ui/input';
 import { Alert, Spinner } from '../components/ui/feedback';
+import { getFriendlyLoginError, LOGIN_ERROR_MESSAGES } from '../utils/authErrors';
 
 /**
  * Owner sign-in. Mirrors AdminLogin but resolves the cross-branch `owners/{uid}`
@@ -71,15 +72,14 @@ const OwnerLogin = () => {
 
       navigate('/owner', { replace: true });
     } catch (err) {
-      console.error('Login error:', err);
-      switch (err.code) {
-        case 'auth/user-not-found':       setError('المستخدم غير موجود'); break;
-        case 'auth/wrong-password':       setError('كلمة المرور غير صحيحة'); break;
-        case 'auth/invalid-email':        setError('البريد الإلكتروني غير صالح'); break;
-        case 'auth/too-many-requests':    setError('تم تجاوز عدد المحاولات المسموح. حاول لاحقاً'); break;
-        case 'auth/invalid-credential':   setError('بيانات الدخول غير صحيحة'); break;
-        default:                          setError('حدث خطأ أثناء تسجيل الدخول. حاول مرة أخرى');
-      }
+      // Log the real Firebase error for debugging; show a friendly message only.
+      console.error('[owner-login] sign-in failed:', err?.code, err?.message, err);
+      setError(
+        await getFriendlyLoginError(err, {
+          email,
+          notFoundMessage: LOGIN_ERROR_MESSAGES.userNotFoundStaff,
+        })
+      );
       setLoading(false);
     }
   };

@@ -6,7 +6,6 @@
 2. **Updated React Component** - Calls local API instead of Firebase Cloud Functions
 3. **Dependencies Installed** - express, cors, firebase-admin, body-parser
 4. **Service Account Key** - Already exists in your project
-5. **Test Script** - `test-backend.js` to verify server is working
 
 ## 🏃‍♂️ Quick Start (3 Steps)
 
@@ -30,17 +29,9 @@ npm start
 ```
 
 ### Step 3: Test the Setup
+Hit the health endpoint to confirm the server is up:
 ```bash
-# Test that backend is working
-node test-backend.js
-```
-
-**Expected Output:**
-```
-🧪 Testing Express Backend...
-📍 Testing health endpoint at http://localhost:5000/api/health
-✅ Health check successful: { success: true, message: "Server is running", ... }
-🎉 Backend server is running correctly!
+curl http://localhost:5000/api/health
 ```
 
 ## 🔄 Updated React Code
@@ -84,7 +75,7 @@ npm install -g nodemon
 nodemon server.js
 
 # Test backend health
-node test-backend.js
+curl http://localhost:5000/api/health
 
 # Start both React and backend (install concurrently first)
 npm install -g concurrently

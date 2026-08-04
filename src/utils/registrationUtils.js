@@ -14,7 +14,14 @@ import { getCurrentAcademicYear } from './academicYear';
 
 // Re-exported so existing importers keep a single, stable entry point.
 // All academic-year math lives in ./academicYear (1 July → 30 June).
-export { getCurrentAcademicYear, getAcademicYearLabel, isDateInAcademicYear } from './academicYear';
+export {
+  getCurrentAcademicYear,
+  getAcademicYearLabel,
+  isDateInAcademicYear,
+  academicYearMatches,
+  listAcademicYears,
+  coerceDateField,
+} from './academicYear';
 
 // ---------------------------------------------------------------------------
 // Date helpers
@@ -58,7 +65,11 @@ export const toDate = (value) => {
 // Academic year + annual fee
 // ---------------------------------------------------------------------------
 
-/** Base annual registration fee (DZD). Single source of truth. */
+/**
+ * Base annual registration fee (DZD). FALLBACK DEFAULT ONLY — the authoritative
+ * amount is owner-configured in `config/finance` and read via getAnnualFeeAmount();
+ * this constant is used only when that value is absent/unreadable.
+ */
 export const ANNUAL_FEE_DZD = 1000;
 
 /**
@@ -110,6 +121,20 @@ export const getExpiryLabel = (registration) => {
 // ---------------------------------------------------------------------------
 
 /**
+ * True when a verified support subscription is a RESERVATION: its window begins
+ * in the future (the Group Start Month has not yet arrived), so the seat is held
+ * but the student is NOT active yet. Mirrors the backend subscriptionPhase in
+ * services/reservationService.js — derived from dates so it can never drift.
+ */
+export const isReservation = (registration, now = new Date()) => {
+  if (!registration) return false;
+  const start = toDate(registration.startDate);
+  if (start) return start.getTime() > now.getTime();
+  // Legacy row with no startDate but a reserved cache flag.
+  return registration.reserved === true;
+};
+
+/**
  * Derive a display-level status from the Firestore document.
  * This is the SINGLE source of truth for what to show in UI and what to
  * allow or block in registration forms.
@@ -117,7 +142,8 @@ export const getExpiryLabel = (registration) => {
  * Returned values:
  *   'none'     — no registration exists
  *   'pending'  — submitted, waiting for admin verification
- *   'active'   — verified by admin AND not yet expired
+ *   'reserved' — verified, but the Group Start Month has not yet arrived
+ *   'active'   — verified, subscription has begun AND not yet expired
  *   'expired'  — was verified but endDate has passed → renewal is allowed
  *   'rejected' — admin rejected the registration
  */
@@ -129,6 +155,8 @@ export const getComputedStatus = (registration) => {
   if (norm === 'pending') return 'pending';
 
   if (['verified', 'approved', 'active', 'registered'].includes(norm)) {
+    // A reservation holds a seat but has not begun studying yet.
+    if (isReservation(registration)) return 'reserved';
     return isRegistrationExpired(registration) ? 'expired' : 'active';
   }
 
@@ -145,7 +173,7 @@ export const getComputedStatus = (registration) => {
  */
 export const isRegistrationBlocking = (registration) => {
   const s = getComputedStatus(registration);
-  return s === 'pending' || s === 'active';
+  return s === 'pending' || s === 'active' || s === 'reserved';
 };
 
 /**
@@ -165,6 +193,7 @@ export const isRenewalCandidate = (registration) => {
  */
 export const STATUS_UI = {
   pending:  { label: 'قيد المراجعة',  classes: 'bg-yellow-100 text-yellow-700 border-yellow-200' },
+  reserved: { label: 'محجوز',         classes: 'bg-blue-100   text-blue-700   border-blue-200'   },
   active:   { label: 'نشط',           classes: 'bg-green-100  text-green-700  border-green-200'  },
   expired:  { label: 'منتهي',         classes: 'bg-gray-100   text-gray-600   border-gray-200'   },
   rejected: { label: 'مرفوض',         classes: 'bg-red-100    text-red-700    border-red-200'    },

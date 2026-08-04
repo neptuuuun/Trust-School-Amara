@@ -69,4 +69,58 @@ test('coerces a Firestore-style Timestamp', () => {
   assert.strictEqual(AY.getAcademicYearLabel(ts), '2025-2026');
 });
 
+// ── coerceDateField (YYYY-MM month keys) ─────────────────────────────────────
+test('coerceDateField parses YYYY-MM to 1st of month', () => {
+  const dt = AY.coerceDateField('2026-09');
+  assert.strictEqual(dt.getFullYear(), 2026);
+  assert.strictEqual(dt.getMonth(), 8); // September
+  assert.strictEqual(dt.getDate(), 1);
+});
+test('coerceDateField passes through a Date/Timestamp', () => {
+  assert.strictEqual(AY.coerceDateField({ toDate: () => d(2025, 9, 1) }).getMonth(), 8);
+});
+
+// ── withAcademicYear (server stamping helper) ────────────────────────────────
+test('withAcademicYear stamps the label from a given date', () => {
+  const out = AY.withAcademicYear({ foo: 1 }, d(2026, 8, 3));
+  assert.strictEqual(out.foo, 1);
+  assert.strictEqual(out.academicYear, '2026-2027');
+});
+test('withAcademicYear does not mutate the input', () => {
+  const input = { a: 1 };
+  AY.withAcademicYear(input, d(2026, 8, 3));
+  assert.strictEqual('academicYear' in input, false);
+});
+
+// ── academicYearMatches — explicit field is authoritative ────────────────────
+test('matches when explicit academicYear equals label', () =>
+  assert.strictEqual(AY.academicYearMatches({ academicYear: '2026-2027' }, '2026-2027'), true));
+test('does NOT match a different explicit academicYear', () =>
+  assert.strictEqual(AY.academicYearMatches({ academicYear: '2025-2026' }, '2026-2027'), false));
+test('explicit field wins over a conflicting date fallback', () =>
+  // Field says 2026-2027; a 2025 registeredAt must NOT flip it to 2025-2026.
+  assert.strictEqual(AY.academicYearMatches({ academicYear: '2026-2027', registeredAt: d(2025, 9, 1) }, '2025-2026'), false));
+
+// ── academicYearMatches — legacy date fallback (no field) ────────────────────
+test('legacy record: falls back to registeredAt date (match)', () =>
+  assert.strictEqual(AY.academicYearMatches({ registeredAt: d(2026, 9, 1) }, '2026-2027'), true));
+test('legacy record: falls back to registeredAt date (miss)', () =>
+  assert.strictEqual(AY.academicYearMatches({ registeredAt: d(2026, 9, 1) }, '2027-2028'), false));
+test('legacy class: startMonth-only fallback matches its year', () =>
+  assert.strictEqual(AY.academicYearMatches({ startMonth: '2026-09' }, '2026-2027', ['startMonth']), true));
+test('legacy class: no field and no startMonth → not matched (manual review)', () =>
+  assert.strictEqual(AY.academicYearMatches({ createdAt: d(2026, 9, 1) }, '2026-2027', ['startMonth']), false));
+
+// ── The mandated visibility behavior across the boundary ─────────────────────
+test('a 2026-2027 record is HIDDEN when current label is 2027-2028', () =>
+  assert.strictEqual(AY.academicYearMatches({ academicYear: '2026-2027' }, '2027-2028'), false));
+test('a 2026-2027 record is SHOWN when current label is 2026-2027', () =>
+  assert.strictEqual(AY.academicYearMatches({ academicYear: '2026-2027' }, '2026-2027'), true));
+
+// ── listAcademicYears ────────────────────────────────────────────────────────
+test('listAcademicYears is descending and includes one future year', () => {
+  const years = AY.listAcademicYears({ count: 3, future: 1, anchor: d(2026, 8, 3) });
+  assert.deepStrictEqual(years, ['2027-2028', '2026-2027', '2025-2026']);
+});
+
 console.log(`✓ academicYear: ${passed} assertions passed`);

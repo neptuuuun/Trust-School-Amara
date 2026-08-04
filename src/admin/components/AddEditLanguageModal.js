@@ -8,6 +8,7 @@ import {
   getStudentLanguageRegistrations,
 } from '../../services/firestoreService';
 import { getUsersByBranch } from '../../services/userService';
+import { getAcademicYearLabel } from '../../utils/academicYear';
 import AdminModal from './AdminModal';
 
 /**
@@ -53,7 +54,7 @@ const AddEditLanguageModal = ({ branchId, registration, onClose, onSuccess }) =>
     // joinable groups = its classes. The level picker becomes a class picker.
     Promise.all([
       getSubjects(branchId, 'language'),
-      getClasses(branchId, { serviceType: 'language', activeOnly: true }),
+      getClasses(branchId, { serviceType: 'language', activeOnly: true, academicYear: getAcademicYearLabel() }),
     ]).then(([subjects, classes]) => {
       const bySubject = {};
       classes.forEach((c) => { (bySubject[c.subjectId] = bySubject[c.subjectId] || []).push(c); });

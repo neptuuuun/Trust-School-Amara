@@ -7,6 +7,7 @@ import { getYearById, getLevelById } from '../data/studyLevels';
 import useAnnualFeeStatus from '../hooks/useAnnualFeeStatus';
 import useSupportLessonRegistrationStatus from '../hooks/useSupportLessonRegistrationStatus';
 import { streamSubjects, streamClasses } from '../services/firestoreService';
+import { getAcademicYearLabel } from '../utils/academicYear';
 import SubjectGrid from '../components/academic/SubjectGrid';
 import ClassCard from '../components/academic/ClassCard';
 import AverageGateModal from '../components/academic/AverageGateModal';
@@ -67,7 +68,7 @@ function YearPage() {
     });
     const unsubClasses = streamClasses(
       selectedBranchId,
-      { serviceType: 'support', studyYear: yearParam, activeOnly: true },
+      { serviceType: 'support', studyYear: yearParam, activeOnly: true, academicYear: getAcademicYearLabel() },
       setClasses,
     );
     return () => { unsubSubjects?.(); unsubClasses?.(); };
@@ -282,6 +283,7 @@ function SupportClassCard({ cls, branchId, user, userStudyYear, onRegister }) {
 
   let status;
   if (regStatus === 'active') status = { type: 'verified' };
+  else if (regStatus === 'reserved') status = { type: 'reserved', note: 'مقعدك محجوز — يبدأ اشتراكك تلقائياً عند انطلاق المجموعة.' };
   else if (regStatus === 'pending') status = { type: 'pending' };
   else if (mismatch) status = { type: 'disabled', label: 'غير متاح لهذا المستوى', note: 'يمكنك التسجيل فقط في دروس سنتك الدراسية.' };
   else if (isFull) status = { type: 'full' };

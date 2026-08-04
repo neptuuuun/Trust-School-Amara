@@ -3,6 +3,7 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import LogoImage from '../assets/images/logo.png';
 import { useAuth } from '../contexts/AuthContext';
 import ChangeBranchButton from './ChangeBranchButton';
+import NotificationBell from './notifications/NotificationBell';
 
 const NAV_ITEMS = [
     { to: '/home',            label: 'الرئيسية' },
@@ -80,6 +81,7 @@ const Header = () => {
                         <ChangeBranchButton />
                         {loading ? null : user ? (
                             <>
+                                <NotificationBell userId={user.uid} tone="onPrimary" />
                                 <Link
                                     to={role === 'admin' ? '/admin' : '/profile'}
                                     className="text-white border border-white/40 px-3 py-1.5 rounded-lg hover:bg-white hover:text-primary transition"
@@ -107,6 +109,7 @@ const Header = () => {
                     <div className="flex md:hidden items-center gap-2">
                         {loading ? null : user ? (
                             <>
+                                <NotificationBell userId={user.uid} tone="onPrimary" />
                                 <button
                                     onClick={() => navigate(role === 'admin' ? '/admin' : '/profile')}
                                     className="inline-flex items-center justify-center text-white border border-white/40 px-2 py-1 rounded-md text-sm hover:bg-white hover:text-primary transition"

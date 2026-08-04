@@ -82,6 +82,9 @@ const Footer = () => {
                             <li><Link to="/languages">تعليم اللغات</Link></li>
                             <li><Link to="/trainings">الدورات التكوينية</Link></li>
                             <li><Link to="/contact">اتصل بنا</Link></li>
+                            <li>
+                                <a href="/help/student" target="_blank" rel="noopener noreferrer">مركز المساعدة</a>
+                            </li>
                         </ul>
                     </div>
 

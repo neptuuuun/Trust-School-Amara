@@ -20,10 +20,12 @@ import {
   Trash2,
   GraduationCap,
   Pencil,
+  UploadCloud,
 } from 'lucide-react';
 import Breadcrumb from '../components/Breadcrumb';
 import FileViewerModal from '../components/FileViewerModal';
 import AdminCreateStudentModal from '../components/AdminCreateStudentModal';
+import BulkImportStudentsModal from '../components/BulkImportStudentsModal';
 import EditStudentAverageModal from '../components/EditStudentAverageModal';
 import AdminConfirmDialog from '../components/AdminConfirmDialog';
 import { classificationFromProfile, classificationBadge } from '../../utils/supportClassification';
@@ -290,6 +292,7 @@ const UsersPage = () => {
   const [processing,          setProcessing]          = useState({});
   const [imageModal,          setImageModal]          = useState({ open: false, url: null, title: '' });
   const [showCreateModal,     setShowCreateModal]     = useState(false);
+  const [showBulkImport,      setShowBulkImport]      = useState(false);
   const [currentUser,         setCurrentUser]         = useState(null);
   const [rejectDialog,        setRejectDialog]        = useState({ open: false, userId: null, branchId: null, userName: '' });
   const [deleteDialog,        setDeleteDialog]        = useState({ open: false, userId: null, branchId: null, userName: '' });
@@ -609,10 +612,16 @@ const UsersPage = () => {
               : 'جميع طلاب الفرع. لا توجد وثائق بانتظار المراجعة حالياً.'}
           </p>
         </div>
-        <Button variant="primary" size="sm" onClick={() => setShowCreateModal(true)}>
-          <UserPlus className="h-4 w-4" />
-          إنشاء حساب طالب
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="neutral" size="sm" onClick={() => setShowBulkImport(true)}>
+            <UploadCloud className="h-4 w-4" />
+            استيراد بالجملة
+          </Button>
+          <Button variant="primary" size="sm" onClick={() => setShowCreateModal(true)}>
+            <UserPlus className="h-4 w-4" />
+            إنشاء حساب طالب
+          </Button>
+        </div>
       </div>
 
       {error && <Alert variant="danger">{error}</Alert>}
@@ -735,6 +744,12 @@ const UsersPage = () => {
           }}
         />
       )}
+
+      <BulkImportStudentsModal
+        open={showBulkImport}
+        onClose={() => setShowBulkImport(false)}
+        onImported={() => loadUsers({ background: true })}
+      />
     </div>
   );
 };

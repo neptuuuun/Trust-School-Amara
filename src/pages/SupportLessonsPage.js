@@ -5,6 +5,7 @@ import { useBranch } from '../contexts/BranchContext';
 import { Book, GraduationCap, Users, AlertCircle, Clock, ArrowRight, Lock } from 'lucide-react';
 import { STUDY_LEVELS, getLevelById, getYearById } from '../data/studyLevels';
 import { streamClasses } from '../services/firestoreService';
+import { getAcademicYearLabel } from '../utils/academicYear';
 import useAnnualFeeStatus from '../hooks/useAnnualFeeStatus';
 import PageAnnouncements from '../components/announcements/PageAnnouncements';
 import { Button } from '../components/ui/button';
@@ -46,7 +47,7 @@ function SupportLessonsPage() {
   const [supportClasses, setSupportClasses] = useState([]);
   useEffect(() => {
     if (!selectedBranchId) { setSupportClasses([]); return undefined; }
-    const unsub = streamClasses(selectedBranchId, { serviceType: 'support', activeOnly: true }, setSupportClasses);
+    const unsub = streamClasses(selectedBranchId, { serviceType: 'support', activeOnly: true, academicYear: getAcademicYearLabel() }, setSupportClasses);
     return () => unsub?.();
   }, [selectedBranchId]);
 

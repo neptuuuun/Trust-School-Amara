@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, lazy, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, Outlet, useLocation, Navigate, useNavigate } from 'react-router-dom';
 import { BranchProvider, useBranch } from './contexts/BranchContext';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -6,30 +6,38 @@ import { WebsiteSettingsProvider } from './contexts/WebsiteSettingsContext';
 import Header from './components/Header';
 import Footer from './components/Footer';
 import ErrorPage from './components/ErrorPage';
-import HomePage from './pages/HomePage';
-import ContactPage from './pages/ContactPage';
-import LanguagesPage from './pages/LanguagesPage';
-import SupportLessonsPage from './pages/SupportLessonsPage';
-import YearPage from './pages/YearPage';
-import TrainingsPage from './pages/TrainingsPage';
-import CourseRegistrationPage from './pages/CourseRegistrationPage';
-import PaymentStatusPage from './pages/PaymentStatusPage';
-import RegistrationConfirmationPage from './pages/RegistrationConfirmationPage';
-import BranchSelector from './pages/BranchSelector';
-import StudentDashboard from './pages/StudentDashboard';
-import AdminDashboard from './admin/AdminDashboard';
-import OwnerDashboard from './owner/OwnerDashboard';
-import OwnerLogin from './owner/OwnerLogin';
-import LoginPage from './pages/LoginPage';
-import RegisterPage from './pages/RegisterPage';
-import AdminLogin from './admin/AdminLogin';
-import InternalRulesPage from './pages/InternalRulesPage';
-import CompleteRegistrationPage from './pages/CompleteRegistrationPage';
-// New student registration forms
-import LanguageRegistrationForm from './components/LanguageRegistrationForm';
-import SupportLessonRegistrationForm from './components/SupportLessonRegistrationForm';
-import TrainingRegistrationForm from './components/TrainingRegistrationForm';
 import './App.css';
+
+// ── Route-based code splitting ───────────────────────────────────────────────
+// Every route component below is loaded on demand via React.lazy(), so the
+// initial bundle only ships the app shell (contexts, layout, route guards).
+// The heavy role dashboards and the docs site each become their own chunk and
+// are fetched only when a user actually navigates to them. Suspense (added in
+// App() below) shows the shared LoadingScreen while a chunk downloads.
+const HomePage = lazy(() => import('./pages/HomePage'));
+const ContactPage = lazy(() => import('./pages/ContactPage'));
+const LanguagesPage = lazy(() => import('./pages/LanguagesPage'));
+const SupportLessonsPage = lazy(() => import('./pages/SupportLessonsPage'));
+const YearPage = lazy(() => import('./pages/YearPage'));
+const TrainingsPage = lazy(() => import('./pages/TrainingsPage'));
+const CourseRegistrationPage = lazy(() => import('./pages/CourseRegistrationPage'));
+const PaymentStatusPage = lazy(() => import('./pages/PaymentStatusPage'));
+const RegistrationConfirmationPage = lazy(() => import('./pages/RegistrationConfirmationPage'));
+const BranchSelector = lazy(() => import('./pages/BranchSelector'));
+const StudentDashboard = lazy(() => import('./pages/StudentDashboard'));
+const AdminDashboard = lazy(() => import('./admin/AdminDashboard'));
+const OwnerDashboard = lazy(() => import('./owner/OwnerDashboard'));
+const OwnerLogin = lazy(() => import('./owner/OwnerLogin'));
+const LoginPage = lazy(() => import('./pages/LoginPage'));
+const RegisterPage = lazy(() => import('./pages/RegisterPage'));
+const AdminLogin = lazy(() => import('./admin/AdminLogin'));
+const InternalRulesPage = lazy(() => import('./pages/InternalRulesPage'));
+const CompleteRegistrationPage = lazy(() => import('./pages/CompleteRegistrationPage'));
+const HelpSite = lazy(() => import('./docs/DocsApp'));
+// New student registration forms
+const LanguageRegistrationForm = lazy(() => import('./components/LanguageRegistrationForm'));
+const SupportLessonRegistrationForm = lazy(() => import('./components/SupportLessonRegistrationForm'));
+const TrainingRegistrationForm = lazy(() => import('./components/TrainingRegistrationForm'));
 
 // Component to handle scroll to top on route change
 function ScrollToTop() {
@@ -297,10 +305,23 @@ function App() {
         <Router>
           <div className="App" dir="rtl">
             <ScrollToTop />
+            <Suspense fallback={<LoadingScreen />}>
             <Routes>
               {/* Root route */}
               <Route path="/" element={<RootRedirect />} />
               
+              {/* Help Centers — three fully independent, isolated documentation
+                  sites, each opened in a new tab. The Student center is public
+                  (no login); the Admin and Owner centers require the matching
+                  role, so no one can reach another audience's documentation. */}
+              <Route path="/help/student/*" element={<HelpSite guideId="student" />} />
+              <Route element={<RequireAdmin />}>
+                <Route path="/help/admin/*" element={<HelpSite guideId="admin" />} />
+              </Route>
+              <Route element={<RequireOwner />}>
+                <Route path="/help/owner/*" element={<HelpSite guideId="owner" />} />
+              </Route>
+
               {/* Branch selection */}
               <Route path="/select-branch" element={<BranchSelector />} />
               <Route path="/branch-selector" element={<Navigate to="/select-branch" replace />} />
@@ -367,6 +388,7 @@ function App() {
               {/* Fallback 404 */}
               <Route path="*" element={<ErrorPage />} />
             </Routes>
+            </Suspense>
           </div>
         </Router>
         </WebsiteSettingsProvider>

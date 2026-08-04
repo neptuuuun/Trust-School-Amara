@@ -7,11 +7,12 @@ import { getComputedStatus } from '../utils/registrationUtils';
  * Real-time hook: resolves the expiration-aware registration status for a
  * user+lesson combination.
  *
- * @returns {{ status: 'none'|'pending'|'active'|'expired'|'rejected', loading: boolean, registration: object|null }}
+ * @returns {{ status: 'none'|'pending'|'reserved'|'active'|'expired'|'rejected', loading: boolean, registration: object|null }}
  *
  * - 'none'     → no document exists
  * - 'pending'  → submitted, waiting for admin
- * - 'active'   → verified AND endDate in the future
+ * - 'reserved' → verified but the Group Start Month has not yet arrived (seat held)
+ * - 'active'   → verified AND subscription has begun AND endDate in the future
  * - 'expired'  → verified but endDate has passed → renewal allowed
  * - 'rejected' → rejected by admin
  */

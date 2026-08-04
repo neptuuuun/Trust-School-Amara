@@ -26,7 +26,10 @@
  * so the full monthly price is charged.
  */
 
-const { db } = require('../config/firebase');
+// NOTE: firebase (db) is required lazily inside getProrationQuote — the only
+// function here that reads Firestore. Keeping it out of the module top level
+// lets the pure calendar/proration helpers (and reservationService, which
+// reuses them) be imported without Admin SDK credentials, e.g. in unit tests.
 
 // Arabic weekday label → JS Date.getDay() (Sun=0 … Sat=6). Mirrors
 // src/utils/classValidation.js DAYS_OF_WEEK. Both Monday spellings accepted.
@@ -162,10 +165,34 @@ function computeProration(classData = {}, now = new Date()) {
 }
 
 /**
+ * The amount a support registration is billed for its CURRENT cycle — the
+ * prorated figure that was locked in at registration / renewal by
+ * `computeProration` above. This is the SINGLE source of truth for "what this
+ * student owes": analytics (expected revenue, collection rate, deficits, alerts)
+ * and ledger recording both read the payable amount HERE instead of recomputing
+ * `class price × students`, so a late joiner who only owed the remaining sessions
+ * contributes exactly that reduced amount to expected revenue and can never be
+ * mistaken for a deficit.
+ *
+ * Read order mirrors how the value is written across every enroll path
+ * (registrationController / chargilyController): `totalPrice` is the canonical
+ * field, `proratedAmount` its alias, and `monthlyPrice` the full-month fallback
+ * for legacy rows written before proration existed. The annual fee is a separate
+ * financial record (`annualFeeAmount`) and is deliberately NOT included — support
+ * expected revenue is compared against support-only ledger entries.
+ */
+function registrationPayable(reg = {}) {
+  const v = reg.totalPrice ?? reg.proratedAmount ?? reg.monthlyPrice ?? 0;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
  * Authoritative proration for a class right now: loads the class (if not given)
  * and returns the full quote + cycle dates. Reads nothing but the class document.
  */
 async function getProrationQuote(branchId, classId, classData, now = new Date()) {
+  const { db } = require('../config/firebase');
   let cls = classData;
   if (!cls) {
     const snap = await db.collection('branches').doc(branchId)
@@ -189,5 +216,6 @@ module.exports = {
   computeCycleEnd,
   generateOccurrences,
   computeProration,
+  registrationPayable,
   getProrationQuote,
 };

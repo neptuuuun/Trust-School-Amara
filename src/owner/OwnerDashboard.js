@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Routes, Route, Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
-import { Home, Bell, Building2, PieChart, LineChart, GraduationCap, FileBarChart2, ShieldCheck, Globe, Menu, X, ChevronRight, LogOut, BarChart3 } from 'lucide-react';
+import { Home, Bell, Building2, PieChart, LineChart, GraduationCap, FileBarChart2, ShieldCheck, Globe, Menu, X, ChevronRight, LogOut, BarChart3, LifeBuoy } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import NotificationBell from '../components/notifications/NotificationBell';
 import useScrollToTop from '../hooks/useScrollToTop';
+import { getAcademicYearLabel, listAcademicYears } from '../utils/academicYear';
 import { OwnerFiltersProvider, useOwnerFilters } from './ownerFilters';
 import OwnerHome from './pages/OwnerHome';
 import BranchAnalytics from './pages/BranchAnalytics';
@@ -13,6 +15,7 @@ import Retention from './pages/Retention';
 import StudentLifecycle from './pages/StudentLifecycle';
 import TeacherPerformance from './pages/TeacherPerformance';
 import Reports from './pages/Reports';
+import WeeklyReport from './pages/WeeklyReport';
 import Governance from './pages/Governance';
 import Team from './pages/Team';
 import AuditLog from './pages/AuditLog';
@@ -27,6 +30,7 @@ import { Button } from '../components/ui/button';
 // the `match` funcs keep the parent item highlighted while on a drill-down page.
 const NAV = [
   { name: 'نظرة عامة',       href: '/owner',            icon: Home,          match: (p) => p === '/owner' || p === '/owner/' },
+  { name: 'التقرير الأسبوعي', href: '/owner/weekly-report', icon: BarChart3,  match: (p) => p.startsWith('/owner/weekly-report') },
   { name: 'التنبيهات',        href: '/owner/alerts',     icon: Bell,          match: (p) => p.startsWith('/owner/alerts') },
   { name: 'تحليل الفروع',     href: '/owner/branches',   icon: Building2,      match: (p) => p.startsWith('/owner/branches') },
   { name: 'الإيرادات',        href: '/owner/revenue',    icon: PieChart,      match: (p) => p.startsWith('/owner/revenue') },
@@ -62,7 +66,29 @@ const NavItem = ({ item, active, onClick }) => {
   );
 };
 
-// Global month picker shown in the top bar.
+// Global academic-year picker (PRIMARY reporting dimension) shown in the top bar.
+// Defaults to the current year; selecting another year is a read-only history view.
+const YearPicker = () => {
+  const { academicYear, setAcademicYear } = useOwnerFilters();
+  const current = getAcademicYearLabel();
+  const options = listAcademicYears({ count: 6, future: 1 });
+  return (
+    <label className="flex items-center gap-2 text-sm text-gray-600">
+      <span className="hidden sm:inline">السنة الدراسية</span>
+      <select
+        value={academicYear}
+        onChange={(e) => setAcademicYear(e.target.value)}
+        className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-400"
+      >
+        {options.map((y) => (
+          <option key={y} value={y}>{y}{y === current ? ' (الحالية)' : ''}</option>
+        ))}
+      </select>
+    </label>
+  );
+};
+
+// Global month picker — the monthly drill-down for month-based analytics.
 const MonthPicker = () => {
   const { month, setMonth } = useOwnerFilters();
   return (
@@ -82,7 +108,7 @@ const OwnerDashboard = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
-  const { logout, ownerData } = useAuth();
+  const { logout, ownerData, user } = useAuth();
   useScrollToTop();
 
   const handleLogout = async () => {
@@ -145,12 +171,24 @@ const OwnerDashboard = () => {
                 <Menu className="h-6 w-6" />
               </button>
               <div className="flex items-center gap-4 ms-auto">
+                <YearPicker />
                 <MonthPicker />
                 {ownerData?.email && (
                   <span className="hidden sm:inline-flex items-center px-3 py-1.5 bg-primary-50 text-primary text-sm font-medium rounded-lg border border-primary-100">
                     {ownerData.name || ownerData.email}
                   </span>
                 )}
+                <NotificationBell userId={user?.uid} />
+                <a
+                  href="/help/owner"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-primary-100 bg-white px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary-50"
+                  title="فتح مركز المساعدة في تبويب جديد"
+                >
+                  <LifeBuoy className="h-4 w-4" aria-hidden="true" />
+                  <span className="hidden sm:inline">مركز المساعدة</span>
+                </a>
                 <Link to="/home" className="text-primary hover:text-primary-600 font-medium text-sm">العودة للموقع</Link>
               </div>
             </div>
@@ -170,6 +208,7 @@ const OwnerDashboard = () => {
 
               {/* Reports — detailed registers reached from alerts or the Reports hub. */}
               <Route path="reports" element={<Reports />} />
+              <Route path="weekly-report" element={<WeeklyReport />} />
               <Route path="groups" element={<GroupAnalytics />} />
               <Route path="students" element={<StudentLifecycle />} />
 

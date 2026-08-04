@@ -51,6 +51,7 @@
 const { admin, db } = require('../config/firebase');
 const H = require('../services/analyticsHelpers');
 const live = require('../services/liveStateService');
+const { loadExpectedSupportRevenue } = require('../services/expectedRevenueService');
 
 const Timestamp = admin.firestore.Timestamp;
 
@@ -91,15 +92,18 @@ const getAlerts = async (req, res, next) => {
     // a deletion is reflected on the very next request with no manual step.
     const windowByBranch = {};
     const liveEnrollByBranch = {};
+    const expectedSupportByBranch = {};
     const ledgerStats = {};
     await Promise.all(branches.map(async (b) => {
-      const [raw, enrol] = await Promise.all([
+      const [raw, enrol, expectedSupport] = await Promise.all([
         H.loadLedgerWindow(prevStart, end, b),
         live.loadLiveClassEnrollment(b),
+        loadExpectedSupportRevenue(b),
       ]);
       const { entries, stats } = await live.filterLiveEntries(raw);
       windowByBranch[b] = entries;
       liveEnrollByBranch[b] = enrol;
+      expectedSupportByBranch[b] = expectedSupport;
       ledgerStats[b] = stats;
     }));
 
@@ -202,6 +206,7 @@ const getAlerts = async (req, res, next) => {
       const classesSnap = await db.collection('branches').doc(b).collection('classes').get();
       const name = branchName(b);
       const liveByClass = liveEnrollByBranch[b].byClass;
+      const expectedSupport = expectedSupportByBranch[b];
 
       // Index ledger by classId → paying sets (this/last) + actual revenue this month.
       const byClass = {};
@@ -218,11 +223,24 @@ const getAlerts = async (req, res, next) => {
         if ((c.status || 'active') === 'inactive') return;
         const slot = byClass[d.id] || { thisMonth: new Set(), lastMonth: new Set(), actualThis: 0 };
         const monthlyFee = H.num(c.price ?? c.monthlyPrice);
-        // LIVE seat count from the approved archives — NOT c.enrollmentCount, which
-        // survives deletions made outside the increment/decrement write paths and
-        // would keep `expected` (and therefore the gap) frozen forever.
-        const enrolled = (liveByClass.get(d.id) || new Set()).size;
-        const expected = enrolled * monthlyFee;
+        const isSupport = c.serviceType === 'support';
+        // SUPPORT is prorated, so both halves of the shortfall test share the support
+        // basis: `expected` is the sum of each active subscription's stored payable
+        // amount (SSOT: expectedRevenueService, RESERVED excluded) and `enrolled` is
+        // the matching active-subscription count. A group whose late joiners paid
+        // their reduced prorated amounts now reads expected == actual and never fires
+        // a phantom deficit alert.
+        //
+        // NON-SUPPORT keeps the LIVE seat count from the approved archives — NOT
+        // c.enrollmentCount, which survives deletions made outside the increment/
+        // decrement write paths and would keep the gap frozen forever.
+        const supportSlot = isSupport ? expectedSupport.byClass.get(d.id) : null;
+        const enrolled = isSupport
+          ? (supportSlot ? supportSlot.students : 0)
+          : (liveByClass.get(d.id) || new Set()).size;
+        const expected = isSupport
+          ? (supportSlot ? supportSlot.expected : 0)
+          : enrolled * monthlyFee;
         const actual = slot.actualThis;
         const groupName = c.groupName || c.name || c.subjectName || '—';
         const teacherName = (c.teacherName || '').trim();

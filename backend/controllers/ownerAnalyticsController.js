@@ -12,6 +12,7 @@
 const { admin, db } = require('../config/firebase');
 const H = require('../services/analyticsHelpers');
 const { normalizeGroupType, classify } = require('../services/supportEligibility');
+const { loadExpectedSupportRevenue } = require('../services/expectedRevenueService');
 
 const INACTIVE_STATES = ['inactive', 'archived', 'deleted'];
 const ACTIVE_DAYS = 35;     // paid within ~1 cycle → active
@@ -38,7 +39,10 @@ const getGroups = async (req, res, next) => {
 
     const rows = [];
     for (const b of branches) {
-      const classesSnap = await db.collection('branches').doc(b).collection('classes').get();
+      const [classesSnap, expectedSupport] = await Promise.all([
+        db.collection('branches').doc(b).collection('classes').get(),
+        loadExpectedSupportRevenue(b),
+      ]);
       const entries = windowByBranch[b] || [];
 
       // Index ledger by classId → { thisMonth:Set, lastMonth:Set, actualThis:number }
@@ -56,8 +60,21 @@ const getGroups = async (req, res, next) => {
         if ((c.status || 'active') === 'inactive') return;
         const slot = byClass[d.id] || { thisMonth: new Set(), lastMonth: new Set(), actualThis: 0 };
         const monthlyFee = H.num(c.price ?? c.monthlyPrice);
-        const activeStudents = H.num(c.enrollmentCount);
-        const expected = activeStudents * monthlyFee;
+        const isSupport = c.serviceType === 'support';
+        // Support is billed on a prorated calendar-month cycle, so its expected
+        // revenue is the SUM of each active subscription's stored payable amount
+        // (owned by expectedRevenueService — the same figure the summary cards and
+        // shortfall alerts use), NOT students × full monthly fee. A late joiner who
+        // paid their reduced prorated amount then matches expected == actual and no
+        // longer surfaces as a phantom deficit. Other service types are not prorated
+        // and keep the flat basis; RESERVED subscriptions are excluded on both sides.
+        const supportSlot = isSupport ? expectedSupport.byClass.get(d.id) : null;
+        const activeStudents = isSupport
+          ? (supportSlot ? supportSlot.students : 0)
+          : Math.max(0, H.num(c.enrollmentCount) - H.num(c.reservedCount));
+        const expected = isSupport
+          ? (supportSlot ? supportSlot.expected : 0)
+          : activeStudents * monthlyFee;
         const actual = slot.actualThis;
 
         // Retention: of students who paid this class last month, how many paid again this month.

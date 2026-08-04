@@ -22,6 +22,7 @@ import {
   streamClasses,
   streamRegisteredLanguagesForStudent,
 } from '../services/firestoreService';
+import { getAcademicYearLabel } from '../utils/academicYear';
 import SubjectGrid from '../components/academic/SubjectGrid';
 import ClassList from '../components/academic/ClassList';
 import LanguageRegistrationForm from '../components/LanguageRegistrationForm';
@@ -51,7 +52,7 @@ const LanguagesPage = () => {
       setSubjects(rows.filter((s) => (s.status || 'active') !== 'inactive'));
       setLoading(false);
     });
-    const unsubClasses = streamClasses(selectedBranchId, { serviceType: 'language', activeOnly: true }, setClasses);
+    const unsubClasses = streamClasses(selectedBranchId, { serviceType: 'language', activeOnly: true, academicYear: getAcademicYearLabel() }, setClasses);
     return () => { unsubSubjects?.(); unsubClasses?.(); };
   }, [selectedBranchId]);
 

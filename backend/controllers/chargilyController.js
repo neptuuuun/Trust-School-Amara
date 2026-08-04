@@ -17,7 +17,8 @@ const chargilyService = require('../services/chargilyService');
 const ledger = require('../services/ledgerService');
 const academicYear = require('../services/academicYear');
 const financeSettings = require('../services/financeSettings');
-const { monthKeyOf, startOfMonth, computeCycleEnd, computeProration } = require('../services/sessionService');
+const { computeProration } = require('../services/sessionService');
+const { resolveSubscriptionWindow } = require('../services/reservationService');
 const { normalizeSchool } = require('../constants');
 const { assertNoStudentConflict } = require('../services/scheduleConflictService');
 const { writeAudit } = require('../services/auditService');
@@ -145,8 +146,11 @@ async function createCheckout(req, res) {
           return res.status(409).json({ code: 'class-full', message: 'اكتمل العدد في هذه المجموعة.' });
         }
         if (serviceType === 'support') {
-          chargeAmount = computeProration(cls, new Date()).amountDue;
-          if (serviceData.includesAnnualFee && !(await isAnnualFeePaidThisYear(branchId, studentId))) {
+          // Reserved (group starts in a future month) → full monthly price (join
+          // at the 1st, nothing elapsed). Otherwise prorate the current cycle.
+          const win = resolveSubscriptionWindow(cls, new Date());
+          chargeAmount = computeProration(cls, win.reserved ? win.startDate : new Date()).amountDue;
+          if (serviceData.includesAnnualFee && !(await isAnnualFeePaidThisYear(branchId, studentId, win.startDate))) {
             chargeAmount += await financeSettings.getAnnualFeeAmount();
           }
         } else {
@@ -196,25 +200,6 @@ async function createCheckout(req, res) {
 
     const serviceName = serviceData.serviceName || serviceData.subjectName || serviceData.trainingName || '';
 
-    // ═══ TEMP DEBUG — remove after diagnosing the Chargily 422 ═══════════════════
-    // Derived module constants + raw env, captured in the controller scope right
-    // before handing off to the Chargily service layer. Proves whether the
-    // .replace()/fallback at lines 35-36 altered anything vs the raw env value.
-    console.log("========== CHARGILY URL BUILD (controller) ==========");
-    console.log({
-      raw_env_FRONTEND_URL: process.env.FRONTEND_URL,
-      raw_env_BACKEND_URL:  process.env.BACKEND_URL,
-      derived_FRONTEND_URL: FRONTEND_URL,
-      derived_BACKEND_URL:  BACKEND_URL,
-      built_successUrl: `${FRONTEND_URL}/payment/status?orderId=${orderId}&result=success`,
-      built_failureUrl: `${FRONTEND_URL}/payment/status?orderId=${orderId}&result=failure`,
-      built_webhookUrl: webhookUrl,
-      chargeAmount, chargeAmount_type: typeof chargeAmount, chargeAmount_isInteger: Number.isInteger(chargeAmount),
-      serviceType,
-    });
-    console.log("=====================================================");
-    // ═══ END TEMP DEBUG ══════════════════════════════════════════════════════════
-
     const checkout = await chargilyService.createCheckout({
       amount: chargeAmount,
       currency:        'dzd', // Chargily v2 requires the lowercase ISO code; 'DZD' → 422.
@@ -235,15 +220,6 @@ async function createCheckout(req, res) {
 
   } catch (err) {
     console.error('[chargily] createCheckout error:', err.message);
-    // ═══ TEMP DEBUG — remove after diagnosing the Chargily 422 ═══════════════════
-    // The COMPLETE response body Chargily returned (chargilyFetch attaches the
-    // parsed JSON as err.body and the HTTP status as err.status). This is the
-    // authoritative reason for the 422 — the validation message names the field.
-    console.error("========== CHARGILY RESPONSE (error) ==========");
-    console.error("status:", err.status);
-    console.error("body:  ", JSON.stringify(err.body ?? err.response?.data ?? { message: err.message }, null, 2));
-    console.error("===============================================");
-    // ═══ END TEMP DEBUG ══════════════════════════════════════════════════════════
     return res.status(500).json({ code: 'checkout-error', message: err.message });
   }
 }
@@ -625,6 +601,8 @@ async function _createLanguageReg({ studentId, studentName, studentEmail, branch
     school: normalizeSchool(sd.school),
     guardianPhone: sd.guardianPhone || '', studentPhone: sd.studentPhone || '',
     paymentMethod, paymentOrderId: orderId, branchId,
+    // Server-authoritative academic year (never trusted from the client).
+    academicYear: academicYear.getAcademicYearLabel(),
     ...paymentFields({ paymentMethod, chargilyCheckoutId, chargilyPaymentId, now }),
   };
 
@@ -698,6 +676,8 @@ async function _createTrainingReg({ studentId, studentName, studentEmail, branch
     birthDate: sd.birthDate || null, birthPlace: sd.birthPlace || '',
     school: normalizeSchool(sd.school), studentPhone: sd.studentPhone || '',
     paymentMethod, paymentOrderId: orderId, branchId,
+    // Server-authoritative academic year (never trusted from the client).
+    academicYear: academicYear.getAcademicYearLabel(),
     ...paymentFields({ paymentMethod, chargilyCheckoutId, chargilyPaymentId, now }),
   };
 
@@ -751,16 +731,17 @@ async function _createSupportReg({ studentId, studentName, studentEmail, branchI
     const e = new Error('duplicate'); e._code = 'duplicate-registration'; throw e;
   }
 
-  // Calendar-month cycle + server proration (the order amount may bundle the fee;
-  // record only the support portion here).
+  // Subscription window anchored to the group's Start Month. Enrolling before it
+  // begins is a RESERVATION (window + billing start on the 1st of the Start
+  // Month); otherwise the current calendar-month cycle (existing behaviour).
   const regDate   = new Date();
-  const cycleKey  = monthKeyOf(regDate);
-  const startDate = startOfMonth(regDate);
-  const endDate   = computeCycleEnd(regDate);
-  const proration = computeProration(classData, regDate);
+  const { reserved, groupStartMonth, startDate, endDate, cycleMonthKey: cycleKey } =
+    resolveSubscriptionWindow(classData, regDate);
+  // Reserved joins at the 1st → full month; otherwise prorate the current cycle.
+  const proration = computeProration(classData, reserved ? startDate : regDate);
   const supportAmt = proration.amountDue;
 
-  const includesAnnualFee = sd.includesAnnualFee === true && !(await isAnnualFeePaidThisYear(branchId, studentId));
+  const includesAnnualFee = sd.includesAnnualFee === true && !(await isAnnualFeePaidThisYear(branchId, studentId, startDate));
   const annualFeeAmount   = includesAnnualFee ? await financeSettings.getAnnualFeeAmount() : 0;
 
   const regRef = db.collection('supportLessonRegistrations').doc();
@@ -783,7 +764,13 @@ async function _createSupportReg({ studentId, studentName, studentEmail, branchI
     distinguishedSubjectsAverage: gate.average,
     startDate: admin.firestore.Timestamp.fromDate(startDate),
     endDate:   admin.firestore.Timestamp.fromDate(endDate),
+    // Server-derived academic year (from the effective start; the group's Start
+    // Month for a reservation). Mirrors registrationController's self-enroll path.
+    academicYear: academicYear.getAcademicYearLabel(startDate),
     cycleMonthKey: cycleKey,               // canonical key the delete-reversal reads
+    // Reservation lifecycle: reserved==true until the Group Start Month begins.
+    reserved,
+    groupStartMonth,
     durationInMonths: 1,
     monthlyPrice: proration.monthlyPrice || null,
     totalPrice: supportAmt, proratedAmount: supportAmt,

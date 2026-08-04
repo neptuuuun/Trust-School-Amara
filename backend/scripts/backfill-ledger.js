@@ -27,6 +27,7 @@
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 const { db } = require('../config/firebase');
 const ledger = require('../services/ledgerService');
+const { registrationPayable } = require('../services/sessionService');
 
 const DRY_RUN  = process.argv.includes('--dry-run');
 const BRANCHES = ['boumerdes', 'bordj_menaiel'];
@@ -129,7 +130,7 @@ async function backfillBranch(branchId) {
   for (const d of support.docs) {
     const data = d.data() || {};
     if (String(data.source || '').toLowerCase() === 'annualfee') continue; // free bundled access
-    const amount = ledger.toNumber(data.totalPrice ?? data.proratedAmount ?? data.monthlyPrice);
+    const amount = registrationPayable(data); // same stored payable amount analytics reads
     if (amount <= 0) continue;
     const e = enrich(data);
     const paidAt = data.verifiedAt || data.startDate || data.createdAt || null;

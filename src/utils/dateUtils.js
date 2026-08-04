@@ -49,6 +49,15 @@ export const formatMonthYear = (value) => {
   return `${MONTHS_DZ[d.getMonth()]} ${d.getFullYear()}`;
 };
 
+/** "سبتمبر 2026" from a 'YYYY-MM' month key (Group Start Month). '—' if invalid. */
+export const formatMonthKey = (monthKey) => {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(monthKey || '').trim());
+  if (!m) return '—';
+  const monthIdx = Number(m[2]) - 1;
+  if (monthIdx < 0 || monthIdx > 11) return '—';
+  return `${MONTHS_DZ[monthIdx]} ${Number(m[1])}`;
+};
+
 /** "7 جوان" — compact day+month for table cells and relative-time fallbacks */
 export const formatDayMonth = (value) => {
   const d = toJsDate(value);

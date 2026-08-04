@@ -1,23 +1,22 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../firebase';
 import { useBranch } from '../contexts/BranchContext';
 import { useAuth } from '../contexts/AuthContext';
-import { GraduationCap, User, MessageSquare, Send, Mail, CheckCircle, AlertCircle, Phone as PhoneIcon } from 'lucide-react';
+import { GraduationCap, MessageSquare } from 'lucide-react';
 import {
   streamSubjects,
   streamClasses,
   streamUserTrainingSignIns,
   streamRegisteredTrainingsForStudent,
 } from '../services/firestoreService';
+import { getAcademicYearLabel } from '../utils/academicYear';
 import { scheduleSlotLabel } from '../components/academic/academicDisplay';
 import SubjectGrid from '../components/academic/SubjectGrid';
 import ClassList from '../components/academic/ClassList';
 import PageAnnouncements from '../components/announcements/PageAnnouncements';
+import TrainingRequestPanel from '../components/trainings/TrainingRequestPanel';
 import { Button } from '../components/ui/button';
-import { Input, Textarea, Label } from '../components/ui/input';
-import { Alert, LoadingState } from '../components/ui/feedback';
+import { LoadingState } from '../components/ui/feedback';
 
 const TRAINING_APPROVED_STATUSES = ['approved', 'verified', 'registered'];
 const TRAINING_PENDING_STATUSES = ['pending', 'submitted', 'review', 'reviewing', 'in_review', 'processing', 'awaiting'];
@@ -40,12 +39,6 @@ const TrainingsPage = () => {
     const [trainingForms, setTrainingForms] = useState([]);
     const [adminRegisteredTrainings, setAdminRegisteredTrainings] = useState([]);
 
-    // Custom-training-request form (lead-gen — unrelated to the catalog)
-    const [formData, setFormData] = useState({ name: '', email: '', phone: '', course: '', message: '', topics: [] });
-    const [isSubmitting, setIsSubmitting] = useState(false);
-    const [submitStatus, setSubmitStatus] = useState('');
-    const [hasSubmittedRequest, setHasSubmittedRequest] = useState(false);
-
     // ── Catalog streams (branch-scoped) ─────────────────────────────────────────
     useEffect(() => {
         if (!selectedBranchId) { setSubjects([]); setClasses([]); setLoading(false); return undefined; }
@@ -54,7 +47,7 @@ const TrainingsPage = () => {
             setSubjects(rows.filter((s) => (s.status || 'active') !== 'inactive'));
             setLoading(false);
         });
-        const unsubClasses = streamClasses(selectedBranchId, { serviceType: 'training', activeOnly: true }, setClasses);
+        const unsubClasses = streamClasses(selectedBranchId, { serviceType: 'training', activeOnly: true, academicYear: getAcademicYearLabel() }, setClasses);
         return () => { unsubSubjects?.(); unsubClasses?.(); };
     }, [selectedBranchId]);
 
@@ -121,72 +114,6 @@ const TrainingsPage = () => {
         });
     };
 
-    const handleInputChange = (e) => {
-        const { name, value } = e.target;
-        setFormData(prev => ({ ...prev, [name]: value }));
-    };
-
-    const handleSubmit = async (e) => {
-        e.preventDefault();
-
-        if (isSubmitting || hasSubmittedRequest) {
-            return;
-        }
-
-        setIsSubmitting(true);
-        setSubmitStatus('');
-
-        try {
-            if (!selectedBranchId) {
-                setSubmitStatus('error');
-                setIsSubmitting(false);
-                return;
-            }
-
-            // Let users submit even if not logged in.
-
-            const registrationData = {
-                type: 'training_request',
-                name: formData.name,
-                phone: formData.phone,
-                email: formData.email,
-                courseName: formData.course,
-                branchId: selectedBranchId,
-                createdAt: serverTimestamp(),
-                status: 'جديد',
-                processed: false
-            };
-
-            if (currentUser?.uid) {
-                registrationData.userId = currentUser.uid;
-            }
-
-            if (formData.message) {
-                registrationData.message = formData.message;
-            }
-
-            if (formData.topics && formData.topics.length > 0) {
-                registrationData.topics = formData.topics;
-            }
-
-            await addDoc(collection(db, 'branches', selectedBranchId, 'registrations'), registrationData);
-
-            setSubmitStatus('success');
-            setHasSubmittedRequest(true);
-
-            // Redirect user to a confirmation section.
-            setTimeout(() => {
-                setView('requestConfirmation');
-            }, 400);
-
-        } catch (error) {
-            console.error('Error submitting training request:', error);
-            setSubmitStatus('error');
-        } finally {
-            setIsSubmitting(false);
-        }
-    };
-
     return (
         <div className="trainings-page py-12 px-6 md:px-12 bg-gray-50 min-h-screen" dir="rtl">
             <div className="container mx-auto max-w-6xl">
@@ -199,7 +126,7 @@ const TrainingsPage = () => {
                     <p className="text-xl text-gray-600">
                         {view === 'options' && 'اختر ما تريد القيام به'}
                         {view === 'available' && (subjects.length > 0 ? 'اكتشف دوراتنا التكوينية المتاحة حالياً' : 'لا توجد دورات متاحة حالياً')}
-                        {view === 'request' && 'أرسل طلب تدريب مخصص وسنتواصل معك'}
+                        {view === 'request' && 'أخبرنا بالدورة التي ترغب بها وسنتواصل معك'}
                     </p>
                 </div>
 
@@ -215,10 +142,10 @@ const TrainingsPage = () => {
                                 <span className="text-sm text-gray-500">طلب تدريب</span>
                             </div>
                             <h3 className="text-2xl font-bold text-primary mb-3">طلب تدريب مخصص</h3>
-                            <p className="text-gray-600 mb-6">صف لنا التدريب الذي تود أن نقدمه، مع المواضيع المفضلة والتواصل معك لاحقاً.</p>
+                            <p className="text-gray-600 mb-6">لم تجد ما تبحث عنه؟ أخبرنا بالمجال الذي تريده وسنعمل على توفيره والتواصل معك.</p>
                             <div className="flex items-center justify-between">
                                 <span className="text-primary font-semibold group-hover:underline">ابدأ الطلب</span>
-                                <span aria-hidden>→</span>
+                                <span aria-hidden>←</span>
                             </div>
                         </button>
 
@@ -234,7 +161,7 @@ const TrainingsPage = () => {
                             <p className="text-gray-600 mb-6">استعرض الدورات الحالية بالتفاصيل (المؤطر، المجموعات، المواعيد) وسجل مباشرة.</p>
                             <div className="flex items-center justify-between">
                                 <span className="text-primary font-semibold group-hover:underline">استعراض الدورات</span>
-                                <span aria-hidden>→</span>
+                                <span aria-hidden>←</span>
                             </div>
                         </button>
                     </div>
@@ -248,7 +175,7 @@ const TrainingsPage = () => {
                                 onClick={() => { setView('options'); setSelectedSubject(null); }}
                                 className="text-sm text-gray-600 hover:underline"
                             >
-                                ← عودة للاختيارات
+                                → عودة للاختيارات
                             </button>
                         </div>
 
@@ -289,136 +216,13 @@ const TrainingsPage = () => {
                     </div>
                 )}
 
-                {/* Custom Training Request View */}
+                {/* Custom Training Request View — account-driven, minimal input */}
                 {view === 'request' && (
-                    <div className="max-w-2xl mx-auto">
-                        <div className="mb-6">
-                            <button onClick={() => setView('options')} className="text-sm text-gray-600 hover:underline">← عودة للاختيارات</button>
+                    <div>
+                        <div className="mb-6 max-w-2xl mx-auto">
+                            <button onClick={() => setView('options')} className="text-sm text-gray-600 hover:underline">→ عودة للاختيارات</button>
                         </div>
-                        <div className="bg-white rounded-xl shadow-lg p-8">
-                            <div className="text-center mb-8">
-                                <MessageSquare className="h-16 w-16 text-primary mx-auto mb-4" />
-                                <h2 className="text-2xl font-bold text-primary mb-2">طلب تدريب</h2>
-                                <p className="text-gray-600">صف لنا التدريب الذي تريده وسنتواصل معك</p>
-                            </div>
-
-                            {submitStatus === 'success' && (
-                                <Alert variant="success" className="mb-6">تم إرسال طلب التدريب بنجاح</Alert>
-                            )}
-
-                            {submitStatus === 'error' && (
-                                <Alert variant="danger" className="mb-6">حدث خطأ أثناء إرسال الطلب، يرجى المحاولة مرة أخرى</Alert>
-                            )}
-
-                            <form onSubmit={handleSubmit} className="space-y-6">
-                                <div>
-                                    <Label htmlFor="name" required className="flex items-center gap-2 text-lg">
-                                        <User className="h-4 w-4" aria-hidden="true" />
-                                        الاسم الكامل
-                                    </Label>
-                                    <Input
-                                        type="text"
-                                        id="name"
-                                        name="name"
-                                        value={formData.name}
-                                        onChange={handleInputChange}
-                                        required
-                                        className="text-lg"
-                                        placeholder="أدخل اسمك الكامل"
-                                    />
-                                </div>
-
-                                <div>
-                                    <Label htmlFor="email" required className="flex items-center gap-2 text-lg">
-                                        <Mail className="h-4 w-4" aria-hidden="true" />
-                                        البريد الإلكتروني
-                                    </Label>
-                                    <Input
-                                        type="email"
-                                        id="email"
-                                        name="email"
-                                        value={formData.email}
-                                        onChange={handleInputChange}
-                                        required
-                                        className="text-lg"
-                                        placeholder="example@email.com"
-                                        dir="ltr"
-                                    />
-                                </div>
-
-                                <div>
-                                    <Label htmlFor="phone" required className="flex items-center gap-2 text-lg">
-                                        <PhoneIcon className="h-4 w-4" aria-hidden="true" />
-                                        رقم الهاتف
-                                    </Label>
-                                    <Input
-                                        type="tel"
-                                        id="phone"
-                                        name="phone"
-                                        value={formData.phone}
-                                        onChange={handleInputChange}
-                                        required
-                                        className="text-lg"
-                                        placeholder="0555123456"
-                                    />
-                                </div>
-
-                                <div>
-                                    <Label htmlFor="course" required className="flex items-center gap-2 text-lg">
-                                        <GraduationCap className="h-4 w-4" aria-hidden="true" />
-                                        المجال المطلوب
-                                    </Label>
-                                    <Input
-                                        type="text"
-                                        id="course"
-                                        name="course"
-                                        value={formData.course}
-                                        onChange={handleInputChange}
-                                        required
-                                        className="text-lg"
-                                        placeholder="مثال: تطوير المواقع، التصميم الجرافيكي، التسويق الرقمي..."
-                                    />
-                                </div>
-
-                                <div>
-                                    <Label htmlFor="message" className="text-lg">رسالة إضافية (اختياري)</Label>
-                                    <Textarea
-                                        id="message"
-                                        name="message"
-                                        value={formData.message}
-                                        onChange={handleInputChange}
-                                        rows={4}
-                                        className="text-lg"
-                                        placeholder="أضف أي تفاصيل إضافية حول ما تريد تعلمه..."
-                                    />
-                                </div>
-
-                                <Button type="submit" size="lg" fullWidth disabled={isSubmitting || hasSubmittedRequest}>
-                                    {hasSubmittedRequest ? (
-                                        'تم الإرسال'
-                                    ) : isSubmitting ? (
-                                        'جاري الإرسال...'
-                                    ) : (
-                                        <>
-                                            <Send className="h-5 w-5" />
-                                            إرسال
-                                        </>
-                                    )}
-                                </Button>
-                            </form>
-                        </div>
-                    </div>
-                )}
-
-                {view === 'requestConfirmation' && (
-                    <div className="max-w-2xl mx-auto">
-                        <div className="mb-6">
-                            <button onClick={() => setView('options')} className="text-sm text-gray-600 hover:underline">← عودة للاختيارات</button>
-                        </div>
-                        <div className="bg-white rounded-xl shadow-lg p-8 text-center">
-                            <h2 className="text-2xl font-bold text-primary mb-3">تم استلام طلب التدريب</h2>
-                            <p className="text-gray-700">شكرًا لك، تم حفظ طلبك بنجاح وسيتم التواصل معك قريبًا</p>
-                        </div>
+                        <TrainingRequestPanel branchId={selectedBranchId} />
                     </div>
                 )}
             </div>

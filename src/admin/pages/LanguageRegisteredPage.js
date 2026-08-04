@@ -28,9 +28,10 @@ import AdminConfirmDialog from '../components/AdminConfirmDialog';
 import { useToast } from '../components/ToastNotifications';
 import {
   StatCard, PageHeader, SearchInput, EmptyState, ArchiveSkeleton,
-  DetailSection, DetailRow, SELECT_CLASS,
+  DetailSection, DetailRow, SELECT_CLASS, AcademicYearSelect,
   DATE_RANGES, inDateRange, isThisMonth, fmtDate, fmtDateTime, formatMoney,
 } from '../components/archive/ArchiveKit';
+import { getAcademicYearLabel } from '../../utils/academicYear';
 
 // Format a schedules[] array into a compact Arabic string for display/CSV.
 const formatSchedulesText = (schedules) =>
@@ -139,6 +140,8 @@ const LanguageRegisteredPage = () => {
   const [langFilter, setLangFilter] = useState('all');
   const [levelFilter, setLevelFilter] = useState('all');
   const [dateFilter, setDateFilter] = useState('all');
+  // Academic-year (history) filter — defaults to the current year; server-side.
+  const [academicYear, setAcademicYear] = useState(getAcademicYearLabel());
 
   const [drawer, setDrawer] = useState(null);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -156,9 +159,9 @@ const LanguageRegisteredPage = () => {
     const unsub = streamRegisteredLanguages(selectedBranchId, (list) => {
       setRawEntries(list.map(norm));
       setLoading(false);
-    });
+    }, { academicYear });
     return () => unsub?.();
-  }, [selectedBranchId]);
+  }, [selectedBranchId, academicYear]);
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const stats = useMemo(() => ({
@@ -327,6 +330,7 @@ const LanguageRegisteredPage = () => {
           {/* Filters */}
           <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
             <SearchInput value={search} onChange={setSearch} placeholder="ابحث بالاسم أو الهاتف أو البريد..." />
+            <AcademicYearSelect value={academicYear} onChange={setAcademicYear} />
             <select value={langFilter} onChange={(e) => handleLangFilter(e.target.value)} className={SELECT_CLASS}>
               <option value="all">جميع اللغات</option>
               {langOptions.map((l) => <option key={l} value={l}>{l}</option>)}

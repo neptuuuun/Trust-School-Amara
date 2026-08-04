@@ -20,6 +20,7 @@ import {
   formatDate as _formatDate,
   formatDateTime as _formatDateTime,
 } from '../../../utils/dateUtils';
+import { getAcademicYearLabel, listAcademicYears } from '../../../utils/academicYear';
 
 // ── Date / money helpers (single source of truth across the 4 pages) ───────────
 
@@ -127,6 +128,31 @@ export const SearchInput = ({ value, onChange, placeholder }) => (
     />
   </div>
 );
+
+// ── Academic-year (history) selector ──────────────────────────────────────────
+// A read-only HISTORY filter for archive pages: it changes which academic year is
+// DISPLAYED and nothing else. It never changes the active academic year and never
+// affects new records — those always belong to the auto-detected current year.
+export const ACADEMIC_YEAR_OPTIONS = () => listAcademicYears({ count: 6, future: 1 });
+
+export const AcademicYearSelect = ({ value, onChange }) => {
+  const current = getAcademicYearLabel();
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className={SELECT_CLASS}
+      aria-label="السنة الدراسية"
+      title="تصفية حسب السنة الدراسية (عرض الأرشيف)"
+    >
+      {ACADEMIC_YEAR_OPTIONS().map((y) => (
+        <option key={y} value={y}>
+          {`السنة الدراسية ${y}`}{y === current ? ' (الحالية)' : ''}
+        </option>
+      ))}
+    </select>
+  );
+};
 
 // ── Empty state ──────────────────────────────────────────────────────────────────
 

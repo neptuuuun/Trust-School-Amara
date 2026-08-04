@@ -1,9 +1,11 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { UserPlus, Loader2, Search, User, Phone, AlertCircle, CheckCircle } from 'lucide-react';
+import { UserPlus, Loader2, Search, User, Phone, AlertCircle, CheckCircle, CalendarDays } from 'lucide-react';
+import { formatMonthKey } from '../../utils/dateUtils';
 import { collection, query, where, orderBy, limit, getDocs } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { getClasses, getStudentSupportLessonRegistrations } from '../../services/firestoreService';
+import { getAcademicYearLabel } from '../../utils/academicYear';
 import apiCall from '../../utils/apiClient';
 import { getUsersByBranch } from '../../services/userService';
 import { useAuth } from '../../contexts/AuthContext';
@@ -66,7 +68,7 @@ const AddSupportStudentModal = ({ branchId, onClose, onSuccess }) => {
     if (!branchId) return;
     Promise.all([
       getUsersByBranch(branchId).catch(() => []),
-      getClasses(branchId, { serviceType: 'support', activeOnly: true }).catch(() => []),
+      getClasses(branchId, { serviceType: 'support', activeOnly: true, academicYear: getAcademicYearLabel() }).catch(() => []),
     ]).then(([users, fetchedLessons]) => {
       setAllUsers(users || []);
       setAllLessons(fetchedLessons || []);
@@ -264,11 +266,48 @@ const AddSupportStudentModal = ({ branchId, onClose, onSuccess }) => {
     return new Set(active.map((r) => r.lessonId).filter(Boolean));
   }, [existingRegs]);
 
-  // Support-level classification for the selected student (admin-entered average
-  // takes precedence over the stored value this session).
-  const classification = localAverage != null ? classify(localAverage) : classificationFromProfile(selectedUser);
+  // The student's STORED classification (from their saved profile average). This —
+  // never the value the admin is mid-typing — decides whether we render the
+  // read-only badge or the editable average input, so a keystroke can't hide it.
+  const storedClassification = classificationFromProfile(selectedUser);
+
+  // Live preview of the value currently being typed. Drives an inline hint only;
+  // it must never gate navigation or replace the input.
+  const averagePreview = useMemo(() => validateAverage(averageInput), [averageInput]);
+  const previewClassification = averagePreview.valid ? classify(averagePreview.value) : null;
+
+  // Effective (confirmed) classification: the admin-confirmed average this session
+  // takes precedence over the stored one. `localAverage` is set ONLY on explicit
+  // confirmation (تأكيد / Enter / blur) — never on every keystroke — so a
+  // half-typed value like "1" is never mistaken for the final average.
+  const classification = localAverage != null ? classify(localAverage) : storedClassification;
   const needsAverage = Boolean(selectedUser && classification == null);
   const effectiveAverage = localAverage != null ? localAverage : (selectedUser?.distinguishedSubjectsAverage ?? null);
+
+  // onChange records the raw text only (+ clears the error). Editing a value that
+  // was already confirmed invalidates that confirmation and resets the lesson
+  // choice, so the eligible-lesson list can never be built on a stale average.
+  const handleAverageInputChange = (val) => {
+    setAverageInput(val);
+    setAverageError('');
+    if (localAverage != null) {
+      setLocalAverage(null);
+      setLessonId('');
+    }
+  };
+
+  // Confirm the typed average (تأكيد button / Enter / blur). Only a valid, complete
+  // value locks in; an empty or half-typed value is left untouched so the admin
+  // can keep typing ("1" → "10" → "10.5") without being cut off mid-entry.
+  const confirmAverage = () => {
+    const v = validateAverage(averageInput);
+    if (!v.valid) {
+      if (averageInput.trim() !== '') setAverageError(v.error);
+      return;
+    }
+    setLocalAverage(v.value);
+    setAverageError('');
+  };
 
   // Lessons filtered by approved year, then by support-level eligibility (RULE A/B),
   // then split into available vs already-registered.
@@ -288,6 +327,10 @@ const AddSupportStudentModal = ({ branchId, onClose, onSuccess }) => {
   );
 
   const selectedLesson = lessons.find((l) => l.id === lessonId) ?? null;
+  // Reserved when the group's Start Month is a future month: the student's seat
+  // is held now and the subscription auto-activates on the 1st of that month.
+  const nowMonthKey = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+  const lessonIsReserved = Boolean(selectedLesson?.startMonth) && String(selectedLesson.startMonth) > nowMonthKey;
 
   const approvedYearMeta = approvedYear ? getYearById(approvedYear) : null;
   const approvedYearLabel = approvedYearMeta?.nameShort || approvedYearMeta?.name || approvedYear || '';
@@ -527,11 +570,13 @@ const AddSupportStudentModal = ({ branchId, onClose, onSuccess }) => {
           </div>
         )}
 
-        {/* Support-level classification + average (admin can enter/correct it) */}
+        {/* Support-level classification + average (admin can enter/correct it).
+            The choice of badge-vs-input is gated on the STORED classification, not
+            the value being typed — so typing never hides the input mid-entry. */}
         {selectedUser && approvedYear && !loadingYear && (
-          classification ? (
+          storedClassification ? (
             (() => {
-              const b = classificationBadge(classification);
+              const b = classificationBadge(storedClassification);
               return (
                 <div className="flex items-center justify-between rounded-lg border border-gray-100 bg-gray-50 px-4 py-3">
                   <div className="text-sm">
@@ -549,24 +594,51 @@ const AddSupportStudentModal = ({ branchId, onClose, onSuccess }) => {
               <label className="mb-1.5 block text-sm font-medium text-gray-700">
                 معدل المواد المميزة <span className="text-danger-500">*</span>
               </label>
-              <input
-                type="text"
-                inputMode="decimal"
-                dir="ltr"
-                value={averageInput}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setAverageInput(val);
-                  const v = validateAverage(val);
-                  setLocalAverage(v.valid ? v.value : null);
-                  setAverageError('');
-                }}
-                placeholder="مثال: 9.8"
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary focus:ring-2 focus:ring-primary/30"
-              />
+              <div className="flex items-stretch gap-2">
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  dir="ltr"
+                  value={averageInput}
+                  // onChange ONLY records the text — it never confirms or advances.
+                  onChange={(e) => handleAverageInputChange(e.target.value)}
+                  // Auto-confirm when the field is left with a valid value.
+                  onBlur={confirmAverage}
+                  // Enter confirms without submitting the surrounding form.
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') { e.preventDefault(); confirmAverage(); }
+                  }}
+                  placeholder="مثال: 10.5"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary focus:ring-2 focus:ring-primary/30"
+                />
+                <button
+                  type="button"
+                  onClick={confirmAverage}
+                  disabled={!averagePreview.valid || localAverage != null}
+                  className="shrink-0 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {localAverage != null ? 'مؤكَّد' : 'تأكيد'}
+                </button>
+              </div>
               <p className="mt-1 text-xs text-gray-500">
                 يُصنَّف الطالب تلقائياً: 11 فأكثر = مجموعة عادية، أقل من 11 = مجموعة دعم خاصة.
               </p>
+              {/* Live classification — updates as the admin types WITHOUT hiding the
+                  input, then flips to a confirmed (locked-in) state on تأكيد/blur. */}
+              {(() => {
+                const shown = localAverage != null ? classification : previewClassification;
+                if (!shown) return null;
+                const b = classificationBadge(shown);
+                const confirmed = localAverage != null;
+                return (
+                  <p className="mt-2 flex items-center gap-1.5 text-xs">
+                    <span className="text-gray-500">{confirmed ? 'التصنيف المؤكَّد:' : 'التصنيف المتوقع:'}</span>
+                    <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 font-semibold ${b.classes}`}>
+                      <b.Icon className={`h-2.5 w-2.5 shrink-0 ${b.iconClass}`} fill="currentColor" aria-hidden="true" /> {b.label}
+                    </span>
+                  </p>
+                );
+              })()}
               {averageError && <p className="mt-1 text-xs text-danger-600">{averageError}</p>}
             </div>
           )
@@ -643,9 +715,19 @@ const AddSupportStudentModal = ({ branchId, onClose, onSuccess }) => {
           </div>
         )}
 
+        {/* Reservation notice — group starts in a future month. */}
+        {selectedUser && approvedYear && !loadingYear && lessonId && lessonIsReserved && (
+          <div className="flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+            <CalendarDays className="mt-0.5 h-4 w-4 shrink-0 text-blue-500" />
+            <span>
+              تبدأ هذه المجموعة في <strong>{formatMonthKey(selectedLesson.startMonth)}</strong>. سيتم <strong>حجز</strong> مقعد الطالب، ويُفعّل اشتراكه تلقائياً في اليوم الأول من ذلك الشهر (يُحتسب السعر الشهري الكامل).
+            </span>
+          </div>
+        )}
+
         {selectedUser && approvedYear && !loadingYear && (
           <div className="rounded-lg border border-secondary-200 bg-secondary-50 px-4 py-3 text-sm text-secondary-800">
-            سيتم إضافة التسجيل بحالة <strong>مؤكد</strong> مباشرةً دون الحاجة لمراجعة.
+            سيتم إضافة التسجيل بحالة <strong>{lessonIsReserved ? 'محجوز' : 'مؤكد'}</strong> مباشرةً دون الحاجة لمراجعة.
           </div>
         )}
       </form>

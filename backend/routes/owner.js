@@ -5,6 +5,7 @@ const { getSummary, getBranches, getRevenue } = require('../controllers/ownerCon
 const { getGroups, getRetention, getStudents, getTeachers, getSupportOverview } = require('../controllers/ownerAnalyticsController');
 const { getAuditLog, getAdminActivity } = require('../controllers/ownerAuditController');
 const { getAlerts } = require('../controllers/ownerAlertsController');
+const { getWeeklyReport, generateNow } = require('../controllers/ownerReportController');
 const { listAdmins, createAdmin, deactivateAdmin, reactivateAdmin } = require('../controllers/ownerAdminController');
 const { getSettings, updateAnnualFee } = require('../controllers/ownerSettingsController');
 const {
@@ -31,6 +32,11 @@ router.get('/audit',           verifyToken, requireOwner, getAuditLog);
 
 // Phase 4 — alerts engine (revenue drops, shortfalls, retention, sensitive audits).
 router.get('/alerts',          verifyToken, requireOwner, getAlerts);
+
+// Weekly executive report — automated cross-branch summary (cron-generated,
+// on-demand fallback). ?refresh=1 forces a fresh recompute.
+router.get('/weekly-report',           verifyToken, requireOwner, getWeeklyReport);
+router.post('/weekly-report/generate', verifyToken, requireOwner, generateNow);
 
 // Admin lifecycle — the canonical (and only) way admin accounts are managed.
 // Each write is audit-logged with the acting owner as the actor.

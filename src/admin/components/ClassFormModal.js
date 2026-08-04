@@ -11,7 +11,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Loader2, Users, Plus, Trash2, Clock, UserPlus, X, DoorOpen } from 'lucide-react';
+import { Loader2, Users, Plus, Trash2, Clock, UserPlus, X, DoorOpen, Calendar } from 'lucide-react';
 import AdminModal from './AdminModal';
 import ScheduleConflictPanel from './ScheduleConflictPanel';
 import { useToast } from './ToastNotifications';
@@ -22,6 +22,12 @@ import { numberInputGuards } from '../../utils/numberInputGuards';
 import { GROUP_TYPE_OPTIONS, normalizeGroupType } from '../../utils/supportClassification';
 
 const emptyRow = () => ({ day: '', start: '', end: '' });
+
+/** Current calendar month as 'YYYY-MM' (local time) for the Start Month default. */
+const currentMonthValue = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
 
 const ClassFormModal = ({
   branchId,
@@ -44,6 +50,11 @@ const ClassFormModal = ({
   // Support-only: group type (normal vs low-level support). Defaults to normal.
   const [groupType, setGroupType] = useState(
     isSupport ? normalizeGroupType(classData?.groupType) : '',
+  );
+  // Support-only: Group Start Month ('YYYY-MM'). Defaults to the current month
+  // (so a new group is "already running" unless the admin picks a future month).
+  const [startMonth, setStartMonth] = useState(
+    isSupport ? (classData?.startMonth || currentMonthValue()) : '',
   );
   const [capacity, setCapacity] = useState(
     classData?.capacity != null && classData.capacity !== 0 ? String(classData.capacity) : '',
@@ -111,7 +122,10 @@ const ClassFormModal = ({
     setFormError('');
     setConflicts([]);
 
-    const classCheck = validateClass({ teacherName, groupName, capacity, price, groupType }, { requireGroupType: isSupport });
+    const classCheck = validateClass(
+      { teacherName, groupName, capacity, price, groupType, startMonth },
+      { requireGroupType: isSupport, requireStartMonth: isSupport },
+    );
     const scheduleCheck = validateSchedules(schedules);
     setFieldErrors(classCheck.errors);
     setScheduleErrors({ errors: scheduleCheck.errors, rowErrors: scheduleCheck.rowErrors });
@@ -129,7 +143,7 @@ const ClassFormModal = ({
       capacity,
       price,
       schedules,
-      ...(isSupport ? { groupType } : {}),
+      ...(isSupport ? { groupType, startMonth } : {}),
       ...(resolvedLevel ? { level: resolvedLevel } : {}),
       ...(subject.studyYear ? { studyYear: subject.studyYear } : {}),
     };
@@ -309,6 +323,27 @@ const ClassFormModal = ({
               })}
             </div>
             {fieldErrors.groupType && <p className="mt-1 text-xs text-danger-600">{fieldErrors.groupType}</p>}
+          </div>
+        )}
+
+        {/* Start Month — support only. Defines when the group officially begins:
+            students who register earlier are RESERVED (seat held, not yet active)
+            and auto-activate on the 1st of this month. */}
+        {isSupport && (
+          <div>
+            <label className="mb-1.5 flex items-center gap-1.5 text-sm font-semibold text-gray-800">
+              <Calendar className="h-4 w-4 text-primary" />
+              شهر بدء المجموعة <span className="text-danger-500">*</span>
+            </label>
+            <input
+              type="month"
+              value={startMonth}
+              onChange={(e) => { setStartMonth(e.target.value); if (fieldErrors.startMonth) setFieldErrors((p) => ({ ...p, startMonth: undefined })); }}
+              className={inputCls(fieldErrors.startMonth)}
+            />
+            {fieldErrors.startMonth
+              ? <p className="mt-1 text-xs text-danger-600">{fieldErrors.startMonth}</p>
+              : <p className="mt-1 text-xs text-gray-500">الشهر الذي تبدأ فيه المجموعة رسمياً. مَن يسجّل قبله يُحجز له مقعد ويُفعّل اشتراكه تلقائياً في أول يوم من هذا الشهر.</p>}
           </div>
         )}
 

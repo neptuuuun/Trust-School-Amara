@@ -11,8 +11,8 @@ import apiCall from '../utils/apiClient';
 import useSupportLessonRegistrationStatus from '../hooks/useSupportLessonRegistrationStatus';
 import { isRegistrationBlocking, isRenewalCandidate, startOfMonth, endOfMonth, ANNUAL_FEE_DZD } from '../utils/registrationUtils';
 import { getAcademicYearLabel } from '../utils/academicYear';
-import { formatDate } from '../utils/dateUtils';
-import { BookOpen, DollarSign } from 'lucide-react';
+import { formatDate, formatMonthKey } from '../utils/dateUtils';
+import { BookOpen, DollarSign, CalendarClock } from 'lucide-react';
 import ChargilyPayButton from './payments/ChargilyPayButton';
 import AverageGateModal from './academic/AverageGateModal';
 import { classificationFromProfile, REASONS } from '../utils/supportClassification';
@@ -108,6 +108,12 @@ const SupportLessonRegistrationForm = () => {
     quote && quote.totalSessions != null && quote.remainingSessions != null
     && quote.remainingSessions < quote.totalSessions
   );
+
+  // RESERVATION: the group's Start Month is a future month, so this is a booking
+  // (seat held, subscription begins on the 1st) — the whole flow uses "حجز"
+  // wording instead of "اشتراك". A same-month join keeps subscription wording.
+  const isReserved = Boolean(quote?.reserved);
+  const startMonthLabel = isReserved ? formatMonthKey(quote.groupStartMonth) : '';
 
   const bundledTotal = proratedMonthly + annualFeeAmount;
   const chargeAmount = selectedLessonData ? bundledTotal : 0;
@@ -262,17 +268,25 @@ const SupportLessonRegistrationForm = () => {
               )}
             </div>
 
-            {/* Subscription info */}
+            {/* Reservation / subscription info — wording adapts to reserved state */}
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-2">
-              <p className="text-sm font-semibold text-blue-900">تفاصيل الاشتراك</p>
+              <p className="text-sm font-semibold text-blue-900">{isReserved ? 'تفاصيل الحجز' : 'تفاصيل الاشتراك'}</p>
               <div className="grid grid-cols-2 gap-3 text-sm text-blue-800">
                 <div><span className="text-blue-600">المدة:</span><span className="font-semibold ms-1">شهر واحد</span></div>
                 <div><span className="text-blue-600">السنة الدراسية:</span><span className="font-semibold ms-1">{academicYearLabel}</span></div>
-                <div><span className="text-blue-600">بداية الشهر:</span><span className="font-semibold ms-1">{formatDate(cycleStart)}</span></div>
-                <div><span className="text-blue-600">نهاية الشهر:</span><span className="font-semibold ms-1">{formatDate(cycleEnd)}</span></div>
+                {isReserved ? (
+                  <div className="col-span-2"><span className="text-blue-600">شهر البدء:</span><span className="font-semibold ms-1">{startMonthLabel}</span></div>
+                ) : (
+                  <>
+                    <div><span className="text-blue-600">بداية الشهر:</span><span className="font-semibold ms-1">{formatDate(cycleStart)}</span></div>
+                    <div><span className="text-blue-600">نهاية الشهر:</span><span className="font-semibold ms-1">{formatDate(cycleEnd)}</span></div>
+                  </>
+                )}
               </div>
               <p className="border-t border-blue-200 pt-2 text-xs text-blue-700">
-                الاشتراك يغطّي الشهر الحالي كاملاً (من أول الشهر إلى آخره). عند الانضمام في منتصف الشهر تدفع فقط مقابل الحصص المتبقية.
+                {isReserved
+                  ? <>هذا حجز مقعد: يبدأ اشتراكك عند انطلاق المجموعة في {startMonthLabel} ويغطّي ذلك الشهر كاملاً. مقعدك محجوز حتى ذلك الحين.</>
+                  : 'الاشتراك يغطّي الشهر الحالي كاملاً (من أول الشهر إلى آخره). عند الانضمام في منتصف الشهر تدفع فقط مقابل الحصص المتبقية.'}
               </p>
             </div>
 
@@ -298,7 +312,7 @@ const SupportLessonRegistrationForm = () => {
                     <span className="font-semibold">{formatPriceText(annualFeeAmount)}</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span>{isProrated ? 'اشتراك الشهر (حسب الحصص المتبقية)' : 'اشتراك الشهر الأول'}</span>
+                    <span>{isReserved ? 'حجز الشهر الأول (يبدأ عند انطلاق المجموعة)' : (isProrated ? 'اشتراك الشهر (حسب الحصص المتبقية)' : 'اشتراك الشهر الأول')}</span>
                     <span className="font-semibold">{formatPriceText(proratedMonthly)}</span>
                   </div>
                   <div className="mt-1.5 flex items-center justify-between border-t border-gray-200 pt-1.5">
@@ -314,11 +328,21 @@ const SupportLessonRegistrationForm = () => {
               <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 flex items-center gap-3">
                 <DollarSign className="w-5 h-5 text-gray-500 shrink-0" />
                 <div className="text-sm">
-                  <p className="text-gray-600">{isProrated ? 'المبلغ المستحق هذا الشهر' : 'السعر الشهري'}</p>
+                  <p className="text-gray-600">{isReserved ? 'مبلغ الحجز (شهر كامل)' : (isProrated ? 'المبلغ المستحق هذا الشهر' : 'السعر الشهري')}</p>
                   <p className="font-bold text-gray-900 text-base">{formatPriceText(proratedMonthly)}</p>
                 </div>
               </div>
             ))}
+
+            {/* Reservation notice — the group's Start Month is a future month. */}
+            {quote?.reserved && (
+              <div className="flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800">
+                <CalendarClock className="mt-0.5 h-4 w-4 shrink-0 text-blue-500" />
+                <span>
+                  تبدأ هذه المجموعة في <strong>{formatMonthKey(quote.groupStartMonth)}</strong>. سيتم حجز مقعدك، ويبدأ اشتراكك تلقائياً في اليوم الأول من ذلك الشهر. المبلغ أعلاه هو اشتراك الشهر الكامل.
+                </span>
+              </div>
+            )}
 
             {/* Annual fee status notes */}
             {annualFeeStatus.status === 'verified' && (

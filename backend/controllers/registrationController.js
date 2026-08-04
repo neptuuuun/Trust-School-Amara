@@ -4,8 +4,10 @@ const {
   firstDayOfNextMonth,
   monthKeyOf,
   computeProration,
+  registrationPayable,
 } = require('../services/sessionService');
 const { assertNoStudentConflict } = require('../services/scheduleConflictService');
+const { resolveSubscriptionWindow, subscriptionPhase } = require('../services/reservationService');
 const ledger = require('../services/ledgerService');
 const { writeAudit } = require('../services/auditService');
 const academicYear = require('../services/academicYear');
@@ -25,7 +27,9 @@ const { normalizeSchool } = require('../constants');
  * so the paymentOrder receipt written below is always a genuine cash collection.
  */
 async function recordSupportRevenue(registrationId, regData = {}, monthKey, actor, paidAt = new Date()) {
-  const cycleAmount = regData.totalPrice ?? regData.proratedAmount ?? regData.monthlyPrice ?? 0;
+  // Same stored payable amount the analytics/expected-revenue side reads, so the
+  // ledger (actual) and expected revenue can never diverge by basis.
+  const cycleAmount = registrationPayable(regData);
   try {
     await ledger.recordPayment({
       branchId:    regData.branchId,
@@ -226,6 +230,9 @@ async function hasActiveSupportRegistration(branchId, userId, lessonId) {
 // We recompute the class's enrollmentCount from a live count on every status
 // change so it never drifts (no expiry event exists to hook into).
 
+// OCCUPIED SEATS (the capacity basis): verified AND not expired. This INCLUDES
+// reserved subscriptions — a reservation holds a seat (its endDate is a future
+// month), so it counts against capacity exactly like an active one.
 async function countActiveSupportForClass(branchId, classId) {
   if (!branchId || !classId) return 0;
   const now = new Date();
@@ -238,19 +245,55 @@ async function countActiveSupportForClass(branchId, classId) {
     if (x.branchId !== branchId) return false;
     if (String(x.status || '').toLowerCase() !== 'verified') return false;
     const end = x.endDate?.toDate ? x.endDate.toDate() : (x.endDate ? new Date(x.endDate) : null);
-    return !end || end > now; // active = not yet expired
+    return !end || end > now; // occupied = not yet expired (active OR reserved)
   }).length;
 }
 
+// Recompute a support class's denormalized counters from the live registrations.
+// Writes THREE fields so callers never need to re-derive:
+//   • enrollmentCount — occupied seats (active + reserved) → the CAPACITY basis,
+//     kept byte-compatible with the previous behaviour (seatsFree math unchanged),
+//   • reservedCount   — of those, how many are still RESERVED (Start Month ahead),
+//   • activeCount     — occupied − reserved = students actually studying now.
+// Active-student analytics/dashboards read activeCount (reserved excluded); the
+// capacity gates keep reading enrollmentCount / countActiveSupportForClass.
 async function recomputeSupportClassEnrollment(branchId, classId) {
   if (!branchId || !classId) return;
   try {
-    const count = await countActiveSupportForClass(branchId, classId);
+    const now = new Date();
+    const snap = await db.collection('supportLessonRegistrations')
+      .where('lessonId', '==', classId).get();
+    let occupied = 0;
+    let reserved = 0;
+    for (const d of snap.docs) {
+      const x = d.data() || {};
+      if (x.branchId !== branchId) continue;
+      const phase = subscriptionPhase(x, now); // reserved | active | expired | inactive
+      if (phase === 'reserved') { occupied += 1; reserved += 1; }
+      else if (phase === 'active') { occupied += 1; }
+    }
     await db.collection('branches').doc(branchId).collection('classes').doc(classId)
-      .update({ enrollmentCount: count });
+      .update({
+        enrollmentCount: occupied,
+        reservedCount:   reserved,
+        activeCount:     Math.max(0, occupied - reserved),
+      });
   } catch (e) {
     console.warn('recomputeSupportClassEnrollment failed:', e.message);
   }
+}
+
+/** Count of RESERVED (verified, not-yet-started) subscriptions for a class. */
+async function countReservedForClass(branchId, classId) {
+  if (!branchId || !classId) return 0;
+  const now = new Date();
+  const snap = await db.collection('supportLessonRegistrations')
+    .where('lessonId', '==', classId).get();
+  return snap.docs.filter((d) => {
+    const x = d.data() || {};
+    if (x.branchId !== branchId) return false;
+    return subscriptionPhase(x, now) === 'reserved';
+  }).length;
 }
 
 // ── Annual fee (academic-year aware) ──────────────────────────────────────────
@@ -266,11 +309,13 @@ function getCurrentAcademicYearInfo(now = new Date()) {
   return { label, startMs };
 }
 
-// True when the student has a verified annualPayments doc within the current
-// academic year (also grandfathers legacy records via their verifiedAt window).
-async function isAnnualFeePaidThisYear(branchId, userId) {
+// True when the student has a verified annualPayments doc within the academic
+// year of `refDate` (also grandfathers legacy records via their verifiedAt
+// window). `refDate` lets a RESERVED enrollment resolve the fee against its
+// group's Start Month rather than the (possibly earlier) enrollment moment.
+async function isAnnualFeePaidThisYear(branchId, userId, refDate = new Date()) {
   if (!branchId || !userId) return false;
-  const { label, startMs } = getCurrentAcademicYearInfo();
+  const { label, startMs } = getCurrentAcademicYearInfo(refDate);
   const snap = await db.collection('branches').doc(branchId).collection('annualPayments')
     .where('userId', '==', userId).get();
   return snap.docs.some((d) => {
@@ -285,9 +330,9 @@ async function isAnnualFeePaidThisYear(branchId, userId) {
 // True when the student already has a PENDING support registration that bundles
 // the annual fee for the current academic year. Its approval will record the
 // fee, so a concurrent second registration may proceed (monthly-only).
-async function hasPendingAnnualFeeBundle(branchId, userId) {
+async function hasPendingAnnualFeeBundle(branchId, userId, refDate = new Date()) {
   if (!branchId || !userId) return false;
-  const { startMs } = getCurrentAcademicYearInfo();
+  const { startMs } = getCurrentAcademicYearInfo(refDate);
   const snap = await db.collection('supportLessonRegistrations')
     .where('userId', '==', userId).get();
   return snap.docs.some((d) => {
@@ -321,7 +366,6 @@ const createSupportLessonRegistration = async (req, res, next) => {
       durationInMonths: durationRaw,
       startDate:        startDateRaw,
       endDate:          endDateRaw,
-      academicYear:     academicYearRaw,
       paymentMethod:    paymentMethodRaw,
       monthlyPrice,
       totalPrice,
@@ -388,11 +432,21 @@ const createSupportLessonRegistration = async (req, res, next) => {
         lessonStudyYear,
       });
 
+    // ── Subscription window (anchored to the group's Start Month) ─────────────
+    // Support is a CALENDAR-month subscription. A student enrolling BEFORE the
+    // group's Start Month only holds a RESERVATION: billing + activity begin on
+    // the 1st of the Start Month, never the registration date. Legacy groups
+    // without a startMonth behave as already-started (reserved:false).
+    const enrollNow = new Date();
+    const window = resolveSubscriptionWindow(lessonData, enrollNow);
+
     // ── Annual fee gate (academic-year aware) ────────────────────────────────
     // Paid ONCE per academic year, bundled into the FIRST support registration.
     // Allow when already paid this year OR when this request includes the fee.
+    // A reserved enrollment resolves the fee against its Start Month's academic
+    // year (window.startDate), not the enrollment moment.
     const includesAnnualFee = req.body.includesAnnualFee === true;
-    const feePaidThisYear   = await isAnnualFeePaidThisYear(branchId, uid);
+    const feePaidThisYear   = await isAnnualFeePaidThisYear(branchId, uid, window.startDate);
     // Snapshot the current owner-configured fee onto this registration so future
     // changes to the fee never alter an already-submitted amount.
     const annualFeeSnapshot = includesAnnualFee ? await financeSettings.getAnnualFeeAmount() : 0;
@@ -401,7 +455,7 @@ const createSupportLessonRegistration = async (req, res, next) => {
       // Duplicate bundle guard: a pending registration already bundles the annual
       // fee for this year. A second registration that also includes the fee would
       // create a duplicate annual payment when the admin verifies it.
-      const pendingBundleExists = await hasPendingAnnualFeeBundle(branchId, uid);
+      const pendingBundleExists = await hasPendingAnnualFeeBundle(branchId, uid, window.startDate);
 
       if (includesAnnualFee && pendingBundleExists) {
         return res.status(409).json({
@@ -457,13 +511,15 @@ const createSupportLessonRegistration = async (req, res, next) => {
       throw e;
     }
 
-    // ── Date / academic-year validation ──────────────────────────────────────
-    // Support is a CALENDAR-month subscription (cycle resets on the 1st). The
-    // window always ends at end-of-month; the client-sent endDate is ignored.
-    const startDateObj  = parseDateInput(startDateRaw) || new Date();
-    const endDateObj     = computeExpiryDate(startDateObj);
-    const nextPaymentObj = firstDayOfNextMonth(startDateObj);
-    const academicYear   = String(academicYearRaw || '').trim() || null;
+    // ── Subscription window (resolved above from the group's Start Month) ─────
+    // The window always ends at end-of-month; the client-sent start/endDate are
+    // ignored (support is a calendar-month subscription that resets on the 1st).
+    const { reserved, groupStartMonth, startDate: startDateObj, endDate: endDateObj,
+            cycleMonthKey, nextPaymentDate: nextPaymentObj } = window;
+    // Academic year is SERVER-derived from the effective subscription start (for a
+    // reservation this is the group's Start Month, when billing/activity begin),
+    // never trusted from the client. `academicYear` here is the imported service.
+    const academicYearLabel = academicYear.getAcademicYearLabel(startDateObj);
 
     // ── Duplicate check ──────────────────────────────────────────────────────
     if (await hasActiveSupportRegistration(branchId, uid, lessonId))
@@ -474,13 +530,13 @@ const createSupportLessonRegistration = async (req, res, next) => {
 
     // ── Server-derived PRORATED pricing ──────────────────────────────────────
     // Prices are computed from the authoritative class document + its recurring
-    // schedule — NEVER trusted from the client. A student joining mid-cycle pays
-    // only for the scheduled occurrences that have not yet started:
+    // schedule — NEVER trusted from the client. A RESERVATION joins at the 1st
+    // of its Start Month → nothing has elapsed → full monthly price. A same-month
+    // enrollment pays only for the scheduled occurrences not yet started:
     //   amountDue = remainingSessions * (monthlyPrice / totalSessionsThisMonth)
-    const cycleMonthKey      = monthKeyOf(startDateObj);
-    const proration          = computeProration(lessonData, startDateObj);
+    const proration          = computeProration(lessonData, reserved ? startDateObj : enrollNow);
     const serverMonthlyPrice = proration.monthlyPrice;            // full month reference
-    const serverTotalPrice   = proration.amountDue;               // prorated amount owed now
+    const serverTotalPrice   = proration.amountDue;               // amount owed for this cycle
 
     // ── Write registration ───────────────────────────────────────────────────
     const payload = {
@@ -516,6 +572,9 @@ const createSupportLessonRegistration = async (req, res, next) => {
       durationInMonths: 1, // support is strictly month-by-month (calendar cycle)
       source:         String(source || 'manual'),
       status:         'pending',
+      // Reservation lifecycle: reserved==true until the Group Start Month begins.
+      reserved,
+      groupStartMonth,
       monthlyPrice:   serverMonthlyPrice || null,
       totalPrice:     serverTotalPrice,
       // Schedule-derived prorated billing snapshot (locked at submission time).
@@ -533,7 +592,7 @@ const createSupportLessonRegistration = async (req, res, next) => {
       paymentMethod,
       startDate:      admin.firestore.Timestamp.fromDate(startDateObj),
       endDate:        admin.firestore.Timestamp.fromDate(endDateObj),
-      academicYear,
+      academicYear:   academicYearLabel,
       createdAt:      admin.firestore.FieldValue.serverTimestamp(),
       verifiedAt:     null,
       verifiedBy:     null,
@@ -628,22 +687,23 @@ const adminCreateSupportLessonRegistration = async (req, res, next) => {
       throw e;
     }
 
-    // Calendar-month cycle (support is strictly month-by-month).
-    const startDate     = new Date();
-    const endDate       = computeExpiryDate(startDate);
-    const cycleMonthKey = monthKeyOf(startDate);
+    // ── Subscription window (anchored to the group's Start Month) ─────────────
+    // A student enrolled before the group's Start Month is RESERVED until the
+    // 1st of that month; billing anchors to the Start Month, not "now". Legacy
+    // groups without a startMonth behave as already-started (reserved:false).
+    const acNow = new Date();
+    const { reserved, groupStartMonth, startDate, endDate, cycleMonthKey, nextPaymentDate: acNextPayment } =
+      resolveSubscriptionWindow(targetClassData || {}, acNow);
 
-    // Proration snapshot — the admin records the prorated amount owed even when
-    // payment is collected physically, so reporting stays consistent.
+    // Proration snapshot — reserved joins at the 1st → full monthly price;
+    // otherwise prorate against "now". Derived from the authoritative class doc.
     let proration = null;
-    try {
-      const clsSnap = await db.collection('branches').doc(branchId)
-        .collection('classes').doc(classKey).get();
-      if (clsSnap.exists) {
-        proration = computeProration(clsSnap.data(), startDate);
+    if (targetClassData) {
+      try {
+        proration = computeProration(targetClassData, reserved ? startDate : acNow);
+      } catch (e) {
+        console.warn('admin-create proration failed:', e.message);
       }
-    } catch (e) {
-      console.warn('admin-create proration failed:', e.message);
     }
 
     const payload = {
@@ -667,8 +727,11 @@ const adminCreateSupportLessonRegistration = async (req, res, next) => {
       durationInMonths: 1, // support is strictly month-by-month (calendar cycle)
       startDate:      admin.firestore.Timestamp.fromDate(startDate),
       endDate:        admin.firestore.Timestamp.fromDate(endDate),
-      nextPaymentDate: admin.firestore.Timestamp.fromDate(firstDayOfNextMonth(startDate)),
+      nextPaymentDate: admin.firestore.Timestamp.fromDate(acNextPayment),
       cycleMonthKey,
+      // Reservation lifecycle: reserved==true until the Group Start Month begins.
+      reserved,
+      groupStartMonth,
       status:         'verified',
       source:         'admin',
       type:           'SUPPORT_REGISTRATION',
@@ -740,8 +803,10 @@ const adminCreateSupportLessonRegistration = async (req, res, next) => {
     await recomputeSupportClassEnrollment(branchId, classId || lessonId);
 
     // Admin-create is immediately verified → record the cycle's revenue + audit.
+    // paidAt is NOW (cash collected today) even for a reservation whose cycle
+    // (period = cycleMonthKey) is a future Start Month.
     const acActor = { uid: adminUid, email: req.user.email || '', role: 'admin' };
-    await recordSupportRevenue(newRef.id, { ...payload, branchId }, cycleMonthKey, acActor, startDate);
+    await recordSupportRevenue(newRef.id, { ...payload, branchId }, cycleMonthKey, acActor, acNow);
     await writeAudit({
       branchId, actor: acActor, action: 'payment.verify',
       targetType: 'supportLessonRegistration', targetId: newRef.id,
@@ -778,8 +843,9 @@ const adminVerifySupportLessonRegistration = async (req, res, next) => {
     }
 
     const verifyDate  = new Date();
-    const expiryDate  = computeExpiryDate(verifyDate);          // end of current calendar month
-    const nextPayDate = firstDayOfNextMonth(verifyDate);        // next cycle starts on the 1st
+    // The subscription window is resolved from the group's Start Month INSIDE the
+    // transaction below (the class is read there anyway) — verifying a reservation
+    // must never reset its window to "now".
 
     // ── Schedule-conflict gate (server-enforced) — pending→verified only ─────
     // Approving occupies the slot, so a clash with the student's other active
@@ -839,7 +905,7 @@ const adminVerifySupportLessonRegistration = async (req, res, next) => {
     // the class can never exceed capacity even if two admins verify different
     // students simultaneously: the overlapping read of the class's registrations
     // forces one transaction to retry and re-evaluate the (now higher) count.
-    let regData, classId, branchId, wasVerified;
+    let regData, classId, branchId, wasVerified, verifyWindow;
     try {
       const result = await db.runTransaction(async (t) => {
         const regSnap = await t.get(regRef);
@@ -850,9 +916,11 @@ const adminVerifySupportLessonRegistration = async (req, res, next) => {
         const bId     = data.branchId || null;
         const already = String(data.status || '').toLowerCase() === 'verified';
 
+        let win = null;
         if (!already && cId && bId) {
           const clsSnap  = await t.get(db.collection('branches').doc(bId).collection('classes').doc(cId));
-          const capacity = clsSnap.exists ? (Number(clsSnap.data().capacity) || 0) : 0;
+          const clsData  = clsSnap.exists ? (clsSnap.data() || {}) : {};
+          const capacity = Number(clsData.capacity) || 0;
           if (capacity > 0) {
             const qs  = await t.get(db.collection('supportLessonRegistrations').where('lessonId', '==', cId));
             const now = new Date();
@@ -865,22 +933,31 @@ const adminVerifySupportLessonRegistration = async (req, res, next) => {
             }).length;
             if (activeCount >= capacity) { const e = new Error('class-full'); e._status = 409; throw e; }
           }
+          // Anchor the window to the group's Start Month — RESERVED when it has
+          // not yet begun. Never resets a reservation's window to "now".
+          win = resolveSubscriptionWindow(clsData, verifyDate);
         }
 
-        t.update(regRef, {
-          status:          'verified',
-          startDate:       admin.firestore.Timestamp.fromDate(verifyDate),
-          endDate:         admin.firestore.Timestamp.fromDate(expiryDate),
-          nextPaymentDate: admin.firestore.Timestamp.fromDate(nextPayDate),
-          cycleMonthKey:   monthKeyOf(verifyDate),
-          verifiedAt:      admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt:       admin.firestore.FieldValue.serverTimestamp(),
-          verifiedBy:      { uid: adminUid, email: adminEmail, name: '' },
-        });
+        const updateFields = {
+          status:     'verified',
+          verifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt:  admin.firestore.FieldValue.serverTimestamp(),
+          verifiedBy: { uid: adminUid, email: adminEmail, name: '' },
+        };
+        // Only (re)anchor the window on a genuine pending→verified transition.
+        if (win) {
+          updateFields.startDate       = admin.firestore.Timestamp.fromDate(win.startDate);
+          updateFields.endDate         = admin.firestore.Timestamp.fromDate(win.endDate);
+          updateFields.nextPaymentDate = admin.firestore.Timestamp.fromDate(win.nextPaymentDate);
+          updateFields.cycleMonthKey   = win.cycleMonthKey;
+          updateFields.reserved        = win.reserved;
+          updateFields.groupStartMonth = win.groupStartMonth;
+        }
+        t.update(regRef, updateFields);
 
-        return { data, cId, bId, already };
+        return { data, cId, bId, already, win };
       });
-      regData = result.data; classId = result.cId; branchId = result.bId; wasVerified = result.already;
+      regData = result.data; classId = result.cId; branchId = result.bId; wasVerified = result.already; verifyWindow = result.win;
     } catch (e) {
       if (e._status === 404) return res.status(404).json({ code: 'not-found', message: 'Registration not found.' });
       if (e._status === 409) return res.status(409).json({ code: 'class-full', message: 'اكتمل العدد في هذه المجموعة.' });
@@ -894,7 +971,10 @@ const adminVerifySupportLessonRegistration = async (req, res, next) => {
     // so future support registrations this year skip the fee. Idempotent id.
     if (!wasVerified && regData.includesAnnualFee && branchId && regData.userId) {
       try {
-        const { label } = getCurrentAcademicYearInfo();
+        // A reservation resolves the annual fee against its Start Month's
+        // academic year (verifyWindow.startDate), not the verification moment.
+        const feeRefDate = verifyWindow ? verifyWindow.startDate : verifyDate;
+        const { label } = getCurrentAcademicYearInfo(feeRefDate);
         const userId = regData.userId;
         const studyYear = regData.studyYear || regData.studyYearId || null;
         const schoolLevel = studyYear
@@ -919,7 +999,7 @@ const adminVerifySupportLessonRegistration = async (req, res, next) => {
         // Chargily order, or a concurrent support verify. Without this, two pending
         // bundles (possible via a non-transactional submit-time race) would each
         // record a separate annual payment + ledger entry for the same year.
-        if (await isAnnualFeePaidThisYear(branchId, userId)) {
+        if (await isAnnualFeePaidThisYear(branchId, userId, feeRefDate)) {
           console.info(`[support verify] annual fee already paid for ${label} — skipping duplicate record.`);
         } else {
           // Prefer the amount snapshotted at submission; fall back to current config.
@@ -969,12 +1049,15 @@ const adminVerifySupportLessonRegistration = async (req, res, next) => {
 
     // ── Ledger + audit for the support cycle (pending → verified only) ────────
     if (!wasVerified) {
+      // Period = the subscription cycle (the Start Month for a reservation),
+      // never the verification month. paidAt stays "now" (money collected today).
+      const verifyPeriod = verifyWindow ? verifyWindow.cycleMonthKey : monthKeyOf(verifyDate);
       const actor = { uid: adminUid, email: adminEmail, role: 'admin' };
-      await recordSupportRevenue(registrationId, { ...regData, branchId }, monthKeyOf(verifyDate), actor, verifyDate);
+      await recordSupportRevenue(registrationId, { ...regData, branchId }, verifyPeriod, actor, verifyDate);
       await writeAudit({
         branchId, actor, action: 'payment.verify',
         targetType: 'supportLessonRegistration', targetId: registrationId,
-        after: { status: 'verified', amount: regData.totalPrice ?? regData.proratedAmount ?? null, period: monthKeyOf(verifyDate) },
+        after: { status: 'verified', amount: regData.totalPrice ?? regData.proratedAmount ?? null, period: verifyPeriod },
       });
     }
 
@@ -1392,5 +1475,6 @@ module.exports = {
   isAnnualFeePaidThisYear,
   recomputeSupportClassEnrollment,
   countActiveSupportForClass,
+  countReservedForClass,
   hasActiveSupportRegistration,
 };

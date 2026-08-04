@@ -10,6 +10,8 @@
  */
 
 const { admin, db } = require('../config/firebase');
+const academicYearSvc = require('../services/academicYear');
+const { loadExpectedSupportRevenue } = require('../services/expectedRevenueService');
 
 const Timestamp = admin.firestore.Timestamp;
 const BRANCHES = ['boumerdes', 'bordj_menaiel'];
@@ -41,6 +43,38 @@ function prevMonthKey(key) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
+/**
+ * Resolve the reporting window from the request query. Owner statistics default
+ * to the CURRENT academic year (spec: no manual year; auto-detected from date);
+ * an explicit `academicYear` ("YYYY-YYYY") views history, and `month` ("YYYY-MM")
+ * is the monthly drill-down. loadLedger uses a half-open [start, end) range, so
+ * the academic-year end (30 Jun 23:59:59.999) is bumped +1ms to stay inclusive.
+ * A selected year/month only changes what is DISPLAYED — never the active year.
+ */
+function resolveOwnerWindow(query = {}) {
+  const ay = query.academicYear;
+  if (ay && /^\d{4}-\d{4}$/.test(ay)) {
+    const b = academicYearSvc.academicYearBounds(ay);
+    if (b) return { mode: 'year', label: b.label, startYear: b.startYear, start: b.start, end: new Date(b.end.getTime() + 1) };
+  }
+  if (query.month && /^\d{4}-\d{2}$/.test(query.month)) {
+    const m = monthBounds(query.month);
+    return { mode: 'month', label: m.key, key: m.key, start: m.start, end: m.end };
+  }
+  const cur = academicYearSvc.getCurrentAcademicYear();
+  return { mode: 'year', label: cur.label, startYear: cur.startYear, start: cur.start, end: new Date(cur.end.getTime() + 1) };
+}
+
+/** Previous comparable window (prior academic year, or prior month). */
+function prevWindow(win) {
+  if (win.mode === 'year') {
+    const b = academicYearSvc.academicYearBounds(win.startYear - 1);
+    return { label: b.label, start: b.start, end: new Date(b.end.getTime() + 1) };
+  }
+  const p = monthBounds(prevMonthKey(win.key));
+  return { label: p.key, start: p.start, end: p.end };
+}
+
 function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
 
 // ── data loaders ───────────────────────────────────────────────────────────────
@@ -68,12 +102,12 @@ async function loadClasses(branchId) {
     .filter((c) => (c.status || 'active') !== 'inactive');
 }
 
-/** Expected monthly support revenue = Σ active support classes (enrollment × price). */
-function expectedSupportRevenue(classes) {
-  return classes
-    .filter((c) => c.serviceType === 'support')
-    .reduce((acc, c) => acc + num(c.enrollmentCount) * num(c.price ?? c.monthlyPrice), 0);
-}
+// Expected support revenue is NO LONGER `enrollmentCount × price`. Support is
+// billed on a prorated calendar-month cycle, so the target must be the sum of
+// each active subscription's stored payable amount. That figure is owned by
+// services/expectedRevenueService (loadExpectedSupportRevenue) — the single
+// source of truth shared with group analytics and the collection-shortfall
+// alerts — so every surface reports the same expected number.
 
 /** Student metrics for one branch via count() aggregates (cheap, no doc reads). */
 async function studentMetrics(branchId, start, end) {
@@ -100,9 +134,9 @@ async function studentMetrics(branchId, start, end) {
 
 const getSummary = async (req, res, next) => {
   try {
-    const { key, start, end } = monthBounds(req.query.month);
-    const prevKey = prevMonthKey(key);
-    const prev = monthBounds(prevKey);
+    const win = resolveOwnerWindow(req.query);
+    const { start, end } = win;
+    const prev = prevWindow(win);
 
     // Today's window (only meaningful for the current month, but always correct).
     const now = new Date();
@@ -116,19 +150,27 @@ const getSummary = async (req, res, next) => {
       db.collection('branches').get(),
     ]);
 
-    // Student metrics + classes per branch.
-    const perBranch = await Promise.all(BRANCHES.map(async (b) => ({
-      branchId: b,
-      students: await studentMetrics(b, start, end),
-      classes:  await loadClasses(b),
-    })));
+    // Student metrics + classes + expected support revenue per branch. Expected
+    // is a LIVE snapshot of currently-active subscriptions (same as before), but
+    // now summed from each student's stored payable amount instead of a flat
+    // enrollment × price — so a prorated late joiner counts for exactly what they
+    // owe. It intentionally does not vary with the selected window; the forecast
+    // below already gates its use to the current month.
+    const perBranch = await Promise.all(BRANCHES.map(async (b) => {
+      const [students, classes, expectedSupport] = await Promise.all([
+        studentMetrics(b, start, end),
+        loadClasses(b),
+        loadExpectedSupportRevenue(b),
+      ]);
+      return { branchId: b, students, classes, expectedSupport: expectedSupport.total };
+    }));
 
     const activeStudents = perBranch.reduce((a, x) => a + x.students.active, 0);
     const newStudents    = perBranch.reduce((a, x) => a + x.students.newThisMonth, 0);
     const unpaidStudents = perBranch.reduce((a, x) => a + x.students.unpaid, 0);
     const totalGroups    = perBranch.reduce((a, x) => a + x.classes.length, 0);
 
-    const expectedRevenue = perBranch.reduce((a, x) => a + expectedSupportRevenue(x.classes), 0);
+    const expectedRevenue = perBranch.reduce((a, x) => a + x.expectedSupport, 0);
     const actualSupport   = sumAmount(monthLedger.filter((e) => e.serviceType === 'support'));
     const totalRevenue    = sumAmount(monthLedger);
     const prevRevenue     = sumAmount(prevLedger);
@@ -147,43 +189,55 @@ const getSummary = async (req, res, next) => {
     const pct = (cur, base) => (base > 0 ? Math.round(((cur - base) / base) * 1000) / 10 : null);
 
     // ── Financial forecast (support-subscription basis) ──────────────────────────
-    // Anticipates where the month will land instead of only reporting the past.
-    // Non-arbitrary: a linear run-rate of what has actually been collected so far
-    // this month, scaled to the full month. Target = expected recurring support
-    // revenue (Σ active support enrollment × price) — the money we *should* collect.
-    // Completed (past) months are already final, so the projection equals the actual;
-    // future months carry no projection. Same basis as the expected/actual cards, so
-    // "collection %" is honest and can't exceed ~100% by mixing service types.
-    const [fy, fm] = key.split('-').map(Number);
-    const daysInMonth = new Date(fy, fm, 0).getDate();
-    const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    const isCurrentMonth = key === currentMonthKey;
-    const isPastMonth = key < currentMonthKey;
-    const isFutureMonth = !isCurrentMonth && !isPastMonth;
-    const daysElapsed = isCurrentMonth ? now.getDate() : (isPastMonth ? daysInMonth : 0);
-
-    // The target-relative verdict is meaningful ONLY for the current month: the
-    // target (expectedRevenue) is a snapshot of *today's* active enrollment, not
-    // the selected month's, so applying it to a completed/future month would mix
-    // a live target with a historical actual. For past months we therefore report
-    // the final collected figure only (no target/collection%/status); future
-    // months carry nothing yet.
-    const forecastApplicable = isCurrentMonth;
-    const forecastProjected = isCurrentMonth
-      ? (daysElapsed > 0 ? Math.round((actualSupport / daysElapsed) * daysInMonth) : 0)
-      : (isPastMonth ? actualSupport : null);
-    const forecastTarget = forecastApplicable ? expectedRevenue : null;
-    const collectionPct = forecastApplicable && expectedRevenue > 0
-      ? Math.round((actualSupport / expectedRevenue) * 100)
-      : null;
-    let forecastStatus = null;
-    if (forecastApplicable && expectedRevenue > 0) {
-      const ratio = forecastProjected / expectedRevenue;
-      forecastStatus = ratio >= 1.05 ? 'ahead' : ratio < 0.9 ? 'behind' : 'on_track';
+    // The forecast is a MONTH concept: a linear run-rate of support revenue
+    // collected so far this month, scaled to the full month, against the expected
+    // recurring target. It is meaningful ONLY when viewing a single month; in
+    // academic-year mode (the default) it is not applicable and we report the
+    // year's collected support revenue only.
+    let forecast;
+    if (win.mode === 'month') {
+      const key = win.key;
+      const [fy, fm] = key.split('-').map(Number);
+      const daysInMonth = new Date(fy, fm, 0).getDate();
+      const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+      const isCurrentMonth = key === currentMonthKey;
+      const isPastMonth = key < currentMonthKey;
+      const isFutureMonth = !isCurrentMonth && !isPastMonth;
+      const daysElapsed = isCurrentMonth ? now.getDate() : (isPastMonth ? daysInMonth : 0);
+      const forecastApplicable = isCurrentMonth;
+      const forecastProjected = isCurrentMonth
+        ? (daysElapsed > 0 ? Math.round((actualSupport / daysElapsed) * daysInMonth) : 0)
+        : (isPastMonth ? actualSupport : null);
+      const forecastTarget = forecastApplicable ? expectedRevenue : null;
+      const collectionPct = forecastApplicable && expectedRevenue > 0
+        ? Math.round((actualSupport / expectedRevenue) * 100)
+        : null;
+      let forecastStatus = null;
+      if (forecastApplicable && expectedRevenue > 0) {
+        const ratio = forecastProjected / expectedRevenue;
+        forecastStatus = ratio >= 1.05 ? 'ahead' : ratio < 0.9 ? 'behind' : 'on_track';
+      }
+      forecast = {
+        basis: 'support', applicable: forecastApplicable,
+        current: actualSupport, projected: forecastProjected, target: forecastTarget,
+        collectionPct, status: forecastStatus,
+        isCurrentMonth, isPastMonth, isFutureMonth, daysElapsed, daysInMonth,
+      };
+    } else {
+      forecast = {
+        basis: 'support', applicable: false,
+        current: actualSupport, projected: null, target: null,
+        collectionPct: null, status: null,
+        isCurrentMonth: false, isPastMonth: false, isFutureMonth: false,
+        daysElapsed: 0, daysInMonth: 0,
+      };
     }
 
     return res.json({
-      month: key,
+      month: win.mode === 'month' ? win.key : null,
+      mode: win.mode,                                   // 'year' | 'month'
+      academicYear: win.mode === 'year' ? win.label : null,
+      windowLabel: win.label,
       cards: {
         totalRevenueThisMonth: totalRevenue,
         revenueToday,
@@ -200,20 +254,7 @@ const getSummary = async (req, res, next) => {
         revenue:     { current: totalRevenue, previous: prevRevenue, changePct: pct(totalRevenue, prevRevenue) },
         newStudents: { current: newStudents, previous: prevNew, changePct: pct(newStudents, prevNew) },
       },
-      forecast: {
-        basis: 'support',            // client labels this clearly (اشتراكات الدعم)
-        applicable: forecastApplicable, // target-relative verdict valid only for the current month
-        current: actualSupport,      // collected so far this month (support)
-        projected: forecastProjected,// run-rate projection to month end (final for past months)
-        target: forecastTarget,      // expected recurring support revenue (null off current month)
-        collectionPct,               // current / target (%) — null off current month
-        status: forecastStatus,      // 'ahead' | 'on_track' | 'behind' | null
-        isCurrentMonth,
-        isPastMonth,
-        isFutureMonth,
-        daysElapsed,
-        daysInMonth,
-      },
+      forecast,
     });
   } catch (err) {
     next(err);
@@ -224,17 +265,18 @@ const getSummary = async (req, res, next) => {
 
 const getBranches = async (req, res, next) => {
   try {
-    const { start, end } = monthBounds(req.query.month);
+    const { start, end } = resolveOwnerWindow(req.query);
     const branchDocs = {};
     (await db.collection('branches').get()).docs.forEach((d) => { branchDocs[d.id] = d.data(); });
 
     const rows = await Promise.all(BRANCHES.map(async (b) => {
-      const [ledger, students, classes] = await Promise.all([
+      const [ledger, students, classes, expectedSupport] = await Promise.all([
         loadLedger(start, end, b),
         studentMetrics(b, start, end),
         loadClasses(b),
+        loadExpectedSupportRevenue(b),
       ]);
-      const expected = expectedSupportRevenue(classes);
+      const expected = expectedSupport.total;
       const actualSupport = sumAmount(ledger.filter((e) => e.serviceType === 'support'));
       const base = Math.max(1, students.active - students.newThisMonth);
       return {
@@ -261,7 +303,8 @@ const getBranches = async (req, res, next) => {
 
 const getRevenue = async (req, res, next) => {
   try {
-    const { key, start, end } = monthBounds(req.query.month);
+    const win = resolveOwnerWindow(req.query);
+    const { start, end } = win;
     const branchId = BRANCHES.includes(req.query.branchId) ? req.query.branchId : null;
     const ledger = await loadLedger(start, end, branchId);
 
@@ -300,7 +343,14 @@ const getRevenue = async (req, res, next) => {
         .sort((a, b) => b.revenue - a.revenue),
     })).sort((a, b) => b.revenue - a.revenue);
 
-    return res.json({ month: key, branchId: branchId || 'all', services: result });
+    return res.json({
+      month: win.mode === 'month' ? win.key : null,
+      mode: win.mode,
+      academicYear: win.mode === 'year' ? win.label : null,
+      windowLabel: win.label,
+      branchId: branchId || 'all',
+      services: result,
+    });
   } catch (err) {
     next(err);
   }

@@ -17,6 +17,15 @@
  * Labels are ALWAYS "YYYY-YYYY". Never derive an academic year from a single
  * calendar year — always go through these helpers.
  *
+ * ── ARCHITECTURAL RULE (academic-year system) ────────────────────────────────
+ * The current academic year is ALWAYS derived from the date — no one ever
+ * creates, resets, or switches years. Every academic write (registrations,
+ * payments, groups/classes, and any FUTURE academic feature or collection) MUST
+ * stamp an explicit `academicYear` label at write time via `withAcademicYear`.
+ * Daily views filter to the current year via `academicYearMatches`; the date
+ * fallback inside it is a TRANSITIONAL migration-compatibility layer for legacy
+ * records only — the explicit field is always the primary path.
+ *
  * NOTE: a byte-for-byte logical mirror lives at `src/utils/academicYear.js`
  * (ES module). Keep the two in lockstep.
  */
@@ -119,6 +128,67 @@ function getCurrentAcademicYear(now = new Date()) {
   return getAcademicYear(now);
 }
 
+/**
+ * Descending list of academic-year labels for selectors/filters, anchored on a
+ * date (default: now). Includes `future` upcoming years and `count` years total.
+ * Mirror of the frontend `listAcademicYears`.
+ */
+function listAcademicYears({ count = 5, future = 1, anchor = new Date() } = {}) {
+  const startYear = getAcademicYearStartYear(anchor);
+  const out = [];
+  for (let i = future; out.length < count; i--) {
+    const sy = startYear + i;
+    out.push(`${sy}-${sy + 1}`);
+  }
+  return out;
+}
+
+/**
+ * Coerce a record's date-ish field to a JS Date. Accepts everything toJsDate
+ * does PLUS a bare "YYYY-MM" month key (e.g. a group's `startMonth`), resolved
+ * to the 1st of that month.
+ */
+function coerceDateField(value) {
+  if (typeof value === 'string') {
+    const m = value.trim().match(/^(\d{4})-(\d{2})$/);
+    if (m) return new Date(Number(m[1]), Number(m[2]) - 1, 1);
+  }
+  return toJsDate(value);
+}
+
+/**
+ * True when `record` belongs to the academic year identified by `label`.
+ * PRIMARY PATH: the explicit `record.academicYear` field (authoritative when
+ * present). TRANSITIONAL FALLBACK: for legacy records lacking the field, derive
+ * from the first present `dateFields` value. Pass the fields that reliably
+ * reflect the record's year (registrations → date fields; groups → ['startMonth']
+ * only, never createdAt). Returns false when neither is usable.
+ */
+function academicYearMatches(record, label, dateFields = ['registeredAt', 'createdAt']) {
+  if (!record || !label) return false;
+  if (record.academicYear) return record.academicYear === label;
+  for (const field of dateFields) {
+    const raw = record[field];
+    if (raw === null || raw === undefined || raw === '') continue;
+    const d = coerceDateField(raw);
+    if (d) return isDateInAcademicYear(d, label);
+  }
+  return false;
+}
+
+/**
+ * Stamp the current academic-year label onto a payload. THE standard way for any
+ * academic write to attach its year — use this instead of inlining the label so
+ * every collection stays consistent and no future feature needs another
+ * migration.
+ * @param {object} payload
+ * @param {*} [when] — date the record belongs to (default: now)
+ * @returns {object} a new object with `academicYear` set
+ */
+function withAcademicYear(payload = {}, when = new Date()) {
+  return { ...payload, academicYear: getAcademicYearLabel(when) };
+}
+
 module.exports = {
   ACADEMIC_YEAR_START_MONTH,
   toJsDate,
@@ -129,4 +199,8 @@ module.exports = {
   academicYearBounds,
   isDateInAcademicYear,
   getCurrentAcademicYear,
+  listAcademicYears,
+  coerceDateField,
+  academicYearMatches,
+  withAcademicYear,
 };

@@ -92,4 +92,72 @@ async function paymentEvent(req, res) {
   }
 }
 
-module.exports = { userDecision, paymentEvent };
+// ── POST /api/notify/read ────────────────────────────────────────────────────
+// Body: { notificationId }. Marks a single notification as read for the caller.
+// Notifications are `write: if false` in Firestore rules, so read-tracking is
+// server-only (Admin SDK). A `readBy` array records which users have read a doc,
+// which correctly handles broadcast (`target: 'all'`) notifications too.
+async function markRead(req, res) {
+  const uid = req.user?.uid;
+  const { notificationId } = req.body || {};
+
+  if (!uid) {
+    return res.status(401).json({ code: 'unauthenticated', message: 'Authentication required.' });
+  }
+  if (!notificationId) {
+    return res.status(400).json({ code: 'invalid-argument', message: 'notificationId is required.' });
+  }
+
+  try {
+    const ref = db.collection('notifications').doc(notificationId);
+    const snap = await ref.get();
+    if (!snap.exists) {
+      return res.status(404).json({ code: 'not-found', message: 'Notification not found.' });
+    }
+    const data = snap.data() || {};
+    // A user can only mark their own (or broadcast) notifications.
+    if (data.target !== 'all' && data.target !== uid) {
+      return res.status(403).json({ code: 'permission-denied', message: 'Not your notification.' });
+    }
+    await ref.update({ readBy: admin.firestore.FieldValue.arrayUnion(uid) });
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('[notify/read] error:', err.message);
+    return res.status(500).json({ code: 'internal', message: 'Failed to mark notification as read.' });
+  }
+}
+
+// ── POST /api/notify/read-all ────────────────────────────────────────────────
+// Marks every notification addressed to the caller (their uid + broadcasts) as
+// read. Chunked into batched writes to stay under Firestore's 500-op batch cap.
+async function markAllRead(req, res) {
+  const uid = req.user?.uid;
+  if (!uid) {
+    return res.status(401).json({ code: 'unauthenticated', message: 'Authentication required.' });
+  }
+
+  try {
+    const [mine, all] = await Promise.all([
+      db.collection('notifications').where('target', '==', uid).get(),
+      db.collection('notifications').where('target', '==', 'all').get(),
+    ]);
+    const unread = [...mine.docs, ...all.docs].filter((d) => {
+      const readBy = d.data()?.readBy;
+      return !Array.isArray(readBy) || !readBy.includes(uid);
+    });
+
+    for (let i = 0; i < unread.length; i += 400) {
+      const batch = db.batch();
+      unread.slice(i, i + 400).forEach((d) =>
+        batch.update(d.ref, { readBy: admin.firestore.FieldValue.arrayUnion(uid) })
+      );
+      await batch.commit();
+    }
+    return res.json({ ok: true, count: unread.length });
+  } catch (err) {
+    console.error('[notify/read-all] error:', err.message);
+    return res.status(500).json({ code: 'internal', message: 'Failed to mark notifications as read.' });
+  }
+}
+
+module.exports = { userDecision, paymentEvent, markRead, markAllRead };

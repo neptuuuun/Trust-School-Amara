@@ -56,7 +56,8 @@ const BranchCard = ({ b, isTop }) => {
 };
 
 const BranchAnalytics = () => {
-  const { month } = useOwnerFilters();
+  // Branch comparison is scoped to the selected academic year (default: current).
+  const { academicYear } = useOwnerFilters();
   const [branches, setBranches] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -64,12 +65,12 @@ const BranchAnalytics = () => {
   useEffect(() => {
     let active = true;
     setLoading(true); setError('');
-    getOwnerBranches(month)
+    getOwnerBranches({ academicYear })
       .then((res) => { if (active) setBranches(res.branches || []); })
       .catch((e) => { if (active) setError(e.message || 'تعذر تحميل البيانات'); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [month]);
+  }, [academicYear]);
 
   if (loading) return <LoadingState label="جاري تحميل تحليل الفروع..." />;
   if (error) return <Alert variant="danger">{error}</Alert>;
@@ -80,7 +81,7 @@ const BranchAnalytics = () => {
     <div className="space-y-6" dir="rtl">
       <div>
         <h1 className="text-3xl sm:text-4xl font-bold text-primary mb-1">تحليل الفروع</h1>
-        <p className="text-gray-600">مقارنة أداء الفروع جنباً إلى جنب — {month}</p>
+        <p className="text-gray-600">مقارنة أداء الفروع جنباً إلى جنب — {academicYear}</p>
       </div>
 
       {branches.length === 0 ? (

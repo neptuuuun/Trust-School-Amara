@@ -47,13 +47,17 @@ export const validateSubject = ({ name } = {}) => {
 /** Allowed support group types (mirror of supportClassification.GROUP_TYPES). */
 export const SUPPORT_GROUP_TYPES = ['normal_support', 'low_level_support'];
 
+/** A Group Start Month is always a 'YYYY-MM' string. */
+export const MONTH_KEY_RE = /^\d{4}-\d{2}$/;
+
 /**
  * Validate a class's scalar fields (schedules validated separately).
- * @param {{teacherName?, groupName?, capacity?, price?, groupType?}} cls
- * @param {{ requireGroupType?: boolean }} [opts] — support classes require a groupType
- * @returns {{ valid: boolean, errors: { teacherName?, groupName?, capacity?, price?, groupType? } }}
+ * @param {{teacherName?, groupName?, capacity?, price?, groupType?, startMonth?}} cls
+ * @param {{ requireGroupType?: boolean, requireStartMonth?: boolean }} [opts]
+ *        — support classes require a groupType AND a startMonth
+ * @returns {{ valid: boolean, errors: { teacherName?, groupName?, capacity?, price?, groupType?, startMonth? } }}
  */
-export const validateClass = ({ teacherName, groupName, capacity, price, groupType } = {}, opts = {}) => {
+export const validateClass = ({ teacherName, groupName, capacity, price, groupType, startMonth } = {}, opts = {}) => {
   const errors = {};
 
   if (!teacherName || !String(teacherName).trim()) {
@@ -66,6 +70,12 @@ export const validateClass = ({ teacherName, groupName, capacity, price, groupTy
   // groupType: required for support classes; must be one of the allowed values.
   if (opts.requireGroupType && !SUPPORT_GROUP_TYPES.includes(groupType)) {
     errors.groupType = 'يرجى اختيار نوع المجموعة';
+  }
+
+  // startMonth: required for support classes; must be a valid 'YYYY-MM' string.
+  // It defines when the group officially begins → drives the reservation flow.
+  if (opts.requireStartMonth && !MONTH_KEY_RE.test(String(startMonth || '').trim())) {
+    errors.startMonth = 'يرجى تحديد شهر بدء المجموعة';
   }
 
   // capacity: optional, but if provided must be a non-negative integer

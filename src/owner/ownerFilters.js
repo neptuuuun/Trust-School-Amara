@@ -1,9 +1,16 @@
 import React, { createContext, useContext, useState } from 'react';
+import { getAcademicYearLabel } from '../utils/academicYear';
 
 /**
- * Shared owner-dashboard filters. The reporting MONTH ('YYYY-MM') is global —
- * set once in the top bar and consumed by every analytics page. Per-page filters
- * (e.g. the branch selector on the revenue page) stay local to those pages.
+ * Shared owner-dashboard filters, set once in the top bar and consumed by the
+ * analytics pages:
+ *  • `academicYear` ('YYYY-YYYY') — the PRIMARY reporting dimension. Defaults to
+ *    the auto-detected current academic year (never created/switched manually).
+ *    Headline pages (summary, revenue, branches) scope to it. Selecting another
+ *    year is a read-only HISTORY view — it never changes the active year.
+ *  • `month` ('YYYY-MM') — the monthly drill-down for the month-based analytics
+ *    (groups, retention, teachers).
+ * Per-page filters (e.g. the branch selector) stay local to those pages.
  */
 
 const OwnerFiltersContext = createContext(null);
@@ -21,8 +28,9 @@ function currentMonthKey() {
 
 export const OwnerFiltersProvider = ({ children }) => {
   const [month, setMonth] = useState(currentMonthKey());
+  const [academicYear, setAcademicYear] = useState(getAcademicYearLabel());
   return (
-    <OwnerFiltersContext.Provider value={{ month, setMonth }}>
+    <OwnerFiltersContext.Provider value={{ month, setMonth, academicYear, setAcademicYear }}>
       {children}
     </OwnerFiltersContext.Provider>
   );

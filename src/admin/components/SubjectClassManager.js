@@ -17,7 +17,7 @@ import { motion } from 'framer-motion';
 import {
   Plus, Edit2, Trash2, AlertCircle, Search, Loader2,
   ChevronDown, ChevronUp, BookOpen, Users, Clock, GraduationCap,
-  UserCog, Eye, EyeOff, History,
+  UserCog, Eye, EyeOff, History, CalendarDays, Bookmark,
 } from 'lucide-react';
 import { useBranch } from '../../contexts/BranchContext';
 import { useToast } from './ToastNotifications';
@@ -31,6 +31,8 @@ import {
   streamSubjects, streamClasses, deleteSubject, deleteClass, updateClass,
 } from '../../services/firestoreService';
 import { groupTypeBadge, normalizeGroupType } from '../../utils/supportClassification';
+import { formatMonthKey } from '../../utils/dateUtils';
+import { getAcademicYearLabel, listAcademicYears } from '../../utils/academicYear';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { LoadingState } from '../../components/ui/feedback';
@@ -89,6 +91,12 @@ const SubjectClassManager = ({ serviceType, scope = {}, headerTrail }) => {
   const [search, setSearch] = useState('');
   const [collapsed, setCollapsed] = useState({}); // subjectId -> true when collapsed
   const [groupTypeFilter, setGroupTypeFilter] = useState('all'); // support only: all|normal_support|low_level_support
+  // Academic-year view — a read-only HISTORY filter. Defaults to the current
+  // (auto-detected) year. It NEVER changes the active academic year and NEVER
+  // affects new groups: created groups are always stamped the current year by the
+  // backend, regardless of what is selected here.
+  const [selectedYear, setSelectedYear] = useState(getAcademicYearLabel());
+  const yearOptions = useMemo(() => listAcademicYears({ count: 6, future: 1 }), []);
 
   // Modal state
   const [subjectModal, setSubjectModal] = useState(undefined); // undefined=closed, null=add, object=edit
@@ -111,13 +119,13 @@ const SubjectClassManager = ({ serviceType, scope = {}, headerTrail }) => {
       loadedSubjects = true;
       setLoading(false);
     });
-    const unsubClasses = streamClasses(selectedBranchId, { serviceType }, (rows) => {
+    const unsubClasses = streamClasses(selectedBranchId, { serviceType, academicYear: selectedYear }, (rows) => {
       setClasses(scope.studyYear ? rows.filter((r) => r.studyYear === scope.studyYear) : rows);
       if (loadedSubjects) setLoading(false);
     });
     return () => { unsubSubjects?.(); unsubClasses?.(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedBranchId, serviceType, scope.studyYear]);
+  }, [selectedBranchId, serviceType, scope.studyYear, selectedYear]);
 
   // ── Group classes by subject ───────────────────────────────────────────────
   const classesBySubject = useMemo(() => {
@@ -284,15 +292,34 @@ const SubjectClassManager = ({ serviceType, scope = {}, headerTrail }) => {
         </div>
       </div>
 
-      {/* Search */}
-      <div className="max-w-sm">
-        <Input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder={cfg.searchPlaceholder}
-          startIcon={<Search className="h-4 w-4" />}
-        />
+      {/* Search + academic-year (history) filter */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="max-w-sm flex-1 min-w-[220px]">
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={cfg.searchPlaceholder}
+            startIcon={<Search className="h-4 w-4" />}
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="text-xs font-semibold text-gray-500">السنة الدراسية</label>
+          <select
+            value={selectedYear}
+            onChange={(e) => setSelectedYear(e.target.value)}
+            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-800 focus:border-primary focus:ring-1 focus:ring-primary"
+          >
+            {yearOptions.map((y) => (
+              <option key={y} value={y}>{y}{y === getAcademicYearLabel() ? ' (الحالية)' : ''}</option>
+            ))}
+          </select>
+        </div>
       </div>
+      {selectedYear !== getAcademicYearLabel() && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          أنت تستعرض أرشيف سنة دراسية سابقة ({selectedYear}). المجموعات الجديدة تُنشأ دائماً ضمن السنة الحالية.
+        </div>
+      )}
 
       {/* Group-type filter — support only */}
       {isSupport && (
@@ -410,7 +437,8 @@ const SubjectClassManager = ({ serviceType, scope = {}, headerTrail }) => {
                         {subjectClasses.map((c) => {
                           const summary = formatScheduleSummary(c.schedules);
                           const cap = Number(c.capacity) || 0;
-                          const enrolled = Number(c.enrollmentCount) || 0;
+                          const enrolled = Number(c.enrollmentCount) || 0; // occupied = active + reserved
+                          const reservedCount = Number(c.reservedCount) || 0;
                           const isFull = cap > 0 && enrolled >= cap;
                           const inactive = (c.status || 'active') !== 'active';
                           return (
@@ -441,6 +469,12 @@ const SubjectClassManager = ({ serviceType, scope = {}, headerTrail }) => {
                                   {isSupport && Array.isArray(c.schedules) && c.schedules.length > 0 && (
                                     <span className="text-xs text-gray-500">· {c.schedules.length} حصة/أسبوع</span>
                                   )}
+                                  {isSupport && c.startMonth && (
+                                    <span className="inline-flex items-center gap-1 rounded-md bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">
+                                      <CalendarDays className="h-3 w-3" />
+                                      تبدأ {formatMonthKey(c.startMonth)}
+                                    </span>
+                                  )}
                                   {cap > 0 && (
                                     <span className={`rounded-md px-2 py-0.5 text-xs font-medium ${isFull ? 'bg-danger-100 text-danger-700' : 'bg-success-50 text-success-700'}`}>
                                       {enrolled}/{cap} مقعد{isFull ? ' (مكتمل)' : ''}
@@ -448,6 +482,12 @@ const SubjectClassManager = ({ serviceType, scope = {}, headerTrail }) => {
                                   )}
                                   {cap === 0 && enrolled > 0 && (
                                     <span className="text-xs text-gray-500">· {enrolled} مسجل</span>
+                                  )}
+                                  {reservedCount > 0 && (
+                                    <span className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700" title="طلاب حجزوا مقاعدهم ولم يبدأوا بعد">
+                                      <Bookmark className="h-3 w-3" />
+                                      {reservedCount} محجوز
+                                    </span>
                                   )}
                                   {inactive && (
                                     <span className="rounded-md bg-gray-200 px-2 py-0.5 text-xs font-medium text-gray-600">معطّلة</span>

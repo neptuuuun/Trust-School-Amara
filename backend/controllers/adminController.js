@@ -10,6 +10,7 @@ const { normalizeSchool, isValidSchool } = require('../constants');
 // implementation instead of duplicating the expiry rule here.
 const { recomputeSupportClassEnrollment } = require('./registrationController');
 const { deleteUserFiles } = require('../services/supabaseStorage');
+const { provisionStudent } = require('../services/studentProvisioning');
 
 const VALID_BRANCHES = ['boumerdes', 'bordj_menaiel'];
 
@@ -55,19 +56,17 @@ const createStudent = async (req, res, next) => {
         message: 'password must be at least 6 characters.',
       });
 
-    const normalizedEmail = email.trim().toLowerCase();
-    const trimmedName     = fullName.trim();
-    const normalizedSchool = normalizeSchool(school);
+    const callerUid = adminUid || req.user.uid;
+    // Canonical actor {uid,name,email,role} so the student's createdBy carries the
+    // enrolling admin's real NAME (OwnershipBadge / "Registered by …").
+    const callerActor = await resolveActor(callerUid);
 
-    // --- Create Firebase Auth user --------------------------------------
-    let userRecord;
+    // Creation goes through the shared provisioning service — the SINGLE source of
+    // truth for the student schema, reused by the bulk importer so imported and
+    // manually created students are identical.
+    let provisioned;
     try {
-      userRecord = await auth.createUser({
-        email:         normalizedEmail,
-        password,
-        displayName:   trimmedName,
-        emailVerified: true,
-      });
+      provisioned = await provisionStudent({ branchId, fullName, email, phone, school, password, callerActor });
     } catch (err) {
       if (err.code === 'auth/email-already-exists') {
         return res.status(409).json({
@@ -78,74 +77,7 @@ const createStudent = async (req, res, next) => {
       throw err;
     }
 
-    const uid        = userRecord.uid;
-    const branchName = BRANCH_NAMES[branchId] || branchId;
-    const callerUid  = adminUid || req.user.uid;
-    // Canonical actor {uid,name,email,role} so the student's createdBy carries the
-    // enrolling admin's real NAME (OwnershipBadge / "Registered by …").
-    const callerActor = await resolveActor(callerUid);
-
-    // Auto-generate registration number identical to the self-registration format.
-    const now    = new Date();
-    const year   = now.getFullYear();
-    const month  = String(now.getMonth() + 1).padStart(2, '0');
-    const rand   = Math.floor(1000 + Math.random() * 9000);
-    const prefix = branchId.slice(0, 4).toUpperCase();
-    const registrationNumber = `${prefix}-${year}${month}-${rand}`;
-
-    const trimmedPhone = phone?.trim() || null;
-
-    // --- Write Firestore profile ----------------------------------------
-    // Admin-created accounts use the exact same schema as self-registered students.
-    // They are pre-verified and immediately active — no email confirmation needed.
-    await db.collection('branches').doc(branchId).collection('users').doc(uid).set({
-      uid,
-      // Canonical name field + legacy alias — both set to avoid any field mismatch.
-      name:               trimmedName,
-      fullName:           trimmedName,
-      email:              normalizedEmail,
-      phoneNumber:        trimmedPhone,
-      phone:              trimmedPhone,
-      // Branch info stored in both forms (same as AuthContext.signup).
-      branch:             branchId,
-      branchId,
-      branchName,
-      role:               'student',
-      // status: 'active' is required by AuthContext.login and profile listeners.
-      status:             'active',
-      emailVerified:      true,
-      // Pre-verified — admin enrolled this student in person.
-      verified:           true,
-      accountVerified:    true,
-      verificationStatus: 'verified',
-      paymentVerified:    false,
-      yearlyFeePaid:      false,
-      studyYear:          null,
-      // Optional personal fields — not collected by admin; default to null.
-      birthDate:          null,
-      birthPlace:         null,
-      address:            null,
-      // Educational institution — REQUIRED on every person record (never empty/null).
-      school:             normalizedSchool,
-      // Photo fields — not collected at admin enrollment; null until student uploads.
-      photoUrl:           null,
-      idCardUrl:          null,
-      verificationRequest: null,
-      // Registration number generated the same way as self-registration.
-      registrationNumber,
-      // Admin agreed to rules on behalf of the student during enrollment.
-      internalRulesAccepted: true,
-      // Not a Google OAuth stub — profile is immediately complete.
-      completedProfile:   true,
-      createdByAdmin:     true,
-      createdBy:          { uid: callerActor.uid, name: callerActor.name || '', email: callerActor.email || '' },
-      lifecycleStatus:    'active',
-      lifecycleStatusUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      lastActivityAt:     admin.firestore.FieldValue.serverTimestamp(),
-      lastActivityType:   'admin_account_creation',
-      createdAt:          admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt:          admin.firestore.FieldValue.serverTimestamp(),
-    });
+    const { uid, normalizedEmail, trimmedName, normalizedSchool } = provisioned;
 
     await writeAudit({
       branchId, actor: { uid: callerUid, email: req.user?.email || '', role: 'admin' },

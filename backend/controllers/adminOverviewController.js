@@ -38,6 +38,21 @@ const { writeAudit } = require('../services/auditService');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+// Training-interest statuses that are NOT "un-triaged" — kept in lockstep with
+// normalizeStatus() in src/utils/trainingRequests.js. Anything NOT in this set
+// (incl. '', a missing status field, 'جديد', 'pending', or any unknown value)
+// normalizes to NEW, so the sidebar badge counts (total − resolved) instead of an
+// exact status=='new' match that would silently drop legacy / blank leads.
+const RESOLVED_TRAINING_STATUSES = [
+  // contacted
+  'contacted', 'reviewing', 'reviewed', 'review', 'in_review', 'قيد المراجعة', 'تم التواصل',
+  // following_up
+  'following_up', 'followup', 'follow_up', 'قيد المتابعة',
+  // closed
+  'closed', 'rejected', 'declined', 'cancelled', 'مغلق', 'مرفوض',
+  'enrolled', 'registered', 'completed', 'accepted', 'approved', 'مكتمل', 'مسجل', 'تم التسجيل',
+];
+
 /** Count a query without streaming documents. */
 async function countOf(query) {
   try {
@@ -108,24 +123,36 @@ async function loadSupportSnapshot(branchId, now, soon) {
   const soonTs = admin.firestore.Timestamp.fromDate(soon);
 
   try {
-    const [active, expired, expiringSnap] = await Promise.all([
+    const [activeIncl, expired, reserved, expiringSnap] = await Promise.all([
       base.where('endDate', '>', nowTs).count().get().then((s) => s.data().count || 0),
       base.where('endDate', '<=', nowTs).count().get().then((s) => s.data().count || 0),
+      // RESERVED = verified but not yet begun (Group Start Month ahead). All
+      // equality filters → served by index merging, so no new composite index;
+      // a missing index degrades gracefully to 0 rather than failing the panel.
+      base.where('reserved', '==', true).count().get().then((s) => s.data().count || 0).catch(() => 0),
       // Ordered ascending so the soonest to lapse — the ones worth calling first —
       // lead the list. Capped at the number the UI actually shows.
       base.where('endDate', '>', nowTs).where('endDate', '<=', soonTs)
         .orderBy('endDate', 'asc').limit(25).get(),
     ]);
-    return { active, expired, expiring: expiringSnap.docs.map(toRow) };
+    // A reservation's endDate is a future month, so it sits inside activeIncl —
+    // but it is NOT studying yet. Exclude reserved from the active headline and
+    // from the renewal (expiring) worklist.
+    const active = Math.max(0, activeIncl - reserved);
+    const expiring = expiringSnap.docs.filter((d) => (d.data() || {}).reserved !== true).map(toRow);
+    return { active, reserved, expired, expiring };
   } catch (err) {
     if (err.code !== 9 /* FAILED_PRECONDITION */) throw err;
     console.warn('[admin/overview] support index missing, bucketing in memory. Deploy firestore.indexes.json.');
 
     const snap = await base.limit(5000).get();
-    let active = 0, expired = 0;
+    let active = 0, expired = 0, reserved = 0;
     const expiring = [];
     for (const doc of snap.docs) {
-      const end = toDate((doc.data() || {}).endDate);
+      const data = doc.data() || {};
+      // Reserved subscriptions are neither active nor expired for the headline.
+      if (data.reserved === true) { reserved += 1; continue; }
+      const end = toDate(data.endDate);
       // A subscription with no end date can't have lapsed — treat it as live.
       if (!end) { active += 1; continue; }
       if (end <= now) { expired += 1; continue; }
@@ -133,7 +160,7 @@ async function loadSupportSnapshot(branchId, now, soon) {
       if (end <= soon) expiring.push(toRow(doc));
     }
     expiring.sort((a, b) => (toDate(a.endDate)?.getTime() || 0) - (toDate(b.endDate)?.getTime() || 0));
-    return { active, expired, expiring: expiring.slice(0, 25) };
+    return { active, reserved, expired, expiring: expiring.slice(0, 25) };
   }
 }
 
@@ -181,7 +208,18 @@ const getOverview = async (req, res, next) => {
       countOf(usersRef),
       countOf(usersRef.where('verificationStatus', '==', 'pending')),
       countOf(usersRef.where('verificationStatus', '==', 'verified')),
-      countOf(regsRef.where('type', '==', 'training_request').where('status', '==', 'pending')),
+      // Un-triaged training-interest leads — everything normalizeStatus() treats as
+      // NEW (awaiting first contact): total training_request docs minus the resolved
+      // set. Matches the admin page's «جديدة» count and catches legacy/blank/missing-
+      // status leads that an exact status=='new' query would silently drop.
+      (async () => {
+        const base = regsRef.where('type', '==', 'training_request');
+        const [total, resolved] = await Promise.all([
+          countOf(base),
+          countOf(base.where('status', 'in', RESOLVED_TRAINING_STATUSES)),
+        ]);
+        return Math.max(0, total - resolved);
+      })(),
       countOf(subjectsRef.where('serviceType', '==', 'language')),
       countOf(subjectsRef.where('serviceType', '==', 'support')),
       countOf(subjectsRef.where('serviceType', '==', 'training')),
@@ -278,6 +316,7 @@ const getOverview = async (req, res, next) => {
 
       support: {
         active:       support.active,
+        reserved:     support.reserved || 0,
         expiringSoon: support.expiring.length,
         expired:      support.expired,
         expiringList: support.expiring.slice(0, 10),

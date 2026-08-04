@@ -22,6 +22,16 @@
  * Labels are ALWAYS rendered as "YYYY-YYYY" (e.g. "2025-2026"). Never derive an
  * academic year from a single calendar year — always go through these helpers.
  *
+ * ── ARCHITECTURAL RULE (academic-year system) ────────────────────────────────
+ * The current academic year is ALWAYS derived from the date — no one ever
+ * creates, resets, or switches years. Every academic record (registrations,
+ * payments, groups/classes, and any FUTURE academic feature or collection) MUST
+ * carry an explicit `academicYear` label, stamped SERVER-SIDE at write time (see
+ * `withAcademicYear` in the backend mirror). Daily views filter to the current
+ * year via {@link academicYearMatches}; the date fallback inside it is a
+ * TRANSITIONAL migration-compatibility layer for legacy records only — the
+ * explicit field is always the primary path.
+ *
  * NOTE: a byte-for-byte logical mirror of this module lives at
  * `backend/services/academicYear.js` (CommonJS). Keep the two in lockstep.
  */
@@ -168,4 +178,53 @@ export const listAcademicYears = ({ count = 5, future = 1, anchor = new Date() }
     out.push(`${sy}-${sy + 1}`);
   }
   return out;
+};
+
+/**
+ * Coerce a record's date-ish field to a JS Date. Accepts everything
+ * {@link toJsDate} does PLUS a bare "YYYY-MM" month key (e.g. a group's
+ * `startMonth`), resolved to the 1st of that month.
+ * @param {*} value
+ * @returns {Date|null}
+ */
+export const coerceDateField = (value) => {
+  if (typeof value === 'string') {
+    const m = value.trim().match(/^(\d{4})-(\d{2})$/);
+    if (m) return new Date(Number(m[1]), Number(m[2]) - 1, 1);
+  }
+  return toJsDate(value);
+};
+
+/**
+ * True when `record` belongs to the academic year identified by `label`
+ * ("YYYY-YYYY").
+ *
+ * PRIMARY PATH — the explicit `record.academicYear` field. When present it is
+ * authoritative and the date fallback is never consulted.
+ *
+ * TRANSITIONAL FALLBACK — for legacy records written before the academic-year
+ * migration (no `academicYear` field), derive membership from the first present
+ * `dateFields` value via {@link isDateInAcademicYear}. Pass the date fields that
+ * reliably reflect the record's year:
+ *   • registrations/payments → ['registeredAt','verifiedAt','startDate','createdAt']
+ *   • groups/classes         → ['startMonth']  (NEVER createdAt — groups may be
+ *                              prepared for next year before 1 July)
+ * A record with neither the field nor a usable fallback date returns false (it is
+ * surfaced for manual review, never guessed).
+ *
+ * @param {object} record
+ * @param {string} label — "YYYY-YYYY"
+ * @param {string[]} [dateFields]
+ * @returns {boolean}
+ */
+export const academicYearMatches = (record, label, dateFields = ['registeredAt', 'createdAt']) => {
+  if (!record || !label) return false;
+  if (record.academicYear) return record.academicYear === label;
+  for (const field of dateFields) {
+    const raw = record[field];
+    if (raw === null || raw === undefined || raw === '') continue;
+    const d = coerceDateField(raw);
+    if (d) return isDateInAcademicYear(d, label);
+  }
+  return false;
 };

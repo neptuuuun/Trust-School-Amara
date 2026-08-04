@@ -17,6 +17,8 @@ import {
   getCurrentAcademicYear,
   listAcademicYears,
   toJsDate,
+  coerceDateField,
+  academicYearMatches,
 } from './academicYear';
 
 // Local date constructor — month is 1-based here for readability.
@@ -161,5 +163,53 @@ describe('toJsDate coercion', () => {
   });
   it('returns null for unparseable input', () => {
     expect(toJsDate('not-a-date')).toBeNull();
+  });
+});
+
+describe('coerceDateField — YYYY-MM month keys', () => {
+  it('parses "2026-09" to the 1st of September 2026', () => {
+    const dt = coerceDateField('2026-09');
+    expect(dt.getFullYear()).toBe(2026);
+    expect(dt.getMonth()).toBe(8); // September
+    expect(dt.getDate()).toBe(1);
+  });
+  it('passes a Firestore-style Timestamp through', () => {
+    expect(coerceDateField({ toDate: () => d(2025, 9, 1) }).getMonth()).toBe(8);
+  });
+});
+
+describe('academicYearMatches — explicit field is authoritative', () => {
+  it('matches an equal explicit academicYear', () => {
+    expect(academicYearMatches({ academicYear: '2026-2027' }, '2026-2027')).toBe(true);
+  });
+  it('does not match a different explicit academicYear', () => {
+    expect(academicYearMatches({ academicYear: '2025-2026' }, '2026-2027')).toBe(false);
+  });
+  it('the explicit field wins over a conflicting date fallback', () => {
+    expect(academicYearMatches({ academicYear: '2026-2027', registeredAt: d(2025, 9, 1) }, '2025-2026')).toBe(false);
+  });
+});
+
+describe('academicYearMatches — legacy date fallback (no field)', () => {
+  it('matches via registeredAt for a legacy record', () => {
+    expect(academicYearMatches({ registeredAt: d(2026, 9, 1) }, '2026-2027')).toBe(true);
+  });
+  it('misses when the fallback date is a different year', () => {
+    expect(academicYearMatches({ registeredAt: d(2026, 9, 1) }, '2027-2028')).toBe(false);
+  });
+  it('a legacy class matches via startMonth only', () => {
+    expect(academicYearMatches({ startMonth: '2026-09' }, '2026-2027', ['startMonth'])).toBe(true);
+  });
+  it('a legacy class with no field and no startMonth is NOT matched (manual review)', () => {
+    expect(academicYearMatches({ createdAt: d(2026, 9, 1) }, '2026-2027', ['startMonth'])).toBe(false);
+  });
+});
+
+describe('academicYearMatches — visibility across the 1 July boundary', () => {
+  it('a 2026-2027 record is HIDDEN when the current year is 2027-2028', () => {
+    expect(academicYearMatches({ academicYear: '2026-2027' }, '2027-2028')).toBe(false);
+  });
+  it('the same record is SHOWN when the current year is 2026-2027', () => {
+    expect(academicYearMatches({ academicYear: '2026-2027' }, '2026-2027')).toBe(true);
   });
 });

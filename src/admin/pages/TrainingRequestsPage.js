@@ -1,102 +1,221 @@
-// TrainingRequestsPage — Redesigned Request Management Dashboard
+// TrainingRequestsPage — Training-INTEREST management (a CRM, not an inbox).
+//
 // Data:  branches/{branchId}/registrations  where  type === 'training_request'
-// Role:  Inbox of student interest-requests (not paid enrollments).
-//        Dedicated approval workflow: pending → completed | rejected
+//
+// Purpose: students tell the school "I'd like this training IF you offer it."
+// This is lead / demand management — NOT enrolment, registration, or approval
+// (that lives in a separate system). So there is no Accept / Reject / Enrolled
+// anywhere here. The admin works each interest through a pipeline:
+//     new → contacted → following_up → closed   (+ reopen)
+//
+// The page is built to answer, at a glance: "which trainings are students asking
+// for?" — via a most-requested-topics panel and a requests-over-time trend — and
+// to make follow-up one click (Call / WhatsApp / Copy number), with a lifecycle
+// side panel (timeline + internal notes). Identity always comes from the account.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   collection, query, where, orderBy, onSnapshot,
-  doc, updateDoc, serverTimestamp,
+  doc, updateDoc, serverTimestamp, arrayUnion, Timestamp,
 } from 'firebase/firestore';
+import {
+  Search, Download, Eye, Phone, MessageCircle, Clock, XCircle,
+  RefreshCw, MoreVertical, Loader2, AlertCircle, TrendingUp, PhoneCall,
+  StickyNote, Send, X, Flame, Users, ChevronLeft, Copy, Check, Sparkles,
+  Archive, Calendar,
+} from 'lucide-react';
 import { db } from '../../firebase';
 import { useBranch } from '../../contexts/BranchContext';
-import {
-  Search, BookOpen, AlertCircle, Eye, Check, X, Clock,
-  CheckCircle, XCircle, MoreVertical, Loader2, Download,
-  User, Mail, Phone, Calendar, MessageSquare, RefreshCw,
-} from 'lucide-react';
+import { useAuth } from '../../contexts/AuthContext';
 import { exportToCsv, generateFilename } from '../../utils/csvExport';
-import AdminModal from '../components/AdminModal';
-import AdminConfirmDialog from '../components/AdminConfirmDialog';
 import { formatDateTime, formatDayMonth } from '../../utils/dateUtils';
 import { Input } from '../../components/ui/input';
 import { LoadingState } from '../../components/ui/feedback';
+import AdminModal from '../components/AdminModal';
+import AdminConfirmDialog from '../components/AdminConfirmDialog';
+import { useToast } from '../components/ToastNotifications';
+import {
+  STATUS, STATUS_META, STATUS_ORDER, normalizeStatus, isOpen,
+  getTopic, getStudentName, getStudentEmail, getStudentPhone,
+  preferredTimeLabel, experienceLabel,
+  initials, avatarTint, telHref, waHref, phoneDigits,
+  relativeTime, ageInDays, isSameDay, toDate,
+} from '../../utils/trainingRequests';
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-const fmtDate = (ts, short = false) => short ? formatDayMonth(ts) : formatDateTime(ts);
-
-const isToday = (ts) => {
-  if (!ts) return false;
-  try {
-    const d = ts.toDate ? ts.toDate() : new Date(ts);
-    const now = new Date();
-    return d.getFullYear() === now.getFullYear() &&
-           d.getMonth()    === now.getMonth()    &&
-           d.getDate()     === now.getDate();
-  } catch { return false; }
-};
-
+// ── Small utilities ─────────────────────────────────────────────────────────
 const useDebounce = (value, delay) => {
   const [v, setV] = useState(value);
-  useEffect(() => {
-    const t = setTimeout(() => setV(value), delay);
-    return () => clearTimeout(t);
-  }, [value, delay]);
+  useEffect(() => { const t = setTimeout(() => setV(value), delay); return () => clearTimeout(t); }, [value, delay]);
   return v;
 };
 
-// ─── Status configuration ─────────────────────────────────────────────────────
+const STALE_DAYS = 3; // a NEW lead older than this needs urgent follow-up
 
-const normalizeStatus = (raw) => {
-  const s = raw == null ? '' : String(raw).trim().toLowerCase();
-  if (!s || s === 'pending') return 'pending';
-  if (['reviewed', 'reviewing', 'قيد المراجعة'].includes(s)) return 'reviewing';
-  if (['completed', 'مكتمل', 'accepted', 'approved'].includes(s)) return 'completed';
-  if (['rejected', 'مرفوض'].includes(s)) return 'rejected';
-  return 'pending';
+const copyText = async (text) => {
+  try {
+    if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return true; }
+  } catch { /* fall through */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch { return false; }
 };
 
-const STATUS_CFG = {
-  pending:   { label: 'قيد الانتظار', badge: 'bg-warning-50 text-warning-700 border-warning-200'   },
-  reviewing: { label: 'قيد المراجعة', badge: 'bg-secondary-50 text-secondary-700 border-secondary-200' },
-  completed: { label: 'مكتمل',        badge: 'bg-success-50 text-success-700 border-success-200' },
-  rejected:  { label: 'مرفوض',        badge: 'bg-danger-50 text-danger-600 border-danger-200'    },
+// ── Forward transitions per status (NO enrolment concept) ───────────────────
+const NEXT_ACTIONS = {
+  [STATUS.NEW]: [
+    { to: STATUS.CONTACTED,    label: 'تم التواصل',  icon: PhoneCall, primary: true },
+    { to: STATUS.FOLLOWING_UP, label: 'قيد المتابعة', icon: Clock,     primary: false },
+  ],
+  [STATUS.CONTACTED]: [
+    { to: STATUS.FOLLOWING_UP, label: 'قيد المتابعة', icon: Clock, primary: true },
+  ],
+  [STATUS.FOLLOWING_UP]: [],
+  [STATUS.CLOSED]: [],
 };
+const primaryActionFor = (status) => (NEXT_ACTIONS[normalizeStatus(status)] || []).find((a) => a.primary) || null;
 
+// ── Status badge ────────────────────────────────────────────────────────────
 const StatusBadge = ({ status }) => {
-  const s = normalizeStatus(status);
-  const c = STATUS_CFG[s];
+  const m = STATUS_META[normalizeStatus(status)];
   return (
-    <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold ${c.badge}`}>
-      {c.label}
+    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-semibold ${m.badge}`}>
+      <span className={`h-1.5 w-1.5 rounded-full ${m.dot}`} />
+      {m.label}
     </span>
   );
 };
 
-// ─── StatCard ─────────────────────────────────────────────────────────────────
-
-const StatCard = ({ icon, label, value, sub, iconBg, active, onClick }) => (
-  <button
-    type="button"
-    onClick={onClick}
-    className={`flex w-full items-center gap-3 rounded-2xl border bg-white p-4 text-start shadow-sm transition-all hover:shadow-md
-      ${active ? 'border-primary/40 ring-2 ring-primary/20' : 'border-gray-100'}`}
-  >
-    <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${iconBg}`}>
-      {icon}
+const Avatar = ({ name, size = 'md' }) => {
+  const cls = size === 'sm' ? 'h-8 w-8 text-xs' : 'h-10 w-10 text-sm';
+  return (
+    <div className={`flex ${cls} shrink-0 items-center justify-center rounded-full font-bold ${avatarTint(name)}`}>
+      {initials(name)}
     </div>
-    <div className="min-w-0">
-      <p className="text-xl font-bold leading-none text-gray-900">{value}</p>
-      <p className="mt-0.5 text-xs text-gray-500 truncate">{label}</p>
-      {sub != null && <p className="mt-0.5 text-xs font-medium text-success-600">+{sub} اليوم</p>}
+  );
+};
+
+// ── Contact buttons: Call · WhatsApp · Copy (one-click, no drilling) ─────────
+const ContactButtons = ({ phone, size = 'sm', onCopied }) => {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef(null);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  if (!phone) return <span className="text-xs text-gray-300">لا يوجد رقم</span>;
+
+  const pad = size === 'lg' ? 'px-3 py-2 text-sm' : 'p-1.5';
+  const doCopy = async (e) => {
+    e.stopPropagation(); e.preventDefault();
+    const ok = await copyText(phoneDigits(phone));
+    if (ok) {
+      setCopied(true);
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => setCopied(false), 1500);
+      onCopied?.();
+    }
+  };
+  return (
+    <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+      <a href={telHref(phone)} onClick={(e) => e.stopPropagation()} title={`اتصال بـ ${phone}`} aria-label="اتصال"
+         className={`inline-flex items-center justify-center gap-1.5 rounded-lg border border-gray-200 ${pad} text-gray-600 transition-colors hover:border-primary/30 hover:bg-primary/5 hover:text-primary`}>
+        <Phone className="h-4 w-4" />{size === 'lg' && 'اتصال'}
+      </a>
+      <a href={waHref(phone)} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} title="واتساب" aria-label="واتساب"
+         className={`inline-flex items-center justify-center gap-1.5 rounded-lg border border-success-200 bg-success-50 ${pad} text-success-700 transition-colors hover:bg-success-100`}>
+        <MessageCircle className="h-4 w-4" />{size === 'lg' && 'واتساب'}
+      </a>
+      <button type="button" onClick={doCopy} title="نسخ الرقم" aria-label="نسخ الرقم"
+         className={`inline-flex items-center justify-center gap-1.5 rounded-lg border ${pad} transition-colors ${copied ? 'border-success-200 bg-success-50 text-success-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
+        {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}{size === 'lg' && (copied ? 'تم النسخ' : 'نسخ')}
+      </button>
     </div>
-  </button>
-);
+  );
+};
 
-// ─── RowMenu ──────────────────────────────────────────────────────────────────
+// ── Metric card (status cards double as filter toggles) ─────────────────────
+const StatCard = ({ icon, label, value, sub, subTone = 'text-success-600', iconBg, active, onClick }) => {
+  const Comp = onClick ? 'button' : 'div';
+  return (
+    <Comp type={onClick ? 'button' : undefined} onClick={onClick}
+      className={`flex w-full items-center gap-3 rounded-2xl border bg-white p-4 text-start shadow-sm transition-all ${onClick ? 'hover:shadow-md' : ''}
+        ${active ? 'border-primary/40 ring-2 ring-primary/20' : 'border-gray-100'}`}>
+      <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${iconBg}`}>{icon}</div>
+      <div className="min-w-0">
+        <p className="text-xl font-bold leading-none text-gray-900">{value}</p>
+        <p className="mt-1 truncate text-xs text-gray-500">{label}</p>
+        {sub != null && <p className={`mt-0.5 text-xs font-medium ${subTone}`}>{sub}</p>}
+      </div>
+    </Comp>
+  );
+};
 
-const RowMenu = ({ status, onMarkReviewing, onReopen }) => {
+// ── Most requested trainings (the demand answer) ────────────────────────────
+const TopTopics = ({ topics, activeTopic, onPick }) => {
+  if (!topics.length) return null;
+  const max = topics[0].count;
+  return (
+    <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
+      <div className="mb-4 flex items-center gap-2">
+        <TrendingUp className="h-4 w-4 text-primary" />
+        <h3 className="text-sm font-bold text-gray-900">أكثر الدورات طلباً</h3>
+        <span className="text-xs text-gray-400">— أين يتركّز الطلب</span>
+      </div>
+      <ul className="space-y-2.5">
+        {topics.map((t) => {
+          const pct = Math.max(6, Math.round((t.count / max) * 100));
+          const active = activeTopic === t.key;
+          return (
+            <li key={t.key}>
+              <button type="button" onClick={() => onPick(active ? 'all' : t.key)} className="group flex w-full items-center gap-3 text-start"
+                title={active ? 'إلغاء التصفية' : `تصفية حسب ${t.label}`}>
+                <span className={`w-36 shrink-0 truncate text-sm ${active ? 'font-bold text-primary' : 'text-gray-700'}`}>{t.label}</span>
+                <span className="relative h-2.5 flex-1 overflow-hidden rounded-full bg-gray-100">
+                  <span className={`absolute inset-y-0 start-0 rounded-full transition-all ${active ? 'bg-primary' : 'bg-primary/40 group-hover:bg-primary/60'}`} style={{ width: `${pct}%` }} />
+                </span>
+                <span className="w-6 shrink-0 text-end text-sm font-semibold text-gray-600">{t.count}</span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+};
+
+// ── Requests by date (14-day demand trend) ──────────────────────────────────
+const RequestsByDate = ({ buckets, total }) => {
+  const max = Math.max(1, ...buckets.map((b) => b.count));
+  return (
+    <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
+      <div className="mb-4 flex items-center gap-2">
+        <Calendar className="h-4 w-4 text-primary" />
+        <h3 className="text-sm font-bold text-gray-900">الطلبات حسب التاريخ</h3>
+        <span className="text-xs text-gray-400">— آخر ١٤ يوماً ({total})</span>
+      </div>
+      <div className="flex h-28 items-end gap-1.5">
+        {buckets.map((b) => (
+          <div key={b.key} className="group relative flex flex-1 flex-col items-center justify-end" title={`${b.label}: ${b.count}`}>
+            <span
+              className={`w-full rounded-t transition-all ${b.count ? 'bg-primary/70 group-hover:bg-primary' : 'bg-gray-100'}`}
+              style={{ height: `${b.count ? Math.max(8, (b.count / max) * 100) : 4}%` }}
+            />
+            {b.count > 0 && <span className="absolute -top-4 text-[10px] font-semibold text-gray-500 opacity-0 group-hover:opacity-100">{b.count}</span>}
+          </div>
+        ))}
+      </div>
+      <div className="mt-2 flex justify-between text-[10px] text-gray-400">
+        <span>{buckets[0]?.label}</span>
+        <span>{buckets[buckets.length - 1]?.label}</span>
+      </div>
+    </div>
+  );
+};
+
+// ── Row action menu ─────────────────────────────────────────────────────────
+const RowMenu = ({ status, onFollowUp, onClose, onReopen }) => {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   useEffect(() => {
@@ -104,388 +223,380 @@ const RowMenu = ({ status, onMarkReviewing, onReopen }) => {
     document.addEventListener('mousedown', h);
     return () => document.removeEventListener('mousedown', h);
   }, []);
-
-  const normalStatus = normalizeStatus(status);
-  const hasItems = normalStatus === 'pending' || normalStatus === 'completed' || normalStatus === 'rejected';
-  if (!hasItems) return null;
-
+  const s = normalizeStatus(status);
+  const items = [];
+  if (s === STATUS.NEW) items.push({ label: 'قيد المتابعة', icon: Clock, fn: onFollowUp });
+  if (s === STATUS.NEW || s === STATUS.CONTACTED || s === STATUS.FOLLOWING_UP) items.push({ label: 'إغلاق الطلب', icon: XCircle, fn: onClose });
+  if (s === STATUS.CLOSED) items.push({ label: 'إعادة فتح', icon: RefreshCw, fn: onReopen });
+  if (!items.length) return null;
   return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="flex h-7 w-7 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600"
-      >
+    <div ref={ref} className="relative" onClick={(e) => e.stopPropagation()}>
+      <button type="button" onClick={() => setOpen((o) => !o)} className="flex h-7 w-7 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600">
         <MoreVertical className="h-3.5 w-3.5" />
       </button>
       {open && (
         <div className="absolute end-0 top-8 z-20 min-w-max rounded-xl border border-gray-200 bg-white py-1 shadow-xl">
-          {normalStatus === 'pending' && (
-            <button
-              type="button"
-              onClick={() => { onMarkReviewing(); setOpen(false); }}
-              className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm text-secondary-600 hover:bg-secondary-50"
-            >
-              <Eye className="h-3.5 w-3.5" />
-              وضع قيد المراجعة
+          {items.map((it) => (
+            <button key={it.label} type="button" onClick={() => { it.fn(); setOpen(false); }} className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50">
+              <it.icon className="h-3.5 w-3.5" /> {it.label}
             </button>
-          )}
-          {(normalStatus === 'completed' || normalStatus === 'rejected') && (
-            <button
-              type="button"
-              onClick={() => { onReopen(); setOpen(false); }}
-              className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50"
-            >
-              <RefreshCw className="h-3.5 w-3.5" />
-              إعادة فتح الطلب
-            </button>
-          )}
+          ))}
         </div>
       )}
     </div>
   );
 };
 
-// ─── DetailDrawer ─────────────────────────────────────────────────────────────
+// ── Activity timeline ───────────────────────────────────────────────────────
+const ACTIVITY_META = {
+  submitted:    { label: 'أبدى الطالب اهتمامه', icon: Send,       tone: 'text-gray-400 bg-gray-100' },
+  contacted:    { label: 'تم التواصل مع الطالب', icon: PhoneCall,  tone: 'text-secondary-700 bg-secondary-50' },
+  following_up: { label: 'وُضع قيد المتابعة',    icon: Clock,      tone: 'text-accent-700 bg-accent-50' },
+  closed:       { label: 'أُغلق الطلب',          icon: XCircle,    tone: 'text-gray-500 bg-gray-100' },
+  reopened:     { label: 'أُعيد فتح الطلب',       icon: RefreshCw,  tone: 'text-warning-700 bg-warning-50' },
+  note:         { label: 'ملاحظة داخلية',        icon: StickyNote, tone: 'text-primary bg-primary/10' },
+};
 
-const DRow = ({ label, value, mono = false }) => (
+const Timeline = ({ request }) => {
+  const events = useMemo(() => {
+    const list = Array.isArray(request.activity) ? [...request.activity] : [];
+    if (request.createdAt) list.push({ at: request.createdAt, type: 'submitted' });
+    return list.filter((e) => e && e.type).sort((a, b) => {
+      const da = toDate(a.at)?.getTime() || 0;
+      const db2 = toDate(b.at)?.getTime() || 0;
+      return db2 - da;
+    });
+  }, [request]);
+  if (!events.length) return null;
+  return (
+    <ol className="space-y-3">
+      {events.map((e, i) => {
+        const meta = ACTIVITY_META[e.type] || ACTIVITY_META.note;
+        const Icon = meta.icon;
+        return (
+          <li key={i} className="flex gap-3">
+            <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${meta.tone}`}><Icon className="h-3.5 w-3.5" /></div>
+            <div className="min-w-0 flex-1 pt-0.5">
+              <p className="text-sm font-medium text-gray-800">{meta.label}</p>
+              {e.note && <p className="mt-0.5 whitespace-pre-wrap text-sm text-gray-600">{e.note}</p>}
+              <p className="mt-0.5 text-xs text-gray-400">{formatDateTime(e.at)}{e.by ? ` · ${e.by}` : ''}</p>
+            </div>
+          </li>
+        );
+      })}
+    </ol>
+  );
+};
+
+const DRow = ({ label, value, mono }) => (
   <div className="flex items-start justify-between gap-4 border-b border-gray-100 py-2.5 last:border-0">
     <span className="shrink-0 text-sm text-gray-500">{label}</span>
     <span className={`text-end text-sm font-semibold text-gray-900 ${mono ? 'font-mono text-xs' : ''}`}>{value || '—'}</span>
   </div>
 );
 
-const DetailDrawer = ({ request, onClose, onComplete, onReject, onMarkReviewing, onReopen, busy }) => {
-  const status = normalizeStatus(request.status);
-  const isPendingOrReviewing = status === 'pending' || status === 'reviewing';
+// ── Detail side panel ───────────────────────────────────────────────────────
+const DetailPanel = ({ request, note, onNoteChange, onSaveNote, onSetStatus, onAskClose, onClose, onCopied, busy, branchName }) => {
+  const s = normalizeStatus(request.status);
+  const phone = getStudentPhone(request);
+  const name = getStudentName(request);
+  const actions = NEXT_ACTIONS[s] || [];
+  const chips = [experienceLabel(request.experience), preferredTimeLabel(request.preferredTime)].filter(Boolean);
+  const noteDirty = (note || '').trim() !== (request.adminNote || '').trim();
 
-  const footer = isPendingOrReviewing ? (
+  const btnCls = (primary) => primary
+    ? 'bg-primary text-white hover:bg-primary-700'
+    : 'border border-gray-200 text-gray-700 hover:bg-gray-50';
+
+  const footer = (
     <div className="flex w-full flex-col gap-2.5">
-      <button
-        onClick={onComplete}
-        disabled={busy}
-        className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-success-600 py-3 text-sm font-semibold text-white hover:bg-success-700 disabled:opacity-60"
-      >
-        {busy === 'completing' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-        قبول الطلب
-      </button>
-      <button
-        onClick={onReject}
-        disabled={busy}
-        className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-danger-200 bg-danger-50 py-3 text-sm font-semibold text-danger-600 hover:bg-danger-100 disabled:opacity-60"
-      >
-        <X className="h-4 w-4" />
-        رفض الطلب
-      </button>
-      {status === 'pending' && (
-        <button
-          onClick={onMarkReviewing}
-          disabled={busy}
-          className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-secondary-200 bg-secondary-50 py-2.5 text-sm font-medium text-secondary-700 hover:bg-secondary-100 disabled:opacity-60"
-        >
-          <Eye className="h-4 w-4" />
-          وضع قيد المراجعة
+      {actions.map((a) => (
+        <button key={a.to} onClick={() => onSetStatus(request, a.to)} disabled={!!busy}
+          className={`inline-flex w-full items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-semibold disabled:opacity-60 ${btnCls(a.primary)}`}>
+          {busy === 'status' ? <Loader2 className="h-4 w-4 animate-spin" /> : <a.icon className="h-4 w-4" />} {a.label}
+        </button>
+      ))}
+      {isOpen(s) && (
+        <button onClick={() => onAskClose(request)} disabled={!!busy}
+          className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-gray-200 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-60">
+          <XCircle className="h-4 w-4" /> إغلاق الطلب
+        </button>
+      )}
+      {s === STATUS.CLOSED && (
+        <button onClick={() => onSetStatus(request, STATUS.NEW)} disabled={!!busy}
+          className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-gray-200 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-60">
+          {busy === 'status' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} إعادة فتح الطلب
         </button>
       )}
     </div>
-  ) : (
-    <button
-      onClick={onReopen}
-      className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-gray-200 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50"
-    >
-      <RefreshCw className="h-4 w-4" />
-      إعادة فتح الطلب
-    </button>
   );
 
   return (
-    <AdminModal
-      open
-      onClose={onClose}
-      size="md"
-      title="تفاصيل الطلب"
-      badge={<StatusBadge status={request.status} />}
-      footer={footer}
-    >
-      <div className="space-y-5">
-
-          {/* Student */}
-          <section>
-            <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-400">معلومات الطالب</p>
-            <DRow label="الاسم الكامل" value={request.name} />
-            <DRow label="البريد الإلكتروني" value={request.email} mono />
-            {request.phone && <DRow label="الهاتف" value={request.phone} />}
-            {request.userId && <DRow label="معرف الطالب" value={request.userId} mono />}
-          </section>
-
-          {/* Request */}
-          <section>
-            <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-400">تفاصيل الطلب</p>
-            <DRow label="نوع الدورة" value={request.course || request.courseName} />
-            <DRow label="التاريخ المفضل" value={request.preferredDate} />
-            <DRow label="تاريخ الإرسال" value={fmtDate(request.createdAt)} />
-            {request.updatedAt && <DRow label="آخر تحديث" value={fmtDate(request.updatedAt)} />}
-          </section>
-
-          {/* Notes */}
-          {request.message && (
-            <section>
-              <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-400">ملاحظات الطالب</p>
-              <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700 whitespace-pre-wrap">
-                {request.message}
-              </div>
-            </section>
-          )}
-
-          {/* Rejection reason */}
-          {status === 'rejected' && request.rejectionReason && (
-            <div className="rounded-xl border border-danger-200 bg-danger-50 px-4 py-3 text-sm text-danger-700">
-              <p className="mb-1 font-semibold">سبب الرفض:</p>
-              <p>{request.rejectionReason}</p>
+    <AdminModal open onClose={onClose} size="md" title={name || 'تفاصيل الاهتمام'} badge={<StatusBadge status={request.status} />} footer={footer}>
+      <div className="space-y-6">
+        {/* Student + contact — the fast path */}
+        <section className="rounded-xl border border-gray-100 bg-gray-50/60 p-4">
+          <div className="flex items-center gap-3">
+            <Avatar name={name} />
+            <div className="min-w-0 flex-1">
+              <p className="truncate font-semibold text-gray-900">{name || '—'}</p>
+              <p className="truncate text-xs text-gray-500" dir="ltr">{getStudentEmail(request) || '—'}</p>
             </div>
-          )}
+          </div>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+            <span className="text-sm text-gray-600" dir="ltr">{phone || 'لا يوجد رقم هاتف'}</span>
+            <ContactButtons phone={phone} size="lg" onCopied={onCopied} />
+          </div>
+        </section>
+
+        {/* Interest details */}
+        <section>
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400">تفاصيل الاهتمام</p>
+          <DRow label="الدورة المطلوبة" value={getTopic(request)} />
+          {request.experience && <DRow label="المستوى" value={experienceLabel(request.experience)} />}
+          {request.preferredTime && <DRow label="الوقت المفضل" value={preferredTimeLabel(request.preferredTime)} />}
+          <DRow label="الفرع" value={branchName || request.branchId} />
+          <DRow label="تاريخ الطلب" value={formatDateTime(request.createdAt)} />
+          {request.closedReason && <DRow label="سبب الإغلاق" value={request.closedReason} />}
+        </section>
+
+        {/* Student note */}
+        {request.note && (
+          <section>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400">وصف الطالب</p>
+            <div className="whitespace-pre-wrap rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-700">{request.note}</div>
+          </section>
+        )}
+
+        {/* Internal admin note */}
+        <section>
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400">ملاحظة داخلية</p>
+          <textarea value={note} onChange={(e) => onNoteChange(e.target.value)} rows={2}
+            placeholder="سجّل نتيجة المكالمة، تفاصيل المتابعة…"
+            className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm text-gray-800 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" />
+          <button onClick={() => onSaveNote(request)} disabled={!noteDirty || busy === 'note'}
+            className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-700 disabled:opacity-40">
+            {busy === 'note' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <StickyNote className="h-3.5 w-3.5" />} حفظ الملاحظة
+          </button>
+        </section>
+
+        {/* Timeline */}
+        <section>
+          <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-400">السجل الزمني</p>
+          <Timeline request={request} />
+        </section>
+
+        {chips.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {chips.map((c) => <span key={c} className="rounded-md bg-gray-100 px-2 py-0.5 text-xs text-gray-600">{c}</span>)}
+          </div>
+        )}
       </div>
     </AdminModal>
   );
 };
 
-// ─── Main page ────────────────────────────────────────────────────────────────
-
+// ── Main page ───────────────────────────────────────────────────────────────
 const TrainingRequestsPage = () => {
-  const { selectedBranchId } = useBranch();
+  const { selectedBranchId, branches } = useBranch();
+  const { adminData } = useAuth();
+  const { show: toast } = useToast();
+  const actorName = adminData?.name || 'الإدارة';
+  const branchName = useMemo(
+    () => branches?.find?.((b) => (b.id || b.branchId) === selectedBranchId)?.name || selectedBranchId,
+    [branches, selectedBranchId],
+  );
 
-  // ── Data ──────────────────────────────────────────────────────────────────
   const [requests, setRequests] = useState([]);
-  const [loading,  setLoading]  = useState(true);
-  const [loadErr,  setLoadErr]  = useState('');
+  const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState('');
 
-  // ── Filters ───────────────────────────────────────────────────────────────
-  const [search,        setSearch]        = useState('');
-  const [statusFilter,  setStatusFilter]  = useState('all');
-  const [courseFilter,  setCourseFilter]  = useState('all');
-  const dSearch = useDebounce(search, 280);
+  const [search, setSearch] = useState('');
+  const dSearch = useDebounce(search, 250);
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [topicFilter, setTopicFilter] = useState('all');
+  const [openOnly, setOpenOnly] = useState(false);
 
-  // ── Selection ─────────────────────────────────────────────────────────────
-  const [selected, setSelected] = useState(new Set());
+  const [drawerId, setDrawerId] = useState(null);
+  const [noteDraft, setNoteDraft] = useState('');
+  const [busy, setBusy] = useState({});           // { [id]: 'status' | 'note' }
+  const [closeTarget, setCloseTarget] = useState(null);
+  const [closeReason, setCloseReason] = useState('');
 
-  // ── UI state ──────────────────────────────────────────────────────────────
-  const [drawer,       setDrawer]       = useState(null);
-  const [rejectTarget, setRejectTarget] = useState(null);
-  const [rejectReason, setRejectReason] = useState('');
-  const [busy,         setBusy]         = useState({});  // { [id]: 'completing'|'rejecting'|'reviewing'|'reopening' }
-  const [bulkBusy,     setBulkBusy]     = useState(false);
-
-  // ── Real-time stream ───────────────────────────────────────────────────────
+  // ── Real-time stream (same shape as before → existing composite index applies) ─
   useEffect(() => {
-    if (!selectedBranchId) {
-      setRequests([]);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    setLoadErr('');
+    if (!selectedBranchId) { setRequests([]); setLoading(false); return undefined; }
+    setLoading(true); setLoadErr('');
     const q = query(
       collection(db, 'branches', selectedBranchId, 'registrations'),
       where('type', '==', 'training_request'),
-      orderBy('createdAt', 'desc')
+      orderBy('createdAt', 'desc'),
     );
-    const unsub = onSnapshot(
-      q,
+    const unsub = onSnapshot(q,
       (snap) => { setRequests(snap.docs.map((d) => ({ id: d.id, ...d.data() }))); setLoading(false); },
-      (err) => { console.error(err); setLoadErr('فشل في تحميل الطلبات'); setLoading(false); }
+      (err) => { console.error(err); setLoadErr('فشل في تحميل الطلبات'); setLoading(false); },
     );
     return () => unsub();
   }, [selectedBranchId]);
 
-  // ── Derived data ───────────────────────────────────────────────────────────
-
-  const counts = useMemo(() => {
-    const pending   = requests.filter((r) => normalizeStatus(r.status) === 'pending').length;
-    const reviewing = requests.filter((r) => normalizeStatus(r.status) === 'reviewing').length;
-    const completed = requests.filter((r) => normalizeStatus(r.status) === 'completed').length;
-    const rejected  = requests.filter((r) => normalizeStatus(r.status) === 'rejected').length;
-    // "today" counts: completed or rejected today
-    const completedToday = requests.filter(
-      (r) => normalizeStatus(r.status) === 'completed' && isToday(r.updatedAt)
-    ).length;
-    const rejectedToday = requests.filter(
-      (r) => normalizeStatus(r.status) === 'rejected' && isToday(r.updatedAt)
-    ).length;
-    return { pending, reviewing, completed, rejected, completedToday, rejectedToday, total: requests.length };
-  }, [requests]);
-
-  const courseOptions = useMemo(
-    () => [...new Set(requests.map((r) => r.course || r.courseName).filter(Boolean))].sort(),
-    [requests]
-  );
-
-  // Sort: pending first, then reviewing, then completed/rejected by date desc
-  const sortedRequests = useMemo(() => {
-    const order = { pending: 0, reviewing: 1, completed: 2, rejected: 3 };
-    return [...requests].sort((a, b) => {
-      const oa = order[normalizeStatus(a.status)] ?? 4;
-      const ob = order[normalizeStatus(b.status)] ?? 4;
-      if (oa !== ob) return oa - ob;
-      const da = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(a.createdAt || 0);
-      const db_ = b.createdAt?.toDate ? b.createdAt.toDate() : new Date(b.createdAt || 0);
-      return db_ - da;
+  // ── Derived: counts ─────────────────────────────────────────────────────────
+  const stats = useMemo(() => {
+    const by = { new: 0, contacted: 0, following_up: 0, closed: 0 };
+    let newToday = 0;
+    requests.forEach((r) => {
+      const s = normalizeStatus(r.status);
+      by[s] += 1;
+      if (s === STATUS.NEW && isSameDay(r.createdAt)) newToday += 1;
     });
+    const open = by.new + by.contacted + by.following_up;
+    return { ...by, total: requests.length, newToday, open };
   }, [requests]);
 
+  // ── Derived: most-requested trainings (case-insensitive grouping) ──────────
+  const topTopics = useMemo(() => {
+    const map = new Map();
+    requests.forEach((r) => {
+      const label = getTopic(r);
+      if (!label) return;
+      const key = label.toLowerCase();
+      const cur = map.get(key) || { key, label, count: 0 };
+      cur.count += 1;
+      map.set(key, cur);
+    });
+    return [...map.values()].sort((a, b) => b.count - a.count).slice(0, 6);
+  }, [requests]);
+
+  // ── Derived: requests-by-date (last 14 days) ────────────────────────────────
+  const dateBuckets = useMemo(() => {
+    const days = 14;
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const buckets = [];
+    for (let i = days - 1; i >= 0; i -= 1) {
+      const d = new Date(today); d.setDate(today.getDate() - i);
+      buckets.push({ key: `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`, label: formatDayMonth(d), date: d, count: 0 });
+    }
+    const index = new Map(buckets.map((b) => [b.key, b]));
+    let inWindow = 0;
+    requests.forEach((r) => {
+      const d = toDate(r.createdAt);
+      if (!d) return;
+      const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+      const b = index.get(key);
+      if (b) { b.count += 1; inWindow += 1; }
+    });
+    return { buckets, inWindow };
+  }, [requests]);
+
+  // Unique topics keyed by a canonical lowercase key (matches TopTopics keys and
+  // the row filter) while displaying the original-case label.
+  const topicOptions = useMemo(() => {
+    const m = new Map();
+    requests.forEach((r) => {
+      const label = getTopic(r);
+      if (label && !m.has(label.toLowerCase())) m.set(label.toLowerCase(), label);
+    });
+    return [...m.entries()].map(([key, label]) => ({ key, label })).sort((a, b) => a.label.localeCompare(b.label, 'ar'));
+  }, [requests]);
+
+  // ── Derived: filtered + sorted rows ─────────────────────────────────────────
   const rows = useMemo(() => {
     const term = dSearch.trim().toLowerCase();
-    return sortedRequests.filter((r) => {
-      if (statusFilter !== 'all' && normalizeStatus(r.status) !== statusFilter) return false;
-      if (courseFilter !== 'all' && (r.course || r.courseName) !== courseFilter) return false;
+    const filtered = requests.filter((r) => {
+      const s = normalizeStatus(r.status);
+      if (openOnly && !isOpen(s)) return false;
+      if (statusFilter !== 'all' && s !== statusFilter) return false;
+      if (topicFilter !== 'all' && getTopic(r).toLowerCase() !== topicFilter) return false;
       if (term) {
-        const haystack = `${r.name || ''} ${r.email || ''} ${r.course || ''} ${r.courseName || ''} ${r.phone || ''}`.toLowerCase();
-        if (!haystack.includes(term)) return false;
+        const hay = `${getStudentName(r)} ${getStudentEmail(r)} ${getStudentPhone(r)} ${getTopic(r)}`.toLowerCase();
+        if (!hay.includes(term)) return false;
       }
       return true;
     });
-  }, [sortedRequests, statusFilter, courseFilter, dSearch]);
+    return filtered.sort((a, b) => {
+      const oa = STATUS_ORDER[normalizeStatus(a.status)];
+      const ob = STATUS_ORDER[normalizeStatus(b.status)];
+      if (oa !== ob) return oa - ob;
+      return (toDate(b.createdAt)?.getTime() || 0) - (toDate(a.createdAt)?.getTime() || 0);
+    });
+  }, [requests, dSearch, statusFilter, topicFilter, openOnly]);
 
-  // ── Update helper ──────────────────────────────────────────────────────────
+  const liveDrawer = useMemo(() => requests.find((r) => r.id === drawerId) || null, [requests, drawerId]);
+  const openDrawer = (r) => { setNoteDraft(r.adminNote || ''); setDrawerId(r.id); };
 
-  const updateRequest = useCallback(async (id, updates) => {
-    const ref = doc(db, 'branches', selectedBranchId, 'registrations', id);
-    await updateDoc(ref, { ...updates, updatedAt: serverTimestamp() });
-  }, [selectedBranchId]);
-
-  // ── Handlers ──────────────────────────────────────────────────────────────
-
-  const handleComplete = useCallback(async (req) => {
-    setBusy((p) => ({ ...p, [req.id]: 'completing' }));
+  // ── Mutations ───────────────────────────────────────────────────────────────
+  const setStatus = useCallback(async (req, next, reason) => {
+    setBusy((p) => ({ ...p, [req.id]: 'status' }));
     try {
-      await updateRequest(req.id, { status: 'completed' });
-      setDrawer((d) => (d?.id === req.id ? null : d));
+      const entry = { at: Timestamp.now(), type: next === STATUS.NEW ? 'reopened' : next, by: actorName };
+      if (reason) entry.note = reason;
+      const updates = { status: next, updatedAt: serverTimestamp(), activity: arrayUnion(entry) };
+      if (next === STATUS.CONTACTED) updates.contactedAt = serverTimestamp();
+      if (next === STATUS.FOLLOWING_UP) updates.followingUpAt = serverTimestamp();
+      if (next === STATUS.CLOSED) { updates.closedAt = serverTimestamp(); updates.closedReason = reason || ''; }
+      if (next === STATUS.NEW) updates.closedReason = '';
+      await updateDoc(doc(db, 'branches', selectedBranchId, 'registrations', req.id), updates);
+      toast('success', {
+        [STATUS.CONTACTED]:    'تم وضع علامة "تم التواصل"',
+        [STATUS.FOLLOWING_UP]: 'تم وضع الطلب قيد المتابعة',
+        [STATUS.CLOSED]:       'تم إغلاق الطلب',
+        [STATUS.NEW]:          'تمت إعادة فتح الطلب',
+      }[next]);
     } catch (err) {
-      setLoadErr('فشل تحديث الحالة: ' + err.message);
+      toast('error', 'فشل تحديث الحالة: ' + (err.message || ''));
     } finally {
       setBusy((p) => { const n = { ...p }; delete n[req.id]; return n; });
     }
-  }, [updateRequest]);
+  }, [selectedBranchId, actorName, toast]);
 
-  const openReject = (req) => { setRejectReason(''); setRejectTarget(req); };
-
-  const confirmReject = useCallback(async () => {
-    if (!rejectTarget) return;
-    const req = rejectTarget;
-    setRejectTarget(null);
-    setBusy((p) => ({ ...p, [req.id]: 'rejecting' }));
+  const saveNote = useCallback(async (req) => {
+    const text = noteDraft.trim();
+    setBusy((p) => ({ ...p, [req.id]: 'note' }));
     try {
-      await updateRequest(req.id, {
-        status: 'rejected',
-        rejectionReason: rejectReason || '',
+      await updateDoc(doc(db, 'branches', selectedBranchId, 'registrations', req.id), {
+        adminNote: text,
+        updatedAt: serverTimestamp(),
+        activity: arrayUnion({ at: Timestamp.now(), type: 'note', by: actorName, note: text }),
       });
-      setRejectReason('');
-      setDrawer((d) => (d?.id === req.id ? null : d));
+      toast('success', 'تم حفظ الملاحظة');
     } catch (err) {
-      setLoadErr('فشل الرفض: ' + err.message);
+      toast('error', 'فشل حفظ الملاحظة: ' + (err.message || ''));
     } finally {
       setBusy((p) => { const n = { ...p }; delete n[req.id]; return n; });
     }
-  }, [rejectTarget, rejectReason, updateRequest]);
+  }, [noteDraft, selectedBranchId, actorName, toast]);
 
-  const handleMarkReviewing = useCallback(async (req) => {
-    setBusy((p) => ({ ...p, [req.id]: 'reviewing' }));
-    try {
-      await updateRequest(req.id, { status: 'reviewing' });
-    } catch (err) {
-      setLoadErr('فشل تحديث الحالة: ' + err.message);
-    } finally {
-      setBusy((p) => { const n = { ...p }; delete n[req.id]; return n; });
-    }
-  }, [updateRequest]);
-
-  const handleReopen = useCallback(async (req) => {
-    setBusy((p) => ({ ...p, [req.id]: 'reopening' }));
-    try {
-      await updateRequest(req.id, { status: 'pending', rejectionReason: '' });
-      setDrawer((d) => (d?.id === req.id ? null : d));
-    } catch (err) {
-      setLoadErr('فشل إعادة فتح الطلب: ' + err.message);
-    } finally {
-      setBusy((p) => { const n = { ...p }; delete n[req.id]; return n; });
-    }
-  }, [updateRequest]);
-
-  // ── Bulk operations ────────────────────────────────────────────────────────
-
-  const bulkComplete = async () => {
-    setBulkBusy(true);
-    const targets = rows.filter(
-      (r) => selected.has(r.id) && ['pending', 'reviewing'].includes(normalizeStatus(r.status))
-    );
-    try {
-      await Promise.all(targets.map((r) => updateRequest(r.id, { status: 'completed' })));
-    } catch (err) {
-      setLoadErr('فشلت بعض العمليات: ' + err.message);
-    } finally {
-      setBulkBusy(false);
-      setSelected(new Set());
-    }
-  };
-
-  const bulkReject = () => {
-    // Open reject modal with null request = bulk mode
-    setRejectReason('');
-    setRejectTarget({ __bulk: true, ids: [...selected].filter((id) => {
-      const req = requests.find((r) => r.id === id);
-      return req && ['pending', 'reviewing'].includes(normalizeStatus(req.status));
-    }) });
-  };
-
-  const confirmBulkReject = useCallback(async () => {
-    if (!rejectTarget?.__bulk) return;
-    const ids = rejectTarget.ids;
-    setRejectTarget(null);
-    setBulkBusy(true);
-    try {
-      await Promise.all(ids.map((id) => updateRequest(id, { status: 'rejected', rejectionReason: rejectReason || '' })));
-      setRejectReason('');
-    } catch (err) {
-      setLoadErr('فشلت بعض العمليات: ' + err.message);
-    } finally {
-      setBulkBusy(false);
-      setSelected(new Set());
-    }
-  }, [rejectTarget, rejectReason, updateRequest]);
+  const confirmClose = useCallback(async () => {
+    const req = closeTarget;
+    if (!req) return;
+    setCloseTarget(null);
+    await setStatus(req, STATUS.CLOSED, closeReason.trim());
+    setCloseReason('');
+  }, [closeTarget, closeReason, setStatus]);
 
   const exportData = () => {
-    const data = selected.size ? rows.filter((r) => selected.has(r.id)) : rows;
-    if (!data.length) return;
-    exportToCsv(data, [
-      { key: 'name',          header: 'الاسم' },
-      { key: 'email',         header: 'البريد الإلكتروني' },
-      { key: 'course',        header: 'الدورة المطلوبة' },
-      { key: 'preferredDate', header: 'التاريخ المفضل' },
-      { key: 'status',        header: 'الحالة' },
-      { key: 'createdAt',     header: 'تاريخ الإرسال', type: 'date' },
-    ], generateFilename('training-requests', 'csv'));
+    if (!rows.length) { toast('warning', 'لا توجد بيانات للتصدير.'); return; }
+    exportToCsv(rows.map((r) => ({
+      name: getStudentName(r), email: getStudentEmail(r), phone: getStudentPhone(r),
+      topic: getTopic(r), status: STATUS_META[normalizeStatus(r.status)].label,
+      experience: experienceLabel(r.experience), preferredTime: preferredTimeLabel(r.preferredTime),
+      createdAt: r.createdAt,
+    })), [
+      { key: 'name', header: 'الاسم' },
+      { key: 'email', header: 'البريد الإلكتروني' },
+      { key: 'phone', header: 'الهاتف' },
+      { key: 'topic', header: 'الدورة المطلوبة' },
+      { key: 'status', header: 'الحالة' },
+      { key: 'experience', header: 'المستوى' },
+      { key: 'preferredTime', header: 'الوقت المفضل' },
+      { key: 'createdAt', header: 'تاريخ الطلب', type: 'date' },
+    ], generateFilename('training-interest', 'csv'));
   };
 
-  // ── Selection helpers ──────────────────────────────────────────────────────
+  const hasFilters = search || statusFilter !== 'all' || topicFilter !== 'all' || openOnly;
+  const clearFilters = () => { setSearch(''); setStatusFilter('all'); setTopicFilter('all'); setOpenOnly(false); };
+  const toggleStatus = (s) => setStatusFilter((p) => (p === s ? 'all' : s));
 
-  const toggleOne = (id) => setSelected((p) => {
-    const n = new Set(p);
-    n.has(id) ? n.delete(id) : n.add(id);
-    return n;
-  });
-  const toggleAll = () => setSelected(
-    selected.size === rows.length && rows.length > 0 ? new Set() : new Set(rows.map((r) => r.id))
-  );
-
-  const actionableSelected = useMemo(
-    () => [...selected].filter((id) => {
-      const r = requests.find((x) => x.id === id);
-      return r && ['pending', 'reviewing'].includes(normalizeStatus(r.status));
-    }).length,
-    [selected, requests]
-  );
-
-  // ── Guard ──────────────────────────────────────────────────────────────────
-
+  // ── Guard ────────────────────────────────────────────────────────────────────
   if (!selectedBranchId) {
     return (
       <div className="flex items-center justify-center py-24 text-center" dir="rtl">
@@ -497,306 +608,179 @@ const TrainingRequestsPage = () => {
     );
   }
 
-  // ── Render ─────────────────────────────────────────────────────────────────
-
   return (
     <div className="space-y-5" dir="rtl">
-
-      {/* ── Overlays ──────────────────────────────────────────────────────── */}
-
-      {/* Reject confirmation — single or bulk */}
+      {/* Close-with-reason dialog */}
       <AdminConfirmDialog
-        open={!!rejectTarget}
-        title="تأكيد الرفض"
-        message={
-          rejectTarget
-            ? (rejectTarget.__bulk
-                ? `سيتم رفض ${rejectTarget.ids.length} طلب محدد.`
-                : `رفض طلب ${rejectTarget.name || '—'} بخصوص ${rejectTarget.course || rejectTarget.courseName || '—'}`)
-            : ''
-        }
-        confirmLabel="رفض الطلب"
-        danger
+        open={!!closeTarget}
+        title="إغلاق الطلب"
+        message={closeTarget ? `إغلاق طلب اهتمام ${getStudentName(closeTarget) || '—'} بخصوص «${getTopic(closeTarget) || '—'}».` : ''}
+        confirmLabel="إغلاق الطلب"
+        danger={false}
         withReason
-        reasonLabel="سبب الرفض (اختياري — يُسجَّل للمراجعة الداخلية)"
-        reasonPlaceholder="أدخل سبب الرفض..."
-        reason={rejectReason}
-        onReasonChange={setRejectReason}
-        onConfirm={rejectTarget?.__bulk ? confirmBulkReject : confirmReject}
-        onCancel={() => setRejectTarget(null)}
+        reasonLabel="سبب الإغلاق (اختياري — يُسجَّل في السجل الزمني)"
+        reasonPlaceholder="مثال: لا يوجد طلب كافٍ لفتح المجموعة…"
+        reason={closeReason}
+        onReasonChange={setCloseReason}
+        onConfirm={confirmClose}
+        onCancel={() => { setCloseTarget(null); setCloseReason(''); }}
       />
 
-      {/* Detail Drawer */}
-      {drawer && (
-        <DetailDrawer
-          request={drawer}
-          onClose={() => setDrawer(null)}
-          onComplete={() => handleComplete(drawer)}
-          onReject={() => openReject(drawer)}
-          onMarkReviewing={() => handleMarkReviewing(drawer)}
-          onReopen={() => handleReopen(drawer)}
-          busy={busy[drawer.id]}
+      {/* Detail side panel */}
+      {liveDrawer && (
+        <DetailPanel
+          request={liveDrawer}
+          note={noteDraft}
+          onNoteChange={setNoteDraft}
+          onSaveNote={saveNote}
+          onSetStatus={(req, next) => setStatus(req, next)}
+          onAskClose={(req) => { setCloseReason(''); setCloseTarget(req); }}
+          onClose={() => setDrawerId(null)}
+          onCopied={() => toast('success', 'تم نسخ الرقم')}
+          busy={busy[liveDrawer.id]}
+          branchName={branchName}
         />
       )}
 
-      {/* ── Header ────────────────────────────────────────────────────────── */}
-
+      {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">طلبات الدورات التكوينية</h1>
+          <h1 className="text-2xl font-bold text-gray-900">طلبات الاهتمام بالدورات</h1>
           <p className="mt-0.5 text-sm text-gray-500">
-            صندوق بريد طلبات الاهتمام من الطلاب — {counts.total} طلب إجمالاً
+            قياس الطلب على دورات جديدة ومتابعة الطلاب المهتمين — ليست تسجيلاً في دورة.
           </p>
         </div>
-        <button
-          onClick={exportData}
-          className="inline-flex items-center gap-1.5 rounded-xl border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-        >
-          <Download className="h-4 w-4" />
-          تصدير
+        <button onClick={exportData} className="inline-flex items-center gap-1.5 rounded-xl border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
+          <Download className="h-4 w-4" /> تصدير
         </button>
       </div>
 
-      {/* ── Error banner ──────────────────────────────────────────────────── */}
-
       {loadErr && (
         <div className="flex items-center gap-3 rounded-xl border border-danger-200 bg-danger-50 px-4 py-3 text-sm text-danger-700">
-          <AlertCircle className="h-4 w-4 shrink-0" />
-          <span>{loadErr}</span>
-          <button onClick={() => setLoadErr('')} className="ms-auto text-danger-500 hover:text-danger-700">
-            <X className="h-4 w-4" />
-          </button>
+          <AlertCircle className="h-4 w-4 shrink-0" /><span>{loadErr}</span>
+          <button onClick={() => setLoadErr('')} className="ms-auto text-danger-500 hover:text-danger-700"><X className="h-4 w-4" /></button>
         </div>
       )}
 
-      {/* ── Stats cards ───────────────────────────────────────────────────── */}
-
+      {/* Metrics */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-        <StatCard
-          value={counts.pending} label="قيد الانتظار"
-          icon={<Clock className="h-5 w-5 text-warning-600" />} iconBg="bg-warning-50"
-          active={statusFilter === 'pending'}
-          onClick={() => setStatusFilter((p) => p === 'pending' ? 'all' : 'pending')}
-        />
-        <StatCard
-          value={counts.reviewing} label="قيد المراجعة"
-          icon={<Eye className="h-5 w-5 text-secondary-600" />} iconBg="bg-secondary-50"
-          active={statusFilter === 'reviewing'}
-          onClick={() => setStatusFilter((p) => p === 'reviewing' ? 'all' : 'reviewing')}
-        />
-        <StatCard
-          value={counts.completed} label="مكتملة"
-          sub={counts.completedToday || undefined}
-          icon={<CheckCircle className="h-5 w-5 text-success-600" />} iconBg="bg-success-50"
-          active={statusFilter === 'completed'}
-          onClick={() => setStatusFilter((p) => p === 'completed' ? 'all' : 'completed')}
-        />
-        <StatCard
-          value={counts.rejected} label="مرفوضة"
-          icon={<XCircle className="h-5 w-5 text-danger-500" />} iconBg="bg-danger-50"
-          active={statusFilter === 'rejected'}
-          onClick={() => setStatusFilter((p) => p === 'rejected' ? 'all' : 'rejected')}
-        />
-        <StatCard
-          value={counts.total} label="الإجمالي"
-          icon={<BookOpen className="h-5 w-5 text-primary" />} iconBg="bg-primary/10"
-          active={statusFilter === 'all'}
-          onClick={() => setStatusFilter('all')}
-          // spans 2 columns on 2-col mobile grid to center it
-        />
+        <StatCard value={stats.total} label="إجمالي الاهتمامات"
+          icon={<Users className="h-5 w-5 text-primary" />} iconBg="bg-primary/10"
+          active={statusFilter === 'all' && !openOnly} onClick={() => { setStatusFilter('all'); setOpenOnly(false); }} />
+        <StatCard value={stats.new} label="جديدة — بانتظار التواصل" sub={stats.newToday ? `${stats.newToday} اليوم` : undefined}
+          icon={<Sparkles className="h-5 w-5 text-warning-600" />} iconBg="bg-warning-50"
+          active={statusFilter === STATUS.NEW} onClick={() => toggleStatus(STATUS.NEW)} />
+        <StatCard value={stats.contacted} label="تم التواصل"
+          icon={<PhoneCall className="h-5 w-5 text-secondary-600" />} iconBg="bg-secondary-50"
+          active={statusFilter === STATUS.CONTACTED} onClick={() => toggleStatus(STATUS.CONTACTED)} />
+        <StatCard value={stats.following_up} label="قيد المتابعة"
+          icon={<Clock className="h-5 w-5 text-accent-600" />} iconBg="bg-accent-50"
+          active={statusFilter === STATUS.FOLLOWING_UP} onClick={() => toggleStatus(STATUS.FOLLOWING_UP)} />
+        <StatCard value={stats.closed} label="مغلقة"
+          icon={<Archive className="h-5 w-5 text-gray-500" />} iconBg="bg-gray-100"
+          active={statusFilter === STATUS.CLOSED} onClick={() => toggleStatus(STATUS.CLOSED)} />
       </div>
 
-      {/* ── Filters ───────────────────────────────────────────────────────── */}
-
-      <div className="flex flex-col gap-2.5 sm:flex-row">
-        <div className="relative flex-1">
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="ابحث بالاسم، البريد، أو نوع الدورة..."
-            startIcon={<Search className="h-4 w-4" />}
-          />
+      {/* Demand insight: most requested + trend */}
+      {requests.length > 0 && (
+        <div className="grid gap-3 lg:grid-cols-2">
+          <TopTopics topics={topTopics} activeTopic={topicFilter} onPick={setTopicFilter} />
+          <RequestsByDate buckets={dateBuckets.buckets} total={dateBuckets.inWindow} />
         </div>
-        {courseOptions.length > 0 && (
-          <select
-            value={courseFilter}
-            onChange={(e) => setCourseFilter(e.target.value)}
-            className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
-          >
+      )}
+
+      {/* Filters */}
+      <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
+        <div className="relative flex-1 sm:min-w-[220px]">
+          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ابحث بالاسم، البريد، الهاتف، أو الدورة…" startIcon={<Search className="h-4 w-4" />} />
+        </div>
+        {topicOptions.length > 0 && (
+          <select value={topicFilter} onChange={(e) => setTopicFilter(e.target.value)} className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20">
             <option value="all">جميع الدورات</option>
-            {courseOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+            {topicOptions.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
           </select>
+        )}
+        <button type="button" onClick={() => setOpenOnly((v) => !v)}
+          className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-sm font-medium transition-colors
+            ${openOnly ? 'border-warning-300 bg-warning-50 text-warning-700' : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'}`}>
+          <Flame className="h-4 w-4" /> بحاجة لمتابعة {stats.open ? `(${stats.open})` : ''}
+        </button>
+        {hasFilters && (
+          <button onClick={clearFilters} className="inline-flex items-center gap-1 rounded-xl px-2.5 py-2 text-sm text-gray-500 hover:text-gray-700">
+            <X className="h-3.5 w-3.5" /> مسح
+          </button>
         )}
       </div>
 
-      {/* ── Bulk action bar ────────────────────────────────────────────────── */}
-
-      {selected.size > 0 && (
-        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-primary/20 bg-primary/5 px-4 py-3">
-          <span className="text-sm font-medium text-primary">
-            تم اختيار {selected.size} طلب
-          </span>
-          <div className="ms-auto flex flex-wrap gap-2">
-            {actionableSelected > 0 && (
-              <>
-                <button
-                  onClick={bulkComplete}
-                  disabled={bulkBusy}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-success-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-success-700 disabled:opacity-50"
-                >
-                  {bulkBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-                  قبول ({actionableSelected})
-                </button>
-                <button
-                  onClick={bulkReject}
-                  disabled={bulkBusy}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-danger-200 bg-danger-50 px-3 py-1.5 text-xs font-semibold text-danger-600 hover:bg-danger-100 disabled:opacity-50"
-                >
-                  <X className="h-3.5 w-3.5" />
-                  رفض ({actionableSelected})
-                </button>
-              </>
-            )}
-            <button
-              onClick={exportData}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50"
-            >
-              <Download className="h-3.5 w-3.5" />
-              تصدير
-            </button>
-            <button
-              onClick={() => setSelected(new Set())}
-              className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-gray-500 hover:text-gray-700"
-            >
-              <X className="h-3.5 w-3.5" />
-              إلغاء
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* ── Content ───────────────────────────────────────────────────────── */}
-
+      {/* Content */}
       {loading ? (
         <LoadingState />
-
       ) : rows.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-gray-200 bg-white p-14 text-center">
-          <BookOpen className="mx-auto mb-4 h-12 w-12 text-gray-200" />
+          <Users className="mx-auto mb-4 h-12 w-12 text-gray-200" />
           <p className="text-gray-400">
-            {search || statusFilter !== 'all' || courseFilter !== 'all'
-              ? 'لا توجد طلبات مطابقة للفلتر الحالي.'
-              : 'لا توجد طلبات دورات تكوينية حتى الآن.'}
+            {hasFilters ? 'لا توجد طلبات مطابقة للتصفية الحالية.' : 'لا توجد طلبات اهتمام بعد. ستظهر هنا فور إبداء الطلاب اهتمامهم بدورات جديدة.'}
           </p>
         </div>
-
       ) : (
         <>
-          {/* ── Desktop table ──────────────────────────────────────────────── */}
+          {/* Desktop table */}
           <div className="hidden overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm sm:block">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
-                  <th className="w-10 px-4 py-3">
-                    <input
-                      type="checkbox"
-                      checked={selected.size === rows.length && rows.length > 0}
-                      onChange={toggleAll}
-                      className="h-4 w-4 rounded border-gray-300 accent-primary"
-                    />
-                  </th>
-                  {['الطالب', 'الدورة المطلوبة', 'تاريخ الإرسال', 'الحالة', 'الإجراءات'].map((h) => (
-                    <th key={h} className="px-4 py-3 text-start text-xs font-semibold uppercase tracking-wide text-gray-500">
-                      {h}
-                    </th>
+                  {['الطالب', 'الدورة المطلوبة', 'التواصل', 'منذ', 'الحالة', 'الإجراء'].map((h) => (
+                    <th key={h} className="px-4 py-3 text-start text-xs font-semibold uppercase tracking-wide text-gray-500">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {rows.map((req) => {
-                  const status   = normalizeStatus(req.status);
-                  const isBusy   = busy[req.id];
-                  const isActionable = status === 'pending' || status === 'reviewing';
-                  const isPending = status === 'pending';
+                  const s = normalizeStatus(req.status);
+                  const primary = primaryActionFor(req.status);
+                  const isBusy = busy[req.id];
+                  const stale = s === STATUS.NEW && ageInDays(req.createdAt) >= STALE_DAYS;
                   return (
-                    <tr
-                      key={req.id}
-                      className={`transition-colors hover:bg-gray-50/70
-                        ${selected.has(req.id) ? 'bg-primary/5' : ''}
-                        ${isPending ? 'border-s-2 border-s-warning-400' : ''}`}
-                    >
-                      <td className="px-4 py-3.5">
-                        <input
-                          type="checkbox"
-                          checked={selected.has(req.id)}
-                          onChange={() => toggleOne(req.id)}
-                          className="h-4 w-4 rounded border-gray-300 accent-primary"
-                        />
+                    <tr key={req.id} onClick={() => openDrawer(req)}
+                      className={`cursor-pointer transition-colors hover:bg-gray-50/70 ${stale ? 'border-s-2 border-s-danger-400' : ''}`}>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <Avatar name={getStudentName(req)} size="sm" />
+                          <div className="min-w-0">
+                            <p className="font-semibold text-gray-900">{getStudentName(req) || '—'}</p>
+                            <p className="truncate text-xs text-gray-400" dir="ltr">{getStudentEmail(req)}</p>
+                          </div>
+                        </div>
                       </td>
-
-                      {/* Student */}
-                      <td className="px-4 py-3.5">
-                        <p className="font-semibold text-gray-900">{req.name || '—'}</p>
-                        <p className="mt-0.5 text-xs text-gray-400 truncate max-w-[160px]">{req.email || ''}</p>
+                      <td className="px-4 py-3">
+                        <p className="max-w-[200px] truncate font-medium text-gray-700">{getTopic(req) || '—'}</p>
+                        <div className="mt-0.5 flex flex-wrap gap-1">
+                          {[experienceLabel(req.experience), preferredTimeLabel(req.preferredTime)].filter(Boolean).map((c) => (
+                            <span key={c} className="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-500">{c}</span>
+                          ))}
+                        </div>
                       </td>
-
-                      {/* Course */}
-                      <td className="px-4 py-3.5">
-                        <p className="font-medium text-gray-700 max-w-[200px] truncate">
-                          {req.course || req.courseName || '—'}
-                        </p>
-                        {req.message && (
-                          <p className="mt-0.5 text-xs text-gray-400 line-clamp-1 max-w-[200px]">{req.message}</p>
-                        )}
+                      <td className="px-4 py-3"><ContactButtons phone={getStudentPhone(req)} onCopied={() => toast('success', 'تم نسخ الرقم')} /></td>
+                      <td className="whitespace-nowrap px-4 py-3 text-xs text-gray-500">
+                        {relativeTime(req.createdAt)}
+                        {stale && <span className="ms-1 inline-flex items-center gap-0.5 font-semibold text-danger-500"><Flame className="h-3 w-3" /></span>}
                       </td>
-
-                      {/* Date */}
-                      <td className="whitespace-nowrap px-4 py-3.5 text-xs text-gray-500">
-                        {fmtDate(req.createdAt, true)}
-                      </td>
-
-                      {/* Status */}
-                      <td className="px-4 py-3.5">
-                        <StatusBadge status={req.status} />
-                      </td>
-
-                      {/* Actions */}
-                      <td className="px-4 py-3.5">
+                      <td className="px-4 py-3"><StatusBadge status={req.status} /></td>
+                      <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center gap-1.5">
-                          <button
-                            onClick={() => setDrawer(req)}
-                            className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50"
-                          >
-                            <Eye className="h-3.5 w-3.5" />
-                            عرض
-                          </button>
-                          {isActionable && (
-                            <>
-                              <button
-                                onClick={() => handleComplete(req)}
-                                disabled={!!isBusy}
-                                className="inline-flex items-center gap-1 rounded-lg bg-success-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-success-700 disabled:opacity-50"
-                              >
-                                {isBusy === 'completing'
-                                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                  : <Check className="h-3.5 w-3.5" />}
-                                قبول
-                              </button>
-                              <button
-                                onClick={() => openReject(req)}
-                                disabled={!!isBusy}
-                                className="inline-flex items-center gap-1 rounded-lg border border-danger-200 bg-danger-50 px-2.5 py-1.5 text-xs font-semibold text-danger-600 hover:bg-danger-100 disabled:opacity-50"
-                              >
-                                <X className="h-3.5 w-3.5" />
-                                رفض
-                              </button>
-                            </>
+                          {primary && (
+                            <button onClick={() => setStatus(req, primary.to)} disabled={!!isBusy}
+                              className="inline-flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-primary-700 disabled:opacity-50">
+                              {isBusy === 'status' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <primary.icon className="h-3.5 w-3.5" />} {primary.label}
+                            </button>
                           )}
-                          <RowMenu
-                            status={req.status}
-                            onMarkReviewing={() => handleMarkReviewing(req)}
-                            onReopen={() => handleReopen(req)}
-                          />
+                          <button onClick={() => openDrawer(req)} className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50">
+                            <Eye className="h-3.5 w-3.5" /> عرض
+                          </button>
+                          <RowMenu status={req.status}
+                            onFollowUp={() => setStatus(req, STATUS.FOLLOWING_UP)}
+                            onClose={() => { setCloseReason(''); setCloseTarget(req); }}
+                            onReopen={() => setStatus(req, STATUS.NEW)} />
                         </div>
                       </td>
                     </tr>
@@ -806,73 +790,48 @@ const TrainingRequestsPage = () => {
             </table>
           </div>
 
-          {/* ── Mobile cards ───────────────────────────────────────────────── */}
+          {/* Mobile cards */}
           <div className="space-y-3 sm:hidden">
             {rows.map((req) => {
-              const status      = normalizeStatus(req.status);
-              const isBusy      = busy[req.id];
-              const isActionable = status === 'pending' || status === 'reviewing';
-              const isPending   = status === 'pending';
+              const primary = primaryActionFor(req.status);
+              const isBusy = busy[req.id];
+              const s = normalizeStatus(req.status);
+              const stale = s === STATUS.NEW && ageInDays(req.createdAt) >= STALE_DAYS;
               return (
-                <div
-                  key={req.id}
-                  className={`rounded-2xl border bg-white p-4 shadow-sm
-                    ${selected.has(req.id) ? 'border-primary/30' : isPending ? 'border-warning-200' : 'border-gray-100'}`}
-                >
-                  <div className="flex items-start gap-3">
-                    <input
-                      type="checkbox"
-                      checked={selected.has(req.id)}
-                      onChange={() => toggleOne(req.id)}
-                      className="mt-0.5 h-4 w-4 rounded border-gray-300 accent-primary"
-                    />
+                <div key={req.id} className={`rounded-2xl border bg-white p-4 shadow-sm ${stale ? 'border-danger-200' : 'border-gray-100'}`}>
+                  <div className="flex items-start gap-3" onClick={() => openDrawer(req)}>
+                    <Avatar name={getStudentName(req)} size="sm" />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
-                          <p className="font-semibold text-gray-900">{req.name || '—'}</p>
-                          <p className="mt-0.5 text-sm font-medium text-primary truncate">
-                            {req.course || req.courseName || '—'}
-                          </p>
-                          {req.email && <p className="mt-0.5 text-xs text-gray-400 truncate">{req.email}</p>}
+                          <p className="font-semibold text-gray-900">{getStudentName(req) || '—'}</p>
+                          <p className="mt-0.5 truncate text-sm font-medium text-primary">{getTopic(req) || '—'}</p>
                         </div>
                         <StatusBadge status={req.status} />
                       </div>
-                      <p className="mt-2 text-xs text-gray-400">{fmtDate(req.createdAt, true)}</p>
+                      <p className="mt-1 text-xs text-gray-400">{relativeTime(req.createdAt)}</p>
                     </div>
                   </div>
-                  <div className="mt-3 flex gap-2 border-t border-gray-100 pt-3">
-                    <button
-                      onClick={() => setDrawer(req)}
-                      className="inline-flex flex-1 items-center justify-center gap-1 rounded-xl border border-gray-200 py-2 text-xs font-medium text-gray-600"
-                    >
-                      <Eye className="h-3.5 w-3.5" />
-                      عرض
-                    </button>
-                    {isActionable && (
-                      <>
-                        <button
-                          onClick={() => handleComplete(req)}
-                          disabled={!!isBusy}
-                          className="inline-flex flex-1 items-center justify-center gap-1 rounded-xl bg-success-600 py-2 text-xs font-semibold text-white disabled:opacity-50"
-                        >
-                          {isBusy === 'completing' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-                          قبول
+                  <div className="mt-3 flex items-center gap-2 border-t border-gray-100 pt-3">
+                    <ContactButtons phone={getStudentPhone(req)} onCopied={() => toast('success', 'تم نسخ الرقم')} />
+                    <div className="ms-auto flex items-center gap-2">
+                      {primary && (
+                        <button onClick={() => setStatus(req, primary.to)} disabled={!!isBusy}
+                          className="inline-flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-white disabled:opacity-50">
+                          {isBusy === 'status' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <primary.icon className="h-3.5 w-3.5" />} {primary.label}
                         </button>
-                        <button
-                          onClick={() => openReject(req)}
-                          disabled={!!isBusy}
-                          className="inline-flex flex-1 items-center justify-center gap-1 rounded-xl border border-danger-200 bg-danger-50 py-2 text-xs font-semibold text-danger-600 disabled:opacity-50"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                          رفض
-                        </button>
-                      </>
-                    )}
+                      )}
+                      <button onClick={() => openDrawer(req)} className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-600">
+                        <ChevronLeft className="h-3.5 w-3.5" /> التفاصيل
+                      </button>
+                    </div>
                   </div>
                 </div>
               );
             })}
           </div>
+
+          <p className="px-1 text-xs text-gray-400">عرض {rows.length} من {requests.length} طلب</p>
         </>
       )}
     </div>

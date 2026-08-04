@@ -16,7 +16,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   BookOpen, CheckCircle2, Clock3, Layers, Download, UserPlus,
-  Eye, Printer, Trash2, RefreshCw, Phone, Loader2, Pencil,
+  Eye, Printer, Trash2, RefreshCw, Phone, Loader2, Pencil, Bookmark,
 } from 'lucide-react';
 import { useBranch } from '../../contexts/BranchContext';
 import { useAuth } from '../../contexts/AuthContext';
@@ -36,9 +36,10 @@ import AdminConfirmDialog from '../components/AdminConfirmDialog';
 import { useToast } from '../components/ToastNotifications';
 import {
   StatCard, PageHeader, SearchInput, EmptyState, ArchiveSkeleton,
-  DetailSection, DetailRow, SELECT_CLASS,
+  DetailSection, DetailRow, SELECT_CLASS, AcademicYearSelect,
   fmtDate, fmtDateTime, formatMoney,
 } from '../components/archive/ArchiveKit';
+import { getAcademicYearLabel } from '../../utils/academicYear';
 
 const yearOf = (e) => e.studentStudyYear || e.studyYearLabel || e.yearName || e.studyYearId || '';
 const subjectOf = (e) => e.subjectName || e.courseName || '';
@@ -49,17 +50,23 @@ const schedulesTextOf = (e) =>
     .filter(Boolean)
     .join('، ');
 
-const SubBadge = ({ status }) => (
-  status === 'active' ? (
-    <span className="inline-flex items-center gap-1 rounded-full border border-success-200 bg-success-50 px-2.5 py-0.5 text-xs font-semibold text-success-700">
-      <CheckCircle2 className="h-3.5 w-3.5" /> نشط
+// Subscription state → label. 'reserved' = seat held, group not yet started.
+const STATUS_LABEL = { reserved: 'محجوز', active: 'نشط', expired: 'منتهي' };
+const statusLabelOf = (s) => STATUS_LABEL[s] || 'منتهي';
+
+const SUB_BADGE = {
+  reserved: { Icon: Bookmark,     cls: 'border-blue-200 bg-blue-50 text-blue-700' },
+  active:   { Icon: CheckCircle2, cls: 'border-success-200 bg-success-50 text-success-700' },
+  expired:  { Icon: Clock3,       cls: 'border-warning-200 bg-warning-50 text-warning-700' },
+};
+const SubBadge = ({ status }) => {
+  const b = SUB_BADGE[status] || SUB_BADGE.expired;
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-semibold ${b.cls}`}>
+      <b.Icon className="h-3.5 w-3.5" /> {statusLabelOf(status)}
     </span>
-  ) : (
-    <span className="inline-flex items-center gap-1 rounded-full border border-warning-200 bg-warning-50 px-2.5 py-0.5 text-xs font-semibold text-warning-700">
-      <Clock3 className="h-3.5 w-3.5" /> منتهي
-    </span>
-  )
-);
+  );
+};
 
 // ── Detail drawer ────────────────────────────────────────────────────────────────
 const DetailDrawer = ({ entry, status, busy, onClose, onRenew, onEdit, onPrint, onDelete }) => (
@@ -108,7 +115,7 @@ const DetailDrawer = ({ entry, status, busy, onClose, onRenew, onEdit, onPrint, 
         <DetailRow label="البريد الإلكتروني" value={entry._email} />
       </DetailSection>
 
-      <DetailSection title="معلومات الاشتراك">
+      <DetailSection title={status === 'reserved' ? 'معلومات الحجز' : 'معلومات الاشتراك'}>
         <DetailRow label="المادة" value={subjectOf(entry)} />
         {groupOf(entry) && <DetailRow label="المجموعة" value={groupOf(entry)} />}
         <DetailRow label="المستوى الدراسي" value={yearOf(entry)} />
@@ -119,7 +126,7 @@ const DetailDrawer = ({ entry, status, busy, onClose, onRenew, onEdit, onPrint, 
         <DetailRow label="المدة (أشهر)" value={entry.durationInMonths} />
         <DetailRow label="تاريخ التسجيل" value={fmtDateTime(entry.createdAt)} />
         <DetailRow label="تاريخ الانتهاء" value={getExpiryLabel(entry)} />
-        <DetailRow label="الحالة" value={status === 'active' ? 'نشط' : 'منتهي'} />
+        <DetailRow label="الحالة" value={statusLabelOf(status)} />
       </DetailSection>
     </div>
   </AdminModal>
@@ -136,9 +143,11 @@ const SupportRegisteredPage = () => {
   const [loading, setLoading] = useState(true);
 
   const [search, setSearch] = useState('');
-  const [yearFilter, setYearFilter] = useState('all');
+  const [yearFilter, setYearFilter] = useState('all');       // grade/study-year (NOT academic year)
   const [subjectFilter, setSubjectFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
+  // Academic-year (history) filter — defaults to the current year; server-side.
+  const [academicYear, setAcademicYear] = useState(getAcademicYearLabel());
 
   const [drawer, setDrawer] = useState(null);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -155,7 +164,7 @@ const SupportRegisteredPage = () => {
     }
     setLoading(true);
     const unsub = streamSupportLessonRegistrations(selectedBranchId, (list) => {
-      const approved = list.filter((e) => ['active', 'expired'].includes(getComputedStatus(e)));
+      const approved = list.filter((e) => ['reserved', 'active', 'expired'].includes(getComputedStatus(e)));
       approved.sort((a, b) => {
         const da = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(a.createdAt || 0);
         const db_ = b.createdAt?.toDate ? b.createdAt.toDate() : new Date(b.createdAt || 0);
@@ -163,9 +172,9 @@ const SupportRegisteredPage = () => {
       });
       setRawEntries(approved);
       setLoading(false);
-    });
+    }, { academicYear });
     return () => unsub?.();
-  }, [selectedBranchId]);
+  }, [selectedBranchId, academicYear]);
 
   // Resolve student profiles for any registrations lacking a denormalized name.
   useEffect(() => {
@@ -194,6 +203,7 @@ const SupportRegisteredPage = () => {
   // ── Derived ───────────────────────────────────────────────────────────────
   const stats = useMemo(() => ({
     total:    entries.length,
+    reserved: entries.filter((e) => e._status === 'reserved').length,
     active:   entries.filter((e) => e._status === 'active').length,
     expired:  entries.filter((e) => e._status === 'expired').length,
     subjects: new Set(entries.map(subjectOf).filter(Boolean)).size,
@@ -254,14 +264,18 @@ const SupportRegisteredPage = () => {
     const ok = printRecord({
       title: 'تأكيد تسجيل — دروس الدعم',
       student: entry._name,
-      badge: entry._status === 'active' ? { label: 'نشط', tone: 'green' } : { label: 'منتهي', tone: 'amber' },
+      badge: entry._status === 'active'
+        ? { label: 'نشط', tone: 'green' }
+        : entry._status === 'reserved'
+        ? { label: 'محجوز', tone: 'blue' }
+        : { label: 'منتهي', tone: 'amber' },
       sections: [
         { heading: 'معلومات الطالب', rows: [
           ['الاسم الكامل', entry._name],
           ['رقم الهاتف', entry._phone],
           ['البريد الإلكتروني', entry._email],
         ]},
-        { heading: 'معلومات الاشتراك', rows: [
+        { heading: entry._status === 'reserved' ? 'معلومات الحجز' : 'معلومات الاشتراك', rows: [
           ['المادة', subjectOf(entry)],
           ['المجموعة', groupOf(entry)],
           ['المستوى الدراسي', yearOf(entry)],
@@ -283,7 +297,7 @@ const SupportRegisteredPage = () => {
     const data = rows.map((e) => ({
       studentName: e._name, studentPhone: e._phone, studentEmail: e._email,
       subject: subjectOf(e), group: groupOf(e), schedules: schedulesTextOf(e), year: yearOf(e), teacherName: e.teacherName || '',
-      status: e._status === 'active' ? 'نشط' : 'منتهي',
+      status: statusLabelOf(e._status),
       monthlyPrice: e.monthlyPrice ?? '', totalPrice: e.totalPrice ?? '',
       createdAt: e.createdAt, expiry: getExpiryLabel(e) || '',
     }));
@@ -373,8 +387,9 @@ const SupportRegisteredPage = () => {
       ) : (
         <>
           {/* Stats */}
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
             <StatCard icon={BookOpen}     tone="primary" label="إجمالي المسجلين" value={stats.total} />
+            <StatCard icon={Bookmark}     tone="blue"    label="محجوزون (لم يبدأوا)" value={stats.reserved} />
             <StatCard icon={CheckCircle2} tone="green"   label="اشتراكات نشطة" value={stats.active} />
             <StatCard icon={Clock3}       tone="amber"   label="اشتراكات منتهية" value={stats.expired} />
             <StatCard icon={Layers}       tone="indigo"  label="عدد المواد" value={stats.subjects} />
@@ -383,6 +398,7 @@ const SupportRegisteredPage = () => {
           {/* Filters */}
           <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
             <SearchInput value={search} onChange={setSearch} placeholder="ابحث بالاسم أو الهاتف أو المادة..." />
+            <AcademicYearSelect value={academicYear} onChange={setAcademicYear} />
             <select value={yearFilter} onChange={(e) => handleYearFilter(e.target.value)} className={SELECT_CLASS}>
               <option value="all">جميع المستويات الدراسية</option>
               {yearOptions.map((y) => <option key={y} value={y}>{y}</option>)}

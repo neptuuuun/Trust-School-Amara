@@ -30,9 +30,10 @@ import AdminConfirmDialog from '../components/AdminConfirmDialog';
 import { useToast } from '../components/ToastNotifications';
 import {
   StatCard, PageHeader, SearchInput, EmptyState, ArchiveSkeleton,
-  DetailSection, DetailRow, SELECT_CLASS,
+  DetailSection, DetailRow, SELECT_CLASS, AcademicYearSelect,
   DATE_RANGES, inDateRange, isThisMonth, fmtDate, fmtDateTime, formatMoney,
 } from '../components/archive/ArchiveKit';
+import { getAcademicYearLabel } from '../../utils/academicYear';
 
 // Format a schedules[] array into a compact Arabic string for display/CSV.
 const formatSchedulesText = (schedules) =>
@@ -128,6 +129,8 @@ const TrainingRegisteredPage = () => {
   const [search, setSearch] = useState('');
   const [trainingFilter, setTrainingFilter] = useState('all');
   const [dateFilter, setDateFilter] = useState('all');
+  // Academic-year (history) filter — defaults to the current year; server-side.
+  const [academicYear, setAcademicYear] = useState(getAcademicYearLabel());
 
   const [drawer, setDrawer] = useState(null);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -145,9 +148,9 @@ const TrainingRegisteredPage = () => {
     const unsub = streamRegisteredTrainings(selectedBranchId, (list) => {
       setRawEntries(list.map(norm));
       setLoading(false);
-    });
+    }, { academicYear });
     return () => unsub?.();
-  }, [selectedBranchId]);
+  }, [selectedBranchId, academicYear]);
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const stats = useMemo(() => ({
@@ -301,6 +304,7 @@ const TrainingRegisteredPage = () => {
           {/* Filters */}
           <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
             <SearchInput value={search} onChange={setSearch} placeholder="ابحث بالاسم أو الهاتف أو الدورة..." />
+            <AcademicYearSelect value={academicYear} onChange={setAcademicYear} />
             <select value={trainingFilter} onChange={(e) => setTrainingFilter(e.target.value)} className={SELECT_CLASS}>
               <option value="all">جميع الدورات</option>
               {trainingOptions.map((t) => <option key={t} value={t}>{t}</option>)}

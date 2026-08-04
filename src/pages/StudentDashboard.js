@@ -22,9 +22,9 @@ import {
   streamRegisteredTrainingsForStudent,
 } from '../services/firestoreService';
 import { getYearById } from '../data/studyLevels';
-import { getComputedStatus, getExpiryLabel, STATUS_UI } from '../utils/registrationUtils';
+import { getComputedStatus, getExpiryLabel, STATUS_UI, getAcademicYearLabel, academicYearMatches } from '../utils/registrationUtils';
 import { SCHOOL_HINT_AR, isValidSchool } from '../utils/personData';
-import { formatDate, formatMonthYear } from '../utils/dateUtils';
+import { formatDate, formatMonthYear, formatMonthKey } from '../utils/dateUtils';
 import {
   User,
   BookOpen,
@@ -48,6 +48,8 @@ import {
   Tag,
 } from 'lucide-react';
 import { useNavigate, Link } from 'react-router-dom';
+import ReceiptButton from '../components/ReceiptButton';
+import WeeklyTimetable from '../components/WeeklyTimetable';
 
 // Resolve a stored image reference to a safe href. The value may be a plain URL
 // string (Google-completion flow) or a { publicUrl } object (register / verify
@@ -84,7 +86,6 @@ const StudentDashboard = () => {
   const [registeredLanguages, setRegisteredLanguages] = useState([]);
   // Approved training registrations (from trainingsRegistered collection, incl. admin-created)
   const [registeredTrainings, setRegisteredTrainings] = useState([]);
-  const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [annualFeeStatus, setAnnualFeeStatus] = useState({ paid: false, status: 'unpaid' });
   const [registrationSnapshot, setRegistrationSnapshot] = useState({ languages: [], trainings: [], annualFeeHistory: [] });
@@ -154,6 +155,11 @@ const StudentDashboard = () => {
     setLoading(true);
     const unsubscribes = [];
 
+    // Current academic year (auto-detected). The dashboard shows ONLY this year's
+    // data — on 1 July it fresh-starts automatically. Nothing is deleted; prior
+    // years remain in the DB (visible to admins/owner via their year selectors).
+    const currentAcademicYear = getAcademicYearLabel();
+
     const setupAllListeners = async () => {
       try {
         // 1. Student data listener
@@ -205,10 +211,14 @@ const StudentDashboard = () => {
           (snapshot) => {
             if (!isActiveRef.current) return;
             
-            if (snapshot.docs.length > 0) {
-              // Get the latest annual payment (most recent)
-              const latestDoc = snapshot.docs[0];
-              const latestPayment = latestDoc.data();
+            // Annual fee is per academic year. Consider ONLY the current year's
+            // payment (query is ordered createdAt desc → first match is latest),
+            // so the fee auto-resets to "unpaid" on 1 July without any manual step.
+            const currentYearDoc = snapshot.docs.find((d) =>
+              academicYearMatches({ id: d.id, ...d.data() }, currentAcademicYear, ['verifiedAt', 'createdAt']));
+
+            if (currentYearDoc) {
+              const latestPayment = currentYearDoc.data();
               const isVerified = latestPayment.status === 'verified';
 
               setAnnualFeeStatus({
@@ -217,12 +227,12 @@ const StudentDashboard = () => {
                 date: latestPayment.verifiedAt?.toDate?.() || latestPayment.createdAt?.toDate?.(),
                 // Carry the doc id + correction metadata so the correction banner
                 // can offer a resubmit for an annual payment in needs_correction.
-                id: latestDoc.id,
+                id: currentYearDoc.id,
                 correctionReason: latestPayment.correctionReason || '',
                 correctionRequestedAt: latestPayment.correctionRequestedAt?.toDate?.() || null,
               });
             } else {
-              // No annual payment found
+              // No annual payment for the current academic year → unpaid (fresh year).
               setAnnualFeeStatus({ paid: false, status: 'unpaid' });
             }
           },
@@ -244,7 +254,10 @@ const StudentDashboard = () => {
           supportRegsQuery,
           (snapshot) => {
             if (!isActiveRef.current) return;
-            const regs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            const regs = snapshot.docs
+              .map(doc => ({ id: doc.id, ...doc.data() }))
+              // Current academic year only (fresh start each 1 July).
+              .filter(r => academicYearMatches(r, currentAcademicYear, ['startDate', 'createdAt']));
             setSupportRegistrations(regs);
           },
           (error) => {
@@ -269,6 +282,8 @@ const StudentDashboard = () => {
             if (!isActiveRef.current) return;
             const all = snapshot.docs
               .map((d) => ({ id: d.id, ...d.data() }))
+              // Current academic year only (pending/rejected forms for this year).
+              .filter((f) => academicYearMatches(f, currentAcademicYear, ['submittedAt', 'verifiedAt', 'createdAt']))
               .sort((a, b) => {
                 const aDate = a.submittedAt?.toDate ? a.submittedAt.toDate() : new Date(a.submittedAt || 0);
                 const bDate = b.submittedAt?.toDate ? b.submittedAt.toDate() : new Date(b.submittedAt || 0);
@@ -298,6 +313,8 @@ const StudentDashboard = () => {
             if (!isActiveRef.current) return;
             const all = snapshot.docs
               .map((d) => ({ id: d.id, ...d.data() }))
+              // Current academic year only (pending/rejected forms for this year).
+              .filter((f) => academicYearMatches(f, currentAcademicYear, ['submittedAt', 'verifiedAt', 'createdAt']))
               .sort((a, b) => {
                 const aDate = a.submittedAt?.toDate ? a.submittedAt.toDate() : new Date(a.submittedAt || 0);
                 const bDate = b.submittedAt?.toDate ? b.submittedAt.toDate() : new Date(b.submittedAt || 0);
@@ -316,7 +333,12 @@ const StudentDashboard = () => {
         const unsubRegisteredLanguages = streamRegisteredLanguagesForStudent(
           selectedBranchId,
           user.uid,
-          (data) => { if (isActiveRef.current) setRegisteredLanguages(data); }
+          (data) => {
+            if (!isActiveRef.current) return;
+            // Current academic year only (permanent-access languages from prior
+            // years are archived — they reappear only in admin/owner history).
+            setRegisteredLanguages(data.filter(r => academicYearMatches(r, currentAcademicYear, ['registeredAt', 'verifiedAt', 'createdAt'])));
+          }
         );
         unsubscribes.push(unsubRegisteredLanguages);
 
@@ -324,7 +346,10 @@ const StudentDashboard = () => {
         const unsubRegisteredTrainings = streamRegisteredTrainingsForStudent(
           selectedBranchId,
           user.uid,
-          (data) => { if (isActiveRef.current) setRegisteredTrainings(data); }
+          (data) => {
+            if (!isActiveRef.current) return;
+            setRegisteredTrainings(data.filter(r => academicYearMatches(r, currentAcademicYear, ['registeredAt', 'verifiedAt', 'createdAt'])));
+          }
         );
         unsubscribes.push(unsubRegisteredTrainings);
 
@@ -377,24 +402,8 @@ const StudentDashboard = () => {
         );
         unsubscribes.push(unsubPayments);
 
-        // 5. Notifications listener
-        const notificationsQuery = query(
-          collection(db, 'notifications'),
-          where('target', 'in', ['all', user.uid]),
-          orderBy('createdAt', 'desc')
-        );
-        const unsubNotifications = onSnapshot(
-          notificationsQuery,
-          (snapshot) => {
-            if (!isActiveRef.current) return;
-            setNotifications(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-          },
-          (error) => {
-            console.error('Notifications error:', error);
-            if (isActiveRef.current) setNotifications([]);
-          }
-        );
-        unsubscribes.push(unsubNotifications);
+        // In-app notifications are now owned by the navbar NotificationBell
+        // (useNotifications hook), so the dashboard no longer subscribes here.
 
       } catch (error) {
         console.error('Dependent listeners error:', error);
@@ -787,6 +796,58 @@ const StudentDashboard = () => {
     );
   }
 
+  // Shared student identity carried onto every generated receipt (see ReceiptButton).
+  const receiptStudentInfo = {
+    studentName: studentData?.name,
+    studentEmail: user?.email,
+    studentPhone: studentData?.studentPhone || studentData?.guardianPhone || studentData?.phoneNumber,
+    branchLabel: studentData?.branchName,
+  };
+
+  // Active, schedule-bearing enrollments feeding the weekly timetable. Only
+  // active support subscriptions count (reserved = not started; expired = freed);
+  // approved languages/trainings and academic subjects are ongoing by nature.
+  const timetableEnrollments = [
+    ...normalizedSupportRegistrations
+      .filter((reg) => getComputedStatus(reg) === 'active')
+      .map((reg) => ({
+        schedules: reg.schedules,
+        subjectName: reg.subjectName || reg.lessonName,
+        groupName: reg.groupName,
+        teacherName: reg.teacherName,
+        classroom: reg.classroom,
+        serviceType: 'support',
+        classId: reg.classId || reg.lessonId,
+      })),
+    ...registeredLanguages.map((e) => ({
+      schedules: e.schedules,
+      subjectName: e.languageName || e.subjectName,
+      groupName: e.groupName,
+      teacherName: e.teacherName,
+      classroom: e.classroom,
+      serviceType: 'language',
+      classId: e.classId,
+    })),
+    ...registeredTrainings.map((e) => ({
+      schedules: e.schedules,
+      subjectName: e.trainingTitle || e.trainingName || e.name,
+      groupName: e.groupName,
+      teacherName: e.teacherName,
+      classroom: e.classroom,
+      serviceType: 'training',
+      classId: e.classId,
+    })),
+    ...enrolledSubjects.map((e) => ({
+      schedules: e.schedules,
+      subjectName: e.subjectName,
+      groupName: e.groupName || e.className,
+      teacherName: e.teacherName,
+      classroom: e.classroom,
+      serviceType: e.serviceType,
+      classId: e.classId,
+    })),
+  ];
+
   return (
     <>
       <Header />
@@ -866,6 +927,9 @@ const StudentDashboard = () => {
               </div>
             </div>
           </div>
+
+          {/* Weekly Schedule */}
+          <WeeklyTimetable enrollments={timetableEnrollments} />
 
           {/* Profile Section */}
           <div className="bg-white rounded-xl shadow-md border border-gray-100" dir="rtl">
@@ -1261,14 +1325,22 @@ const StudentDashboard = () => {
                     const isExpired = computed === 'expired';
                     const isPending  = computed === 'pending';
                     const isActive   = computed === 'active';
+                    const isReserved = computed === 'reserved';
+                    // Start-month label for the reservation notice (from the stored
+                    // groupStartMonth, falling back to the anchored start date).
+                    const startMonthLabel = formatMonthKey(reg.groupStartMonth) !== '—'
+                      ? formatMonthKey(reg.groupStartMonth)
+                      : (reg._startDateObj ? formatMonthYear(reg._startDateObj) : '');
                     return (
-                      <div key={reg.id} className={`border rounded-lg p-4 space-y-2 ${isExpired ? 'border-gray-300 bg-gray-50' : isActive ? 'border-green-200 bg-green-50' : 'border-gray-100'}`}>
+                      <div key={reg.id} className={`border rounded-lg p-4 space-y-2 ${isExpired ? 'border-gray-300 bg-gray-50' : isReserved ? 'border-blue-200 bg-blue-50' : isActive ? 'border-green-200 bg-green-50' : 'border-gray-100'}`}>
                         <div className="flex items-start justify-between gap-2">
                           <div>
                             <p className="font-semibold text-gray-900 text-sm">
                               {subjectLabel}{displayYear ? ` — ${displayYear}` : ''}
                             </p>
-                            {expiryLabel && (
+                            {/* Hide the "expires on" line for a reservation — its
+                                subscription has not started yet (see notice below). */}
+                            {expiryLabel && !isReserved && (
                               <p className="text-xs text-gray-500 mt-0.5">
                                 {isExpired ? 'انتهى في:' : 'ينتهي في:'} {expiryLabel}
                               </p>
@@ -1278,7 +1350,17 @@ const StudentDashboard = () => {
                             {statusLabel}
                           </span>
                         </div>
-                        {reg._startDateObj && (
+                        {/* Reservation notice — seat held, subscription begins on the 1st. */}
+                        {isReserved && (
+                          <div className="flex items-start gap-2 rounded-md border border-blue-200 bg-blue-50/70 p-2.5">
+                            <CalendarDays className="mt-0.5 h-4 w-4 shrink-0 text-blue-500" />
+                            <p className="text-xs text-blue-800">
+                              تم حجز مقعدك{startMonthLabel ? <> في مجموعة تبدأ في <strong>{startMonthLabel}</strong></> : ''}. سيبدأ اشتراكك تلقائياً في اليوم الأول من هذا الشهر.
+                            </p>
+                          </div>
+                        )}
+                        {/* Show the window only once active/expired (not for a reservation). */}
+                        {!isReserved && reg._startDateObj && (
                           <p className="text-xs text-gray-500">
                             من: {formatDate(reg._startDateObj)}
                             {reg._endDateObj ? ` — إلى: ${formatDate(reg._endDateObj)}` : ''}
@@ -1295,6 +1377,22 @@ const StudentDashboard = () => {
                         )}
                         {isPending && (
                           <p className="text-xs text-amber-700 font-medium">بانتظار موافقة الإدارة</p>
+                        )}
+                        {!isPending && (
+                          <div className="pt-1">
+                            <ReceiptButton
+                              data={{
+                                ...receiptStudentInfo,
+                                paymentType: 'support',
+                                serviceName: `${subjectLabel}${displayYear ? ` — ${displayYear}` : ''}`,
+                                amount: reg.amount ?? reg.price ?? reg.paidAmount ?? reg.monthlyAmount ?? reg.monthlyPrice,
+                                date: reg._startDateObj || reg.startDate || reg.createdAt,
+                                reference: reg.orderId || reg.paymentRef || reg.transactionId || reg.paymentId || reg.id,
+                                academicYear: reg.academicYear || getAcademicYearLabel(),
+                                status: isReserved ? 'reserved' : 'paid',
+                              }}
+                            />
+                          </div>
                         )}
                       </div>
                     );
@@ -1334,9 +1432,23 @@ const StudentDashboard = () => {
                             ✓ مقبول
                           </span>
                         </div>
-                        <div className="flex items-center gap-1 mt-1">
-                          <Tag className="w-3 h-3 text-green-600" />
-                          <span className="text-xs text-green-700 font-medium">دفعة واحدة — وصول دائم</span>
+                        <div className="mt-1.5 flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1">
+                            <Tag className="w-3 h-3 text-green-600" />
+                            <span className="text-xs text-green-700 font-medium">دفعة واحدة — وصول دائم</span>
+                          </div>
+                          <ReceiptButton
+                            data={{
+                              ...receiptStudentInfo,
+                              paymentType: 'language',
+                              serviceName: [entry.languageName, entry.levelLabel].filter(Boolean).join(' — ') || 'دورة لغة',
+                              amount: entry.amount ?? entry.price ?? entry.paidAmount ?? entry.languagePrice,
+                              date: entry.registeredAt || entry.verifiedAt || entry.createdAt,
+                              reference: entry.orderId || entry.paymentRef || entry.transactionId || entry.paymentId || entry.id,
+                              academicYear: entry.academicYear || getAcademicYearLabel(),
+                              status: 'paid',
+                            }}
+                          />
                         </div>
                       </div>
                     ))}
@@ -1404,9 +1516,23 @@ const StudentDashboard = () => {
                             ✓ مقبول
                           </span>
                         </div>
-                        <div className="flex items-center gap-1 mt-1">
-                          <Tag className="w-3 h-3 text-purple-600" />
-                          <span className="text-xs text-purple-700 font-medium">دفعة واحدة — وصول دائم</span>
+                        <div className="mt-1.5 flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1">
+                            <Tag className="w-3 h-3 text-purple-600" />
+                            <span className="text-xs text-purple-700 font-medium">دفعة واحدة — وصول دائم</span>
+                          </div>
+                          <ReceiptButton
+                            data={{
+                              ...receiptStudentInfo,
+                              paymentType: 'training',
+                              serviceName: entry.trainingTitle || entry.trainingName || entry.name || 'دورة تكوينية',
+                              amount: entry.trainingPrice ?? entry.amount ?? entry.price ?? entry.paidAmount,
+                              date: entry.registeredAt || entry.verifiedAt || entry.createdAt,
+                              reference: entry.orderId || entry.paymentRef || entry.transactionId || entry.paymentId || entry.id,
+                              academicYear: entry.academicYear || getAcademicYearLabel(),
+                              status: 'paid',
+                            }}
+                          />
                         </div>
                       </div>
                     ))}
@@ -1472,6 +1598,20 @@ const StudentDashboard = () => {
                           <p className="text-xs text-gray-600">مؤكد: {formatRegistrationDate(entry.registeredAt)}</p>
                         </div>
                         <BadgeCheck className="w-5 h-5 text-green-500 flex-shrink-0" />
+                      </div>
+                      <div className="mt-2 flex justify-end">
+                        <ReceiptButton
+                          data={{
+                            ...receiptStudentInfo,
+                            paymentType: 'annual_fee',
+                            serviceName: `الرسم السنوي — السنة الدراسية ${entry.year || getAcademicYearLabel()}`,
+                            amount: entry.amount ?? entry.feeAmount ?? entry.paidAmount,
+                            date: entry.registeredAt,
+                            reference: entry.registrationId || entry.orderId || entry.paymentRef || entry.transactionId,
+                            academicYear: entry.year ? String(entry.year) : getAcademicYearLabel(),
+                            status: 'paid',
+                          }}
+                        />
                       </div>
                     </div>
                   ))

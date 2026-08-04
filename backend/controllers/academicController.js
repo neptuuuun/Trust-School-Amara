@@ -28,7 +28,9 @@ const {
 const ledger = require('../services/ledgerService');
 const { writeAudit, resolveActor } = require('../services/auditService');
 const { normalizeGroupType } = require('../services/supportEligibility');
+const { normalizeMonthKey } = require('../services/reservationService');
 const { recordManualPaymentOrder } = require('../services/paymentOrderLog');
+const academicYear = require('../services/academicYear');
 
 const FieldValue = admin.firestore.FieldValue;
 
@@ -150,6 +152,14 @@ const createClass = async (req, res, next) => {
     const classroom = String(data.classroom || '').trim();
     const teacherName = String(data.teacherName || '').trim();
 
+    // Start Month ('YYYY-MM') — the month the group officially begins. REQUIRED
+    // for support (its subscription/reservation logic anchors to it); optional
+    // and merely stored for language/training. Reservations are derived at
+    // enrollment time in reservationService, so a class always carries this.
+    const startMonth = normalizeMonthKey(data.startMonth);
+    if (serviceType === 'support' && !startMonth)
+      return res.status(400).json({ code: 'missing-start-month', message: 'شهر بدء المجموعة مطلوب (YYYY-MM).' });
+
     const payload = {
       subjectId: data.subjectId,
       subjectName: String(data.subjectName || '').trim(),
@@ -167,6 +177,8 @@ const createClass = async (req, res, next) => {
       // Support groups carry a groupType (normal vs low-level support). It is
       // meaningless for language/training, so we only persist it for support.
       ...(serviceType === 'support' ? { groupType: normalizeGroupType(data.groupType) } : {}),
+      // Start Month — the group's official begin month (drives reservations).
+      ...(startMonth ? { startMonth } : {}),
       ...(data.level ? { level: String(data.level).trim() } : {}),
       ...(data.studyYear ? { studyYear: data.studyYear } : {}),
       createdAt: FieldValue.serverTimestamp(),
@@ -184,7 +196,9 @@ const createClass = async (req, res, next) => {
           ...findClassroomConflicts({ teacherName, classroom, schedules }, existing),
         ];
         if (conflicts.length) throw scheduleConflictError(conflicts);
-        t.set(newRef, payload);
+        // Stamp the academic year the group belongs to (derived from now — the
+        // group is created for the CURRENT academic year; no manual year picker).
+        t.set(newRef, academicYear.withAcademicYear(payload));
       });
     } catch (e) {
       if (e._code === 'schedule-conflict') return conflict409(res, e);
@@ -202,6 +216,7 @@ const createClass = async (req, res, next) => {
         groupName: payload.groupName, teacherName: payload.teacherName,
         classroom: payload.classroom, serviceType,
         ...(payload.groupType ? { groupType: payload.groupType } : {}),
+        ...(payload.startMonth ? { startMonth: payload.startMonth } : {}),
       },
     });
 
@@ -238,6 +253,13 @@ const updateClass = async (req, res, next) => {
     // groupType (support only) — not a schedule-defining field, so it never
     // triggers the conflict re-check below.
     if (updates.groupType != null) clean.groupType = normalizeGroupType(updates.groupType);
+    // Start Month — validated 'YYYY-MM'. Changing it affects only FUTURE
+    // enrollments; existing registrations keep their snapshotted window.
+    if (updates.startMonth != null) {
+      const mk = normalizeMonthKey(updates.startMonth);
+      if (!mk) return res.status(400).json({ code: 'invalid-start-month', message: 'شهر البدء غير صالح (YYYY-MM).' });
+      clean.startMonth = mk;
+    }
 
     const docRef = classesRef(branchId).doc(classId);
     const touchesSchedule =
@@ -498,14 +520,17 @@ const verifyLanguage = async (req, res, next) => {
       await db.runTransaction(async (t) => {
         if (classRef) assertCapacityInTx(await t.get(classRef)); // read before writes
 
+        const yearLabel = academicYear.getAcademicYearLabel();
         t.update(regRef, {
           status: 'approved', verified: true, visibility: 'approved',
           verifiedAt: FieldValue.serverTimestamp(), verifiedBy,
+          academicYear: yearLabel,
           updatedAt: FieldValue.serverTimestamp(),
         });
         t.set(registeredRef, {
           ...regData, formId, userId: studentId, branchId,
           status: 'registered',
+          academicYear: yearLabel,
           registeredAt: FieldValue.serverTimestamp(),
           verifiedAt: FieldValue.serverTimestamp(), verifiedBy,
         });
@@ -599,8 +624,10 @@ const verifyTraining = async (req, res, next) => {
       await db.runTransaction(async (t) => {
         if (classRef) assertCapacityInTx(await t.get(classRef));
 
+        const yearLabel = academicYear.getAcademicYearLabel();
         t.update(regRef, {
           verified: true, status: 'approved',
+          academicYear: yearLabel,
           verifiedAt: FieldValue.serverTimestamp(), verifiedBy,
         });
         t.set(registeredRef, {
@@ -609,6 +636,7 @@ const verifyTraining = async (req, res, next) => {
           studentName: regData.studentName || (userProfile && (userProfile.name || userProfile.fullName)) || '',
           studentPhone: regData.studentPhone || (userProfile && userProfile.phoneNumber) || '',
           status: 'approved',
+          academicYear: yearLabel,
           registeredAt: FieldValue.serverTimestamp(),
           verifiedAt: FieldValue.serverTimestamp(), verifiedBy,
         });
@@ -687,6 +715,7 @@ const adminAddLanguage = async (req, res, next) => {
         if (classRef) assertCapacityInTx(await t.get(classRef));
         t.set(newRef, {
           ...data, userId: data.userId, branchId,
+          academicYear: academicYear.getAcademicYearLabel(),
           registeredAt: FieldValue.serverTimestamp(), verifiedAt: FieldValue.serverTimestamp(), source: 'admin',
         });
         if (classRef) t.update(classRef, { enrollmentCount: FieldValue.increment(1), updatedAt: FieldValue.serverTimestamp() });
@@ -744,6 +773,7 @@ const adminAddTraining = async (req, res, next) => {
         if (classRef) assertCapacityInTx(await t.get(classRef));
         t.set(newRef, {
           ...data, userId: data.userId, branchId,
+          academicYear: academicYear.getAcademicYearLabel(),
           registeredAt: FieldValue.serverTimestamp(), verifiedAt: FieldValue.serverTimestamp(), source: 'admin',
         });
         if (classRef) t.update(classRef, { enrollmentCount: FieldValue.increment(1), updatedAt: FieldValue.serverTimestamp() });

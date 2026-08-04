@@ -128,7 +128,9 @@ const BranchStripCard = ({ b }) => {
 };
 
 const OwnerHome = () => {
-  const { month } = useOwnerFilters();
+  // academicYear = primary reporting dimension (summary + branches); month drives
+  // the month-based panels (alerts, retention).
+  const { month, academicYear } = useOwnerFilters();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -140,24 +142,23 @@ const OwnerHome = () => {
   useEffect(() => {
     let active = true;
     setLoading(true); setError('');
-    getOwnerSummary(month)
+    getOwnerSummary({ academicYear })
       .then((res) => { if (active) setData(res); })
       .catch((e) => { if (active) setError(e.message || 'تعذر تحميل البيانات'); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [month]);
+  }, [academicYear]);
 
   // Secondary panels load independently — a failure in any must not blank the page.
-  // Reset them on month change so nothing stale renders under the new month's
-  // header, and gate the verdict/alerts on a single "loaded" flag (Fix: avoids a
-  // transient where the verdict asserts on last month's data or "no alerts").
+  // Branches follow the academic year; alerts + retention are month-based. Reset
+  // on any filter change so nothing stale renders under the new header.
   useEffect(() => {
     let active = true;
     setSecondaryLoading(true);
     setAlerts([]); setBranches([]); setRetention(null);
     Promise.allSettled([
       getOwnerAlerts({ month }),
-      getOwnerBranches(month),
+      getOwnerBranches({ academicYear }),
       getOwnerRetention({ month, months: 6 }),
     ]).then(([al, br, rt]) => {
       if (!active) return;
@@ -167,7 +168,7 @@ const OwnerHome = () => {
       setSecondaryLoading(false);
     });
     return () => { active = false; };
-  }, [month]);
+  }, [month, academicYear]);
 
   if (loading) return <LoadingState label="جاري تحميل النظرة العامة..." />;
   if (error) return <Alert variant="danger">{error}</Alert>;
@@ -182,7 +183,7 @@ const OwnerHome = () => {
     <div className="space-y-6" dir="rtl">
       <div>
         <h1 className="text-3xl sm:text-4xl font-bold text-primary mb-1">نظرة تنفيذية</h1>
-        <p className="text-gray-600">ملخص الأداء عبر جميع الفروع — {data.month}</p>
+        <p className="text-gray-600">ملخص الأداء عبر جميع الفروع — {data.windowLabel || data.academicYear || data.month}</p>
       </div>
 
       {/* Verdict — the answer in one sentence, before any chart. Held until the
@@ -216,14 +217,15 @@ const OwnerHome = () => {
       {/* Where will the month land? */}
       <ForecastWidget forecast={data.forecast} />
 
-      {/* Core executive KPIs — money and growth only; vanity metrics removed. */}
+      {/* Core executive KPIs — money and growth only; vanity metrics removed.
+          Labels adapt to the reporting window (academic year by default; month on drill-down). */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-        <Card title="إجمالي إيرادات الشهر" value={fmtMoney(c.totalRevenueThisMonth)} icon={DollarSign}
+        <Card title={data.mode === 'year' ? 'إجمالي إيرادات السنة' : 'إجمالي إيرادات الشهر'} value={fmtMoney(c.totalRevenueThisMonth)} icon={DollarSign}
           tone="success" trend={data.trends?.revenue?.changePct}
-          subtitle={`الشهر السابق: ${fmtMoney(data.trends?.revenue?.previous)}`} />
-        <Card title="طلاب جدد هذا الشهر" value={fmtNum(c.newStudentsThisMonth)} icon={UserPlus} tone="primary"
+          subtitle={`${data.mode === 'year' ? 'السنة السابقة' : 'الشهر السابق'}: ${fmtMoney(data.trends?.revenue?.previous)}`} />
+        <Card title={data.mode === 'year' ? 'طلاب جدد هذه السنة' : 'طلاب جدد هذا الشهر'} value={fmtNum(c.newStudentsThisMonth)} icon={UserPlus} tone="primary"
           trend={data.trends?.newStudents?.changePct}
-          subtitle={`الشهر السابق: ${fmtNum(data.trends?.newStudents?.previous)}`} />
+          subtitle={`${data.mode === 'year' ? 'السنة السابقة' : 'الشهر السابق'}: ${fmtNum(data.trends?.newStudents?.previous)}`} />
         <Card title="الطلاب النشطون" value={fmtNum(c.activeStudents)} icon={Users} tone="secondary" />
         <Card title="طلاب لم يدفعوا" value={fmtNum(c.unpaidStudents)} icon={AlertTriangle}
           tone="warning" alert={c.unpaidStudents > 0} subtitle="الرسوم السنوية · عرض القائمة"

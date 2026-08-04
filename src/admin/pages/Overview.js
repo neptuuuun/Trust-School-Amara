@@ -352,7 +352,11 @@ const Overview = () => {
         </Panel>
 
         <Panel icon={BookOpen} title="دروس الدعم (اشتراكات شهرية)">
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <div className="rounded-xl bg-blue-50 p-4 text-center">
+              <p className="text-2xl font-bold text-blue-700">{support.reserved || 0}</p>
+              <p className="mt-1 text-xs text-blue-700">محجوز (لم يبدأ)</p>
+            </div>
             <div className="rounded-xl bg-success-50 p-4 text-center">
               <p className="text-2xl font-bold text-success-700">{support.active}</p>
               <p className="mt-1 text-xs text-success-700">نشط</p>

@@ -14,17 +14,26 @@ const qs = (params = {}) => {
   return s ? `?${s}` : '';
 };
 
-/** Executive summary cards + trend deltas. */
-export const getOwnerSummary = (month) =>
-  apiCall(`/api/owner/summary${qs({ month })}`);
+/**
+ * Executive summary cards + trend deltas.
+ * Pass `academicYear` ("YYYY-YYYY") for the academic-year view (the default when
+ * both are omitted → current year), or `month` ("YYYY-MM") for a monthly drill-down.
+ * Accepts a bare month string too, for backward compatibility.
+ */
+export const getOwnerSummary = (opts) => {
+  const { month, academicYear } = typeof opts === 'string' ? { month: opts } : (opts || {});
+  return apiCall(`/api/owner/summary${qs({ month, academicYear })}`);
+};
 
 /** Per-branch analytics for side-by-side comparison. */
-export const getOwnerBranches = (month) =>
-  apiCall(`/api/owner/branches${qs({ month })}`);
+export const getOwnerBranches = (opts) => {
+  const { month, academicYear } = typeof opts === 'string' ? { month: opts } : (opts || {});
+  return apiCall(`/api/owner/branches${qs({ month, academicYear })}`);
+};
 
 /** Revenue grouped by service type → subject (optionally for one branch). */
-export const getOwnerRevenue = ({ month, branchId } = {}) =>
-  apiCall(`/api/owner/revenue${qs({ month, branchId })}`);
+export const getOwnerRevenue = ({ month, academicYear, branchId } = {}) =>
+  apiCall(`/api/owner/revenue${qs({ month, academicYear, branchId })}`);
 
 /** Per-group (class) analytics: expected vs actual, retention, discrepancies. */
 export const getOwnerGroups = ({ month, branchId } = {}) =>
@@ -58,6 +67,14 @@ export const getOwnerAuditLog = ({ branchId, action, actorUid, days, limit } = {
 /** Alerts engine: revenue drops, collection shortfalls, retention/churn, sensitive audits. */
 export const getOwnerAlerts = ({ month, branchId } = {}) =>
   apiCall(`/api/owner/alerts${qs({ month, branchId })}`);
+
+/** Automated weekly executive report (latest stored + history). refresh forces recompute. */
+export const getOwnerWeeklyReport = ({ refresh } = {}) =>
+  apiCall(`/api/owner/weekly-report${qs({ refresh: refresh ? 1 : undefined })}`);
+
+/** Force a fresh weekly report recompute + persist. */
+export const generateOwnerWeeklyReport = () =>
+  apiCall('/api/owner/weekly-report/generate', { method: 'POST', body: JSON.stringify({}) });
 
 // ── Admin management (owner-only; the ONLY way admin accounts are managed) ───────
 // Each call is audit-logged server-side with the acting owner as the actor.

@@ -24,6 +24,8 @@ import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Routes, Route, Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import NotificationBell from '../components/notifications/NotificationBell';
+import GlobalSearch from './components/GlobalSearch';
 import {
   Home,
   Users,
@@ -38,9 +40,9 @@ import {
   DollarSign,
   Languages,
   BadgeCheck,
-  ClipboardList,
   Megaphone,
   ChevronDown,
+  LifeBuoy,
 } from 'lucide-react';
 import useScrollToTop from '../hooks/useScrollToTop';
 import { useBranch } from '../contexts/BranchContext';
@@ -57,9 +59,9 @@ import SupportRegisteredPage from './pages/SupportRegisteredPage';
 import TrainingsPage from './pages/TrainingsPage';
 import LanguageRegisteredPage from './pages/LanguageRegisteredPage';
 import TrainingRegisteredPage from './pages/TrainingRegisteredPage';
+import Student360 from './pages/Student360';
 import PaymentOrdersPage from './pages/PaymentOrdersPage';
 import TrainingRequestsPage from './pages/TrainingRequestsPage';
-import AdminGuide from './pages/AdminGuide';
 import AnnouncementsPage from './pages/AnnouncementsPage';
 import ClockComponent from '../components/Clock';
 import AdminErrorBoundary from './components/AdminErrorBoundary';
@@ -194,7 +196,7 @@ const AdminShell = () => {
 
   useScrollToTop();
 
-  const { logout } = useAuth();
+  const { logout, user } = useAuth();
 
   // Queue badges come from the SAME snapshot the Overview page renders — one
   // fetch, one truth, no chance of the sidebar and the page disagreeing.
@@ -284,8 +286,7 @@ const AdminShell = () => {
     {
       label: 'المركز',
       items: [
-        { name: 'الإعلانات',    href: '/admin/announcements', icon: Megaphone,     current: at('/admin/announcements') },
-        { name: 'دليل المسؤول', href: '/admin/admin-guide',   icon: ClipboardList, current: at('/admin/admin-guide') },
+        { name: 'الإعلانات', href: '/admin/announcements', icon: Megaphone, current: at('/admin/announcements') },
       ],
     },
   ];
@@ -409,6 +410,18 @@ const AdminShell = () => {
                   {branchLabel}
                 </span>
               )}
+              <GlobalSearch />
+              <NotificationBell userId={user?.uid} />
+              <a
+                href="/help/admin"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-primary-100 bg-white px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary-50"
+                title="فتح مركز المساعدة في تبويب جديد"
+              >
+                <LifeBuoy className="h-4 w-4" aria-hidden="true" />
+                <span className="hidden sm:inline">مركز المساعدة</span>
+              </a>
               <Link to="/home" className="text-sm font-medium text-primary hover:text-primary-600">
                 العودة للموقع
               </Link>
@@ -421,6 +434,7 @@ const AdminShell = () => {
           <Routes>
             <Route index element={<Overview />} />
             <Route path="users" element={<UsersPage />} />
+            <Route path="students/:userId" element={<Student360 />} />
             <Route path="languages-branch" element={<LanguagesPage />} />
             <Route path="languages-registered" element={<LanguageRegisteredPage />} />
             <Route path="support-high" element={<SupportLessonsHighPage />} />
@@ -432,7 +446,6 @@ const AdminShell = () => {
             <Route path="annual-fees" element={<AnnualFees />} />
             <Route path="training-requests" element={<TrainingRequestsPage />} />
             <Route path="announcements" element={<AnnouncementsPage />} />
-            <Route path="admin-guide" element={<AdminGuide />} />
             {/* Branch alias LAST among single-segment routes: it validates the
                 param itself and renders the 404 for anything that isn't a
                 real branch, so unknown paths are no longer swallowed. */}

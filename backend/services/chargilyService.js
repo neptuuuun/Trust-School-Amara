@@ -85,29 +85,6 @@ async function createCheckout({
   const payload = { amount, currency, description, locale, success_url: successUrl, failure_url: failureUrl, metadata };
   if (webhookEndpoint) payload.webhook_endpoint = webhookEndpoint;
 
-  // ═══ TEMP DEBUG — remove after diagnosing the Chargily 422 ═══════════════════
-  // This is the EXACT object about to be JSON.stringified and POSTed to Chargily
-  // (the bytes that leave the backend). Nothing between here and the wire mutates it.
-  console.log("========== CHARGILY REQUEST ==========");
-  console.log({
-    env_FRONTEND_URL: process.env.FRONTEND_URL,
-    env_BACKEND_URL:  process.env.BACKEND_URL,
-    endpoint:         `${baseUrl}/checkouts`,
-    mode:             secretKey.startsWith('test_') ? 'test' : 'live',
-    success_url:      payload.success_url,
-    failure_url:      payload.failure_url,
-    webhook_endpoint: payload.webhook_endpoint,
-    amount:           payload.amount,
-    amount_type:      typeof payload.amount,
-    amount_isInteger: Number.isInteger(payload.amount),
-    currency:         payload.currency,
-    metadata:         payload.metadata,
-    metadata_kind:    Array.isArray(payload.metadata) ? 'array' : typeof payload.metadata,
-  });
-  console.log("serialized body:", JSON.stringify(payload));
-  console.log("======================================");
-  // ═══ END TEMP DEBUG ══════════════════════════════════════════════════════════
-
   return chargilyFetch('/checkouts', { method: 'POST', body: payload, secretKey, baseUrl });
 }
 

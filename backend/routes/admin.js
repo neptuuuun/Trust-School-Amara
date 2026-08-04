@@ -8,6 +8,17 @@ const {
   setStudentDistinguishedAverage,
 } = require('../controllers/adminController');
 const { getOverview, resolveStuckOrder } = require('../controllers/adminOverviewController');
+const { search } = require('../controllers/adminSearchController');
+const { getStudentProfile } = require('../controllers/adminStudentController');
+const { bulkImportStudents } = require('../controllers/adminBulkImportController');
+
+// GET /api/admin/search?q=...
+// Global branch-scoped search across students and all payment types.
+router.get('/search', verifyToken, requireAdmin, search);
+
+// GET /api/admin/students/:userId/profile
+// Unified "Student 360" aggregate: profile, registrations, payments, audit.
+router.get('/students/:userId/profile', verifyToken, requireAdmin, getStudentProfile);
 
 // GET /api/admin/overview
 // One round-trip snapshot of what needs the branch admin today: the document
@@ -23,6 +34,11 @@ router.post('/payment-orders/:orderId/resolve', verifyToken, requireAdmin, resol
 
 // POST /api/admin/create-student
 router.post('/create-student', verifyToken, requireAdmin, createStudent);
+
+// POST /api/admin/bulk-import-students
+// Create many students from an uploaded CSV/Excel (validate + dedupe + audit).
+// Same creation rules as manual add; supports dryRun for the preview step.
+router.post('/bulk-import-students', verifyToken, requireAdmin, bulkImportStudents);
 
 // POST /api/admin/record-annual-fee
 // Records a verified annual fee for ANY student (standalone financial record).

@@ -7,6 +7,7 @@ import {
   getStudentTrainingRegistrations,
 } from '../../services/firestoreService';
 import { getUsersByBranch } from '../../services/userService';
+import { getAcademicYearLabel } from '../../utils/academicYear';
 import AdminModal from './AdminModal';
 
 /**
@@ -46,7 +47,7 @@ const AddEditTrainingModal = ({ branchId, registration, onClose, onSuccess }) =>
     getUsersByBranch(branchId)
       .then(setAllUsers).catch(() => {})
       .finally(() => setLoadingUsers(false));
-    getClasses(branchId, { serviceType: 'training', activeOnly: true })
+    getClasses(branchId, { serviceType: 'training', activeOnly: true, academicYear: getAcademicYearLabel() })
       .then(setAllTrainings).catch(() => {})
       .finally(() => setLoadingTrainings(false));
   }, [isEdit, branchId]);

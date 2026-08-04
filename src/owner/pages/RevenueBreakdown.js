@@ -62,7 +62,8 @@ const ServiceBlock = ({ s }) => {
 };
 
 const RevenueBreakdown = () => {
-  const { month } = useOwnerFilters();
+  // Revenue is scoped to the selected academic year (default: current).
+  const { academicYear } = useOwnerFilters();
   const [branchId, setBranchId] = useState('all');
   const [services, setServices] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -71,12 +72,12 @@ const RevenueBreakdown = () => {
   useEffect(() => {
     let active = true;
     setLoading(true); setError('');
-    getOwnerRevenue({ month, branchId: branchId === 'all' ? undefined : branchId })
+    getOwnerRevenue({ academicYear, branchId: branchId === 'all' ? undefined : branchId })
       .then((res) => { if (active) setServices(res.services || []); })
       .catch((e) => { if (active) setError(e.message || 'تعذر تحميل البيانات'); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [month, branchId]);
+  }, [academicYear, branchId]);
 
   const total = services.reduce((a, s) => a + (s.revenue || 0), 0);
 
@@ -85,7 +86,7 @@ const RevenueBreakdown = () => {
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-3xl sm:text-4xl font-bold text-primary mb-1">تفصيل الإيرادات</h1>
-          <p className="text-gray-600">حسب نوع الخدمة ثم المادة — {month}</p>
+          <p className="text-gray-600">حسب نوع الخدمة ثم المادة — {academicYear}</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <ExportButtons rows={services} columns={CSV_COLUMNS} filename={generateFilename(`revenue-${branchId}-${month}`)} />

@@ -15,7 +15,7 @@
 // getUsersByIds is branch-scoped. Early-return when no branch is selected.
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy, where } from 'firebase/firestore';
 import { db } from '../../firebase';
 import {
   Wallet, Users, CalendarPlus, TrendingUp, Download,
@@ -29,9 +29,10 @@ import AdminModal from '../components/AdminModal';
 import AddAnnualFeePaymentModal from '../components/AddAnnualFeePaymentModal';
 import { useToast } from '../components/ToastNotifications';
 import {
-  StatCard, PageHeader, SearchInput, EmptyState, ArchiveSkeleton, SELECT_CLASS,
+  StatCard, PageHeader, SearchInput, EmptyState, ArchiveSkeleton, SELECT_CLASS, AcademicYearSelect,
   DATE_RANGES, inDateRange, isThisMonth, fmtDate, fmtDateTime, formatMoney,
 } from '../components/archive/ArchiveKit';
+import { getAcademicYearLabel } from '../../utils/academicYear';
 
 const amountOf = (f) => Number(f.amount ?? f.totalAmount ?? 0) || 0;
 
@@ -142,6 +143,8 @@ const AnnualFees = () => {
   const [search, setSearch] = useState('');
   const [levelFilter, setLevelFilter] = useState('all');
   const [dateFilter, setDateFilter] = useState('all');
+  // Academic-year (history) filter — defaults to the current year; server-side.
+  const [academicYear, setAcademicYear] = useState(getAcademicYearLabel());
 
   const [selectedFee, setSelectedFee] = useState(null);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -156,6 +159,7 @@ const AnnualFees = () => {
     setLoading(true);
     const q = query(
       collection(db, 'branches', selectedBranchId, 'annualPayments'),
+      where('academicYear', '==', academicYear),
       orderBy('createdAt', 'desc')
     );
     const unsub = onSnapshot(q, (snap) => {
@@ -169,7 +173,7 @@ const AnnualFees = () => {
       setLoading(false);
     });
     return () => unsub();
-  }, [selectedBranchId]);
+  }, [selectedBranchId, academicYear]);
 
   // Resolve student names for records lacking a denormalized name.
   useEffect(() => {
@@ -343,6 +347,7 @@ const AnnualFees = () => {
           {/* Filters */}
           <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
             <SearchInput value={search} onChange={setSearch} placeholder="ابحث بالاسم أو الهاتف أو المؤسسة..." />
+            <AcademicYearSelect value={academicYear} onChange={setAcademicYear} />
             <select value={levelFilter} onChange={(e) => setLevelFilter(e.target.value)} className={SELECT_CLASS}>
               <option value="all">جميع المستويات</option>
               {levelOptions.map((l) => <option key={l} value={l}>{l}</option>)}

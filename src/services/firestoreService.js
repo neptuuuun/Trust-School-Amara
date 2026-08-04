@@ -6,7 +6,7 @@
 import { db } from '../firebase';
 import apiCall from '../utils/apiClient';
 import { logAdminAction } from './auditService';
-import { getCurrentAcademicYear, isAnnualPaymentForCurrentYear, toDate as toDateValue, ANNUAL_FEE_DZD } from '../utils/registrationUtils';
+import { getCurrentAcademicYear, isAnnualPaymentForCurrentYear, toDate as toDateValue, ANNUAL_FEE_DZD, academicYearMatches } from '../utils/registrationUtils';
 import {
   collection,
   collectionGroup,
@@ -274,6 +274,11 @@ const applyClassFilters = (rows, options = {}) => {
   if (options.serviceType) out = out.filter((r) => r.serviceType === options.serviceType);
   if (options.subjectId) out = out.filter((r) => r.subjectId === options.subjectId);
   if (options.studyYear) out = out.filter((r) => r.studyYear === options.studyYear);
+  // Academic-year scope: a group belongs to the AY it was created in. Legacy
+  // groups missing the field fall back on `startMonth` ONLY (never createdAt — a
+  // group may be prepared for next year before 1 July); a group with neither is
+  // excluded (surfaced for manual review by the migration, never guessed).
+  if (options.academicYear) out = out.filter((r) => academicYearMatches(r, options.academicYear, ['startMonth']));
   if (options.activeOnly) out = out.filter((r) => (r.status || 'active') === 'active');
   return out.sort(sortByArabic('groupName'));
 };
@@ -734,16 +739,26 @@ export const getPendingTrainingRequests = async (branchId) => {
 };
 
 
-export const streamRegisteredLanguages = (branchId, callback) => {
+/**
+ * Stream approved language registrations for a branch.
+ * @param {string} branchId
+ * @param {function} callback
+ * @param {{ academicYear?: string }} [options] — when `academicYear` is set, the
+ *   query filters server-side to that academic year (scalable for large archives;
+ *   needs the languagesRegistered [academicYear ASC, registeredAt DESC] index).
+ */
+export const streamRegisteredLanguages = (branchId, callback, options = {}) => {
   if (!branchId) return () => {};
 
   const registeredRef = getBranchCollection(branchId, 'languagesRegistered');
-  const q = query(registeredRef, orderBy('registeredAt', 'desc'));
+  const clauses = options.academicYear ? [where('academicYear', '==', options.academicYear)] : [];
+  const q = query(registeredRef, ...clauses, orderBy('registeredAt', 'desc'));
 
-  return onSnapshot(q, (snapshot) => {
-    const entries = snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }));
-    callback(entries);
-  });
+  return onSnapshot(
+    q,
+    (snapshot) => callback(snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }))),
+    (err) => { console.error('streamRegisteredLanguages error:', err); callback([]); }
+  );
 };
 
 /**
@@ -784,16 +799,23 @@ export const getUsersByIds = async (branchId, userIds = []) => {
   return result;
 };
 
-export const streamRegisteredTrainings = (branchId, callback) => {
+/**
+ * Stream approved training registrations for a branch.
+ * @param {{ academicYear?: string }} [options] — server-side academic-year filter
+ *   (needs the trainingsRegistered [academicYear ASC, registeredAt DESC] index).
+ */
+export const streamRegisteredTrainings = (branchId, callback, options = {}) => {
   if (!branchId) return () => {};
 
   const registeredRef = getBranchCollection(branchId, 'trainingsRegistered');
-  const q = query(registeredRef, orderBy('registeredAt', 'desc'));
+  const clauses = options.academicYear ? [where('academicYear', '==', options.academicYear)] : [];
+  const q = query(registeredRef, ...clauses, orderBy('registeredAt', 'desc'));
 
-  return onSnapshot(q, (snapshot) => {
-    const entries = snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }));
-    callback(entries);
-  });
+  return onSnapshot(
+    q,
+    (snapshot) => callback(snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }))),
+    (err) => { console.error('streamRegisteredTrainings error:', err); callback([]); }
+  );
 };
 
 // Real-time stream of unverified (pending + rejected) training form entries for a branch.
@@ -901,19 +923,24 @@ export const adminAddLanguageRegistration = async (branchId, data) => {
   }
 };
 
-export const streamSupportLessonRegistrations = (branchId, callback) => {
+/**
+ * Stream support-lesson registrations for a branch (global collection).
+ * @param {{ academicYear?: string }} [options] — server-side academic-year filter
+ *   (needs the supportLessonRegistrations
+ *   [branchId ASC, academicYear ASC, createdAt DESC] index).
+ */
+export const streamSupportLessonRegistrations = (branchId, callback, options = {}) => {
   if (!branchId) return () => {};
 
-  const q = query(
-    supportRegistrationCollection(),
-    where('branchId', '==', branchId),
-    orderBy('createdAt', 'desc')
-  );
+  const clauses = [where('branchId', '==', branchId)];
+  if (options.academicYear) clauses.push(where('academicYear', '==', options.academicYear));
+  const q = query(supportRegistrationCollection(), ...clauses, orderBy('createdAt', 'desc'));
 
-  return onSnapshot(q, (snapshot) => {
-    const entries = snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }));
-    callback(entries);
-  });
+  return onSnapshot(
+    q,
+    (snapshot) => callback(snapshot.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }))),
+    (err) => { console.error('streamSupportLessonRegistrations error:', err); callback([]); }
+  );
 };
 
 // ==================== Meta Information ====================

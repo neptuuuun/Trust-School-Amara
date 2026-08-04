@@ -8,14 +8,22 @@
  */
 
 import React from 'react';
-import { User, Users, Clock, CheckCircle, AlertCircle } from 'lucide-react';
+import { User, Users, Clock, CheckCircle, AlertCircle, CalendarClock } from 'lucide-react';
 import { formatPriceText, scheduleRows } from './academicDisplay';
 import { groupTypeBadge } from '../../utils/supportClassification';
+import { formatMonthKey } from '../../utils/dateUtils';
+
+/** Current calendar month as 'YYYY-MM' (local time). */
+const monthKeyNow = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
 
 const BUTTON_BY_STATUS = {
   none:     { text: 'التسجيل',        disabled: false, cls: 'bg-primary text-white hover:bg-primary-600' },
   rejected: { text: 'إعادة المحاولة', disabled: false, cls: 'bg-primary text-white hover:bg-primary-600' },
   pending:  { text: 'قيد المراجعة',   disabled: true,  cls: 'bg-warning-100 text-warning-800 border border-warning-300 cursor-not-allowed' },
+  reserved: { text: 'محجوز',          disabled: true,  cls: 'bg-blue-100 text-blue-800 border border-blue-300 cursor-not-allowed' },
   verified: { text: 'مسجل',           disabled: true,  cls: 'bg-success-100 text-success-800 border border-success-300 cursor-not-allowed' },
   full:     { text: 'اكتمل العدد',     disabled: true,  cls: 'bg-gray-200 text-gray-600 border border-gray-300 cursor-not-allowed' },
   disabled: { text: 'غير متاح',        disabled: true,  cls: 'bg-gray-200 text-gray-600 border border-gray-300 cursor-not-allowed' },
@@ -73,6 +81,23 @@ const ClassCard = ({ cls, status = { type: 'none' }, onRegister }) => {
           <span>{formatPriceText(cls?.price, cls?.priceType)}</span>
         </div>
 
+        {/* Start Month — support only. A future start means registering now
+            RESERVES a seat; the subscription begins on the 1st of that month. */}
+        {cls?.serviceType === 'support' && cls?.startMonth && (() => {
+          const future = String(cls.startMonth) > monthKeyNow();
+          const label = formatMonthKey(cls.startMonth);
+          return (
+            <div className={`mb-3 flex items-start gap-2 rounded-lg border p-3 text-xs ${future ? 'border-blue-200 bg-blue-50 text-blue-800' : 'border-gray-200 bg-gray-50 text-gray-600'}`}>
+              <CalendarClock className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />
+              <span>
+                {future
+                  ? <>تبدأ هذه المجموعة في <strong>{label}</strong>. التسجيل الآن يحجز مقعدك، ويبدأ اشتراكك في 1 {label}.</>
+                  : <>انطلقت هذه المجموعة ({label}).</>}
+              </span>
+            </div>
+          );
+        })()}
+
         {/* Availability — students/public see only open/full status, never the
             exact enrollment count. Enrollment numbers (current/max/remaining) are
             administrative info, shown to admins in SubjectClassManager. */}
@@ -97,6 +122,12 @@ const ClassCard = ({ cls, status = { type: 'none' }, onRegister }) => {
         })()}
 
         {/* Status banners */}
+        {status.type === 'reserved' && (
+          <div className="mb-3 flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3">
+            <CalendarClock className="h-5 w-5 text-blue-500" aria-hidden="true" />
+            <span className="text-sm font-medium text-blue-800">تم حجز مقعدك — يبدأ اشتراكك عند انطلاق المجموعة</span>
+          </div>
+        )}
         {status.type === 'verified' && (
           <div className="mb-3 flex items-center gap-2 rounded-lg border border-success-200 bg-success-50 p-3">
             <CheckCircle className="h-5 w-5 text-success-600" aria-hidden="true" />

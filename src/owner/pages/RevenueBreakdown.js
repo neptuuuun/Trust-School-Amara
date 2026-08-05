@@ -89,7 +89,7 @@ const RevenueBreakdown = () => {
           <p className="text-gray-600">حسب نوع الخدمة ثم المادة — {academicYear}</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <ExportButtons rows={services} columns={CSV_COLUMNS} filename={generateFilename(`revenue-${branchId}-${month}`)} />
+          <ExportButtons rows={services} columns={CSV_COLUMNS} filename={generateFilename(`revenue-${branchId}-${academicYear}`)} />
           <label className="flex items-center gap-2 text-sm text-gray-600">
             <span>الفرع</span>
             <select

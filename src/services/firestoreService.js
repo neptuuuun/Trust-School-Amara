@@ -6,7 +6,7 @@
 import { db } from '../firebase';
 import apiCall from '../utils/apiClient';
 import { logAdminAction } from './auditService';
-import { getCurrentAcademicYear, isAnnualPaymentForCurrentYear, toDate as toDateValue, ANNUAL_FEE_DZD, academicYearMatches } from '../utils/registrationUtils';
+import { getCurrentAcademicYear, isAnnualPaymentForCurrentYear, toDate as toDateValue, ANNUAL_FEE_DZD } from '../utils/registrationUtils';
 import {
   collection,
   collectionGroup,
@@ -274,11 +274,20 @@ const applyClassFilters = (rows, options = {}) => {
   if (options.serviceType) out = out.filter((r) => r.serviceType === options.serviceType);
   if (options.subjectId) out = out.filter((r) => r.subjectId === options.subjectId);
   if (options.studyYear) out = out.filter((r) => r.studyYear === options.studyYear);
-  // Academic-year scope: a group belongs to the AY it was created in. Legacy
-  // groups missing the field fall back on `startMonth` ONLY (never createdAt — a
-  // group may be prepared for next year before 1 July); a group with neither is
-  // excluded (surfaced for manual review by the migration, never guessed).
-  if (options.academicYear) out = out.filter((r) => academicYearMatches(r, options.academicYear, ['startMonth']));
+  // Academic-year scope — BACKWARDS-COMPATIBLE. Only groups that carry an
+  // EXPLICIT `academicYear` field are scoped to the requested year. Legacy groups
+  // written before the academic-year system (no field) are ALWAYS shown.
+  //
+  // Why not derive the year from `startMonth` for legacy groups? Because that
+  // silently hides EVERY pre-existing group the moment the year rolls over: all
+  // current-year views request the new AY label (e.g. "2026-2027"), while a legacy
+  // group's startMonth still resolves to the previous one ("2025-2026"). New groups
+  // are stamped server-side and scope correctly; unstamped legacy groups stay
+  // visible until the backfill migration (or a re-save) stamps them — restoring the
+  // pre-filter behaviour without touching any data.
+  if (options.academicYear) {
+    out = out.filter((r) => !r.academicYear || r.academicYear === options.academicYear);
+  }
   if (options.activeOnly) out = out.filter((r) => (r.status || 'active') === 'active');
   return out.sort(sortByArabic('groupName'));
 };

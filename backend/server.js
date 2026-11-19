@@ -94,6 +94,19 @@ const pollLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, max: 300,
   standardHeaders: true, legacyHeaders: false, message: rlMessage,
 });
+// Public site content (`/api/public/*`) gets its own bucket. It is an anonymous,
+// read-only, cacheable endpoint, but under the shared 300/15min general limiter it
+// competed with every AUTHENTICATED call from the same IP — dashboards, notification
+// polling, owner analytics. A signed-in user exhausts that bucket long before an
+// anonymous visitor does, and the 429 landed on `GET /api/public/website`, which is
+// what renders the owner-managed homepage gallery and contact FAQ. Those sections
+// render only when non-empty, so the failed read silently DELETED them — a bug that
+// looked like "the gallery disappears once you log in". Public content must not be
+// collateral damage of authenticated traffic, so it gets a separate, generous cap.
+const publicContentLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, max: 600,
+  standardHeaders: true, legacyHeaders: false, message: rlMessage,
+});
 
 // ── Chargily webhook — mounted BEFORE the general/sensitive limiters ──────────
 // Chargily delivers every callback from its own small, fixed set of egress IPs, so
@@ -134,6 +147,13 @@ app.post('/api/chargily/webhook', webhookLimiter, handleWebhook);
 app.post('/api/chargily/verify/:orderId', pollLimiter, verifyToken, verifyAndProcess);
 app.get('/api/chargily/order/:orderId',   pollLimiter, verifyToken, getOrderStatus);
 
+// ── Public site content — mounted BEFORE the general limiter ──────────────────
+// Same pattern as the webhook and poll mounts above: registering it here means
+// Express matches it first, so it uses publicContentLimiter's dedicated bucket and
+// never reaches the shared 300/15min general cap. No auth — the anonymous public
+// site reads this.
+app.use('/api/public', publicContentLimiter, publicRoutes);
+
 app.use('/api', generalLimiter);
 
 // ── Routes ────────────────────────────────────────────────────────────────────
@@ -153,9 +173,8 @@ app.post('/api/ledger/audit',               verifyToken, requireAdmin, logAudit)
 // Ledger recorder (admin-bound) + owner analytics (owner-only, read).
 app.use('/api/ledger',                      sensitiveLimiter, ledgerRoutes);
 app.use('/api/owner',                       ownerRoutes);
-// Public website content — no auth (the anonymous site reads it). Under the
-// general limiter (300/15min on /api) which is ample for a read endpoint.
-app.use('/api/public',                      publicRoutes);
+// NOTE: /api/public is mounted above, before the general limiter, so it keeps its
+// own rate-limit bucket. See publicContentLimiter.
 app.use('/api/notify',                      notifyRoutes);
 // Per-entity audit history (owner = any branch, admin = own branch; enforced in handler).
 app.use('/api/audit',                       auditRoutes);

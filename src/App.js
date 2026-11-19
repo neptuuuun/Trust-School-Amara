@@ -20,9 +20,7 @@ const LanguagesPage = lazy(() => import('./pages/LanguagesPage'));
 const SupportLessonsPage = lazy(() => import('./pages/SupportLessonsPage'));
 const YearPage = lazy(() => import('./pages/YearPage'));
 const TrainingsPage = lazy(() => import('./pages/TrainingsPage'));
-const CourseRegistrationPage = lazy(() => import('./pages/CourseRegistrationPage'));
 const PaymentStatusPage = lazy(() => import('./pages/PaymentStatusPage'));
-const RegistrationConfirmationPage = lazy(() => import('./pages/RegistrationConfirmationPage'));
 const BranchSelector = lazy(() => import('./pages/BranchSelector'));
 const StudentDashboard = lazy(() => import('./pages/StudentDashboard'));
 const AdminDashboard = lazy(() => import('./admin/AdminDashboard'));
@@ -361,8 +359,6 @@ function App() {
                   <Route path="/profile" element={<StudentDashboard />} />
                   <Route path="/student-dashboard" element={<Navigate to="/profile" replace />} />
                   <Route element={<PublicLayout />}>
-                    <Route path="course-registration" element={<CourseRegistrationPage />} />
-                    <Route path="registration-confirmation" element={<RegistrationConfirmationPage />} />
                     <Route path="language-registration" element={<LanguageRegistrationForm />} />
                     <Route path="support-lesson-registration" element={<SupportLessonRegistrationForm />} />
                     <Route path="training-registration" element={<TrainingRegistrationForm />} />

@@ -39,11 +39,13 @@ export const WebsiteSettingsProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const mountedRef = useRef(true);
+  const lastLoadedAtRef = useRef(0);
 
   const load = useCallback(async () => {
     try {
       const res = await fetchPublicWebsite();
       if (!mountedRef.current) return;
+      lastLoadedAtRef.current = Date.now();
       setSettings(mergeWebsiteSettings(res?.settings || {}));
       setError(null);
     } catch (e) {
@@ -60,14 +62,29 @@ export const WebsiteSettingsProvider = ({ children }) => {
   useEffect(() => {
     mountedRef.current = true;
     load();
+
     // Refetch when the owner (or a visitor) returns to the tab, so a saved change
     // shows up without a manual reload.
-    const onVisible = () => { if (document.visibilityState === 'visible') load(); };
-    window.addEventListener('focus', load);
+    //
+    // Throttled, because `focus` and `visibilitychange` both fire on a single tab
+    // switch: unthrottled, an active session re-reads this endpoint on every
+    // alt-tab. That is pure waste for content that changes a few times a month,
+    // and it is what pushed signed-in users over the shared /api rate limit —
+    // whose 429 then blanked the owner-managed sections. An explicit refresh()
+    // (owner save) bypasses the throttle and is always immediate.
+    const REFETCH_THROTTLE_MS = 30 * 1000;
+    const loadIfStale = () => {
+      if (Date.now() - lastLoadedAtRef.current < REFETCH_THROTTLE_MS) return;
+      load();
+    };
+    const onFocus = () => loadIfStale();
+    const onVisible = () => { if (document.visibilityState === 'visible') loadIfStale(); };
+
+    window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVisible);
     return () => {
       mountedRef.current = false;
-      window.removeEventListener('focus', load);
+      window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [load]);

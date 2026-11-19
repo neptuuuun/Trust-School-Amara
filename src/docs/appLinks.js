@@ -14,8 +14,7 @@ export const APP_ROUTES = new Set([
   // public / student
   '/home', '/support-lessons', '/languages', '/trainings', '/contact', '/internal-rules',
   '/login', '/register', '/select-branch', '/profile',
-  '/course-registration', '/language-registration', '/support-lesson-registration',
-  '/training-registration', '/registration-confirmation',
+  '/language-registration', '/support-lesson-registration', '/training-registration',
   // admin
   '/admin', '/admin/users', '/admin/annual-fees', '/admin/languages-registered',
   '/admin/support-registered', '/admin/trainings-registered', '/admin/training-requests',

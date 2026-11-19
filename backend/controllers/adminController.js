@@ -5,6 +5,7 @@ const academicYear = require('../services/academicYear');
 const supportEligibility = require('../services/supportEligibility');
 const financeSettings = require('../services/financeSettings');
 const { recordManualPaymentOrder } = require('../services/paymentOrderLog');
+const { buildAnnualFeePaymentDoc } = require('../services/annualFeeRecord');
 const { normalizeSchool, isValidSchool } = require('../constants');
 // Support seats are recounted live (verified AND not expired) — reuse the single
 // implementation instead of duplicating the expiry rule here.
@@ -175,28 +176,27 @@ const recordAnnualFee = async (req, res, next) => {
     const paidTs       = admin.firestore.Timestamp.fromDate(validPaid);
 
     // ── Canonical annualPayments doc (mirrors the Chargily/cash schema) ───────
+    // `academicYear` MUST be the "YYYY-YYYY" label — it is the field every reader
+    // filters on (admin list/overview, student dashboard, eligibility). The grade
+    // goes to studyYear/level. See services/annualFeeRecord.js for the full why.
     const payRef = paymentsRef.doc();
     await payRef.set({
-      userId,
-      userName:     studentName,
-      studentName,
-      userEmail:    studentEmail,
-      studentPhone,
-      amount,
-      year:         label,   // academic-year label '2025-2026' (archive display + ledger period)
-      academicYear: grade,   // grade id 'sec3' (kept for support-eligibility readers)
-      studyYear:    grade,
-      level:        grade,
-      school,
-      paymentMethod: 'physical',
-      source:        'admin_manual',
-      status:        'verified',
-      paymentStatus: 'verified',
-      notes:         notes || 'تم تسجيل الرسوم السنوية يدوياً من قبل الإدارة',
-      createdAt:     paidTs,
-      verifiedAt:    nowTs,
-      verifiedBy:    { uid: adminUid, email: adminEmail, name: '' },
-      recordedBy:    { uid: adminUid, email: adminEmail, role: 'admin' },
+      ...buildAnnualFeePaymentDoc({
+        userId,
+        studentName,
+        studentEmail,
+        studentPhone,
+        amount,
+        label,
+        grade,
+        school,
+        notes,
+        source: 'admin_manual',
+      }),
+      createdAt:  paidTs,
+      verifiedAt: nowTs,
+      verifiedBy: { uid: adminUid, email: adminEmail, name: '' },
+      recordedBy: { uid: adminUid, email: adminEmail, role: 'admin' },
     });
 
     // ── Student profile: union of every flag readers depend on ────────────────
@@ -210,10 +210,11 @@ const recordAnnualFee = async (req, res, next) => {
       'registrations.annualFee': label,
       'registrations.annualFeeHistory': admin.firestore.FieldValue.arrayUnion({
         registrationId: payRef.id,
-        year:           label,
+        year:           label,   // "YYYY-YYYY" — what the UI renders
+        academicYear:   label,   // same canonical label (never a grade)
+        studyYear:      grade || null,
         registeredAt:   Date.now(),
         source:         'admin_manual',
-        academicYear:   grade || null,
       }),
     };
     if (grade)       userPatch.studyYear   = grade;

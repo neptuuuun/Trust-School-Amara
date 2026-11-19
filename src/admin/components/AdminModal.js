@@ -93,9 +93,24 @@ const AdminModal = ({
   const restoreFocusRef = useRef(null);
   const pressedOnBackdrop = useRef(false);
 
+  // The open-transition effect below moves focus imperatively (into the dialog
+  // on open, back to the trigger on close). It must therefore run ONLY when
+  // `open` actually flips — never when `onClose` / `initialFocusRef` merely get
+  // a new identity on a parent re-render (a background poll calling setState on
+  // the page that renders this modal, a context update, etc.). If those were
+  // effect dependencies, each such re-render would tear the effect down and
+  // re-run it, and its cleanup + re-run would yank focus out of whatever field
+  // the user is mid-typing in — the "inputs randomly lose focus" bug. We read
+  // the latest values through refs so the effect can stay keyed on `open` alone.
+  const onCloseRef = useRef(onClose);
+  const initialFocusRefRef = useRef(initialFocusRef);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
+  useEffect(() => { initialFocusRefRef.current = initialFocusRef; }, [initialFocusRef]);
+
   useBodyScrollLock(open);
 
-  // Escape-to-close + focus management.
+  // Escape-to-close + focus management. Keyed on `open` ALONE — see the refs
+  // above for why `onClose` / `initialFocusRef` must NOT be dependencies.
   useEffect(() => {
     if (!open) return undefined;
     restoreFocusRef.current = document.activeElement;
@@ -103,14 +118,14 @@ const AdminModal = ({
     const onKey = (e) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
-        onClose?.();
+        onCloseRef.current?.();
       }
     };
     document.addEventListener('keydown', onKey);
 
     // Move focus into the dialog (after paint) for accessibility.
     const focusId = window.setTimeout(() => {
-      const target = initialFocusRef?.current || cardRef.current;
+      const target = initialFocusRefRef.current?.current || cardRef.current;
       target?.focus?.();
     }, 0);
 
@@ -120,7 +135,8 @@ const AdminModal = ({
       const prev = restoreFocusRef.current;
       if (prev && typeof prev.focus === 'function') prev.focus();
     };
-  }, [open, onClose, initialFocusRef]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   // Backdrop close only when BOTH press and release happen on the backdrop —
   // prevents accidental close when a drag/selection starts inside and ends outside.

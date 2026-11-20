@@ -191,7 +191,11 @@ const AddSupportStudentModal = ({ branchId, onClose, onSuccess }) => {
 
       if (!annualSnap.empty) {
         const paymentData = annualSnap.docs[0].data();
-        setApprovedYear(paymentData.academicYear || paymentData.studyYear || null);
+        // `academicYear` on annual payments is the "YYYY-YYYY" label, never a grade —
+        // the grade lives in studyYear/level. Fall back to the level saved on the
+        // profile so the admin never has to re-enter it.
+        const legacyGrade = getYearById(paymentData.academicYear) ? paymentData.academicYear : null;
+        setApprovedYear(paymentData.studyYear || paymentData.level || legacyGrade || u.studyYear || null);
       } else {
         setApprovedYear(null);
       }

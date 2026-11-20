@@ -30,7 +30,14 @@ const AdminCreateStudentModal = ({ branchId, onClose, onSuccess }) => {
   const [password,          setPassword]          = useState('');
   const [showPassword,      setShowPassword]      = useState(false);
   const [markAnnualFee,     setMarkAnnualFee]     = useState(false);
+  // The student's educational level. Saved on the PROFILE at creation whether or
+  // not the annual fee is paid, so no later workflow asks for it again.
   const [selectedAcademicYear, setSelectedAcademicYear] = useState('');
+  // Optional personal data — the same fields self-registration and the bulk
+  // import collect. Left empty when unknown.
+  const [birthDate,         setBirthDate]         = useState('');
+  const [birthPlace,        setBirthPlace]        = useState('');
+  const [address,           setAddress]           = useState('');
 
   const [submitting, setSubmitting] = useState(false);
   const [error,      setError]      = useState('');
@@ -46,7 +53,7 @@ const AdminCreateStudentModal = ({ branchId, onClose, onSuccess }) => {
     if (!password)          return 'يرجى إدخال كلمة مرور مؤقتة';
     if (password.length < 6) return 'كلمة المرور يجب أن تكون 6 أحرف على الأقل';
     if (markAnnualFee && !selectedAcademicYear)
-      return 'يرجى اختيار السنة الدراسية عند تسجيل الرسوم السنوية';
+      return 'يرجى اختيار المستوى الدراسي عند تسجيل الرسوم السنوية';
     return null;
   };
 
@@ -70,6 +77,10 @@ const AdminCreateStudentModal = ({ branchId, onClose, onSuccess }) => {
           school:    school.trim(),
           password,
           adminUid:  adminUser?.uid ?? null,
+          studyYear:  selectedAcademicYear || null,
+          birthDate:  birthDate || null,
+          birthPlace: birthPlace.trim() || null,
+          address:    address.trim() || null,
         }),
       });
 
@@ -89,7 +100,7 @@ const AdminCreateStudentModal = ({ branchId, onClose, onSuccess }) => {
 
       const yearLabel = ACADEMIC_YEARS.find(y => y.id === selectedAcademicYear)?.label || '';
       setSuccess(
-        `تم إنشاء حساب الطالب بنجاح${markAnnualFee ? ` وتم تسجيل الرسوم السنوية للسنة: ${yearLabel}` : ''}.`
+        `تم إنشاء حساب الطالب بنجاح${yearLabel ? ` (المستوى: ${yearLabel})` : ''}${markAnnualFee ? ' وتم تسجيل الرسوم السنوية' : ''}.`
       );
       setTimeout(() => {
         onSuccess?.();
@@ -227,6 +238,83 @@ const AdminCreateStudentModal = ({ branchId, onClose, onSuccess }) => {
           <p className="mt-1 text-xs text-gray-500">{SCHOOL_HINT_AR}</p>
         </div>
 
+        {/* Optional personal data (same fields as self-registration / bulk import) */}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label htmlFor="acs-birthdate" className="mb-1.5 block text-sm font-medium text-gray-700">
+              تاريخ الازدياد <span className="text-xs font-normal text-gray-400">(اختياري)</span>
+            </label>
+            <input
+              type="date"
+              id="acs-birthdate"
+              value={birthDate}
+              max={new Date().toISOString().slice(0, 10)}
+              onChange={(e) => setBirthDate(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
+              dir="ltr"
+            />
+          </div>
+          <div>
+            <label htmlFor="acs-birthplace" className="mb-1.5 block text-sm font-medium text-gray-700">
+              مكان الازدياد <span className="text-xs font-normal text-gray-400">(اختياري)</span>
+            </label>
+            <input
+              type="text"
+              id="acs-birthplace"
+              autoComplete="off"
+              value={birthPlace}
+              onChange={(e) => setBirthPlace(e.target.value)}
+              placeholder="المدينة / المنطقة"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
+            />
+          </div>
+        </div>
+        <div>
+          <label htmlFor="acs-address" className="mb-1.5 block text-sm font-medium text-gray-700">
+            العنوان <span className="text-xs font-normal text-gray-400">(اختياري)</span>
+          </label>
+          <input
+            type="text"
+            id="acs-address"
+            autoComplete="off"
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+            placeholder="العنوان الكامل"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
+          />
+        </div>
+
+        {/* Educational level — saved on the profile, reused by every later workflow */}
+        <div>
+          <label htmlFor="acs-level" className="mb-1.5 block text-sm font-medium text-gray-700">
+            المستوى الدراسي{' '}
+            {markAnnualFee
+              ? <span className="text-danger-500">*</span>
+              : <span className="text-xs font-normal text-gray-400">(اختياري)</span>}
+          </label>
+          <select
+            id="acs-level"
+            value={selectedAcademicYear}
+            onChange={(e) => setSelectedAcademicYear(e.target.value)}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
+          >
+            <option value="">-- غير محدد --</option>
+            <optgroup label="متوسط">
+              {ACADEMIC_YEARS.filter(y => y.id.startsWith('mid')).map(y => (
+                <option key={y.id} value={y.id}>{y.label}</option>
+              ))}
+            </optgroup>
+            <optgroup label="ثانوي">
+              {ACADEMIC_YEARS.filter(y => y.id.startsWith('sec')).map(y => (
+                <option key={y.id} value={y.id}>{y.label}</option>
+              ))}
+            </optgroup>
+          </select>
+          <p className="mt-1 text-xs text-gray-500">
+            يُحفظ في ملف الطالب للسنة الدراسية الحالية، ولن يُطلب مرة أخرى عند تسجيل الرسوم أو دروس الدعم.
+          </p>
+        </div>
+
         {/* Temporary password */}
         <div>
           <label htmlFor="acs-temp-password" className="mb-1.5 block text-sm font-medium text-gray-700">
@@ -255,7 +343,7 @@ const AdminCreateStudentModal = ({ branchId, onClose, onSuccess }) => {
             </button>
           </div>
           <p className="mt-1.5 text-xs text-gray-500">
-            يجب إبلاغ الطالب بكلمة المرور المؤقتة لتسجيل الدخول لأول مرة.
+            يجب إبلاغ الطالب بكلمة المرور المؤقتة لتسجيل الدخول لأول مرة، وسيُطلب منه تغييرها عند أول دخول.
           </p>
         </div>
 
@@ -264,50 +352,18 @@ const AdminCreateStudentModal = ({ branchId, onClose, onSuccess }) => {
           <input
             type="checkbox"
             checked={markAnnualFee}
-            onChange={(e) => {
-              setMarkAnnualFee(e.target.checked);
-              if (!e.target.checked) setSelectedAcademicYear('');
-            }}
+            onChange={(e) => setMarkAnnualFee(e.target.checked)}
             className="mt-0.5 h-4 w-4 flex-shrink-0 rounded border-gray-300 text-primary focus:ring-primary/30"
           />
           <div>
             <p className="text-sm font-medium text-gray-800">تسجيل الرسوم السنوية كمدفوعة</p>
             <p className="mt-1 text-xs leading-relaxed text-gray-500">
               تحقق من هذا الخيار إذا دفع الطالب الرسوم السنوية نقداً في المكتب.
-              سيتم تفعيل وصوله لدروس الدعم للسنة الدراسية المختارة.
+              يُستعمل المستوى الدراسي المحدد أعلاه — وهو إلزامي في هذه الحالة.
+              إن لم يدفع بعد، يبقى مستواه محفوظاً ويمكن تسجيل الرسوم لاحقاً دون إعادة إدخاله.
             </p>
           </div>
         </label>
-
-        {/* Academic year selector — only visible when annual fee is checked */}
-        {markAnnualFee && (
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-gray-700">
-              السنة الدراسية للرسوم <span className="text-danger-500">*</span>
-            </label>
-            <select
-              value={selectedAcademicYear}
-              onChange={(e) => setSelectedAcademicYear(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
-              required
-            >
-              <option value="">-- اختر السنة الدراسية --</option>
-              <optgroup label="متوسط">
-                {ACADEMIC_YEARS.filter(y => y.id.startsWith('mid')).map(y => (
-                  <option key={y.id} value={y.id}>{y.label}</option>
-                ))}
-              </optgroup>
-              <optgroup label="ثانوي">
-                {ACADEMIC_YEARS.filter(y => y.id.startsWith('sec')).map(y => (
-                  <option key={y.id} value={y.id}>{y.label}</option>
-                ))}
-              </optgroup>
-            </select>
-            <p className="mt-1 rounded border border-secondary-200 bg-secondary-50 px-2 py-1 text-xs text-secondary-700">
-              سيتم تفعيل دروس الدعم للسنة المختارة فقط.
-            </p>
-          </div>
-        )}
       </form>
     </AdminModal>
   );

@@ -22,11 +22,20 @@ import { getStudentProfile } from '../../services/adminSearchService';
 import { branchLabel } from '../../utils/branches';
 import { formatDate } from '../../utils/dateUtils';
 import { PAYMENT_TYPE_LABELS } from '../../utils/receipt';
+import { getYearById } from '../../data/studyLevels';
 import ReceiptButton from '../../components/ReceiptButton';
 import EntityHistoryPanel from '../components/EntityHistoryPanel';
 import {
   StatCard, EmptyState, DetailSection, DetailRow, ArchiveSkeleton, formatMoney,
 } from '../components/archive/ArchiveKit';
+
+/** Login-account state as recorded on the profile (legacy profiles had a login). */
+const accountLabel = (p) => {
+  if (p.authAccountStatus === 'none') return 'بدون حساب (لا يوجد بريد)';
+  if (p.authAccountStatus === 'failed') return 'فشل إنشاء الحساب';
+  if (p.createdByAdmin && p.mustChangePassword) return 'نشط — كلمة مرور مؤقتة لم تُغيَّر';
+  return 'نشط';
+};
 
 const VERIFICATION_UI = {
   verified: { label: 'موثّق', Icon: BadgeCheck, cls: 'bg-success-50 text-success-700 border-success-200' },
@@ -156,6 +165,11 @@ export default function Student360() {
             <DetailRow label="هاتف ولي الأمر" value={profile.guardianPhone || profile.phoneNumber} />
             <DetailRow label="المؤسسة التعليمية" value={profile.school} />
             <DetailRow label="تاريخ الميلاد" value={profile.birthDate} />
+            <DetailRow label="مكان الميلاد" value={profile.birthPlace} />
+            <DetailRow label="العنوان" value={profile.address} />
+            <DetailRow label="المستوى الدراسي" value={getYearById(profile.studyYear)?.nameShort || profile.studyYear} />
+            <DetailRow label="السنة الدراسية" value={profile.academicYear} />
+            <DetailRow label="حساب الدخول" value={accountLabel(profile)} />
           </DetailSection>
 
           <div className="space-y-4">

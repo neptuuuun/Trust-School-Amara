@@ -18,6 +18,7 @@ const auditRoutes    = require('./routes/audit');
 const { verifyToken, requireAdmin } = require('./middleware/auth');
 const { logAudit }   = require('./controllers/ledgerController');
 const { handleWebhook, getOrderStatus, verifyAndProcess } = require('./controllers/chargilyController');
+const { bulkImportStudents } = require('./controllers/adminBulkImportController');
 const errorHandler   = require('./middleware/errorHandler');
 const { startCronJobs } = require('./services/cronService');
 
@@ -107,6 +108,15 @@ const publicContentLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, max: 600,
   standardHeaders: true, legacyHeaders: false, message: rlMessage,
 });
+// Student bulk import is sent in chunks (one preview request + one request per
+// ~50 students, so a progress bar is possible and no single request runs for
+// minutes). A 500-student file is ~11 requests — under the shared 30/15min
+// sensitiveLimiter, one import plus normal dashboard use would 429 the admin
+// mid-import. Admin-only + token-verified, so it gets its own modest bucket.
+const bulkImportLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, max: 60,
+  standardHeaders: true, legacyHeaders: false, message: rlMessage,
+});
 
 // ── Chargily webhook — mounted BEFORE the general/sensitive limiters ──────────
 // Chargily delivers every callback from its own small, fixed set of egress IPs, so
@@ -153,6 +163,12 @@ app.get('/api/chargily/order/:orderId',   pollLimiter, verifyToken, getOrderStat
 // never reaches the shared 300/15min general cap. No auth — the anonymous public
 // site reads this.
 app.use('/api/public', publicContentLimiter, publicRoutes);
+
+// ── Student bulk import — mounted BEFORE the general/sensitive limiters ───────
+// Same pattern as the mounts above: matched first, so it uses bulkImportLimiter's
+// dedicated bucket. Still verifyToken + requireAdmin (branch-bound) gated. The
+// equivalent route inside routes/admin.js stays valid if mounted standalone.
+app.post('/api/admin/bulk-import-students', bulkImportLimiter, verifyToken, requireAdmin, bulkImportStudents);
 
 app.use('/api', generalLimiter);
 

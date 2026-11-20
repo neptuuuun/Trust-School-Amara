@@ -18,6 +18,7 @@
  */
 
 const { db } = require('../config/firebase');
+const academicYear = require('../services/academicYear');
 
 function tsToIso(v) {
   if (!v) return null;
@@ -101,7 +102,14 @@ const getStudentProfile = async (req, res, next) => {
       .filter((p) => !p.branchId || p.branchId === branchId)
       .sort((a, b) => new Date(b.paidAt || b.createdAt || 0) - new Date(a.paidAt || a.createdAt || 0));
 
-    const annualFeePaid = annualPayments.some((p) => p.status === 'verified');
+    // The annual fee is per ACADEMIC YEAR (resets every 1 July): "paid" means a
+    // verified payment for the CURRENT year — same rule as the Annual Fees page,
+    // the student dashboard and support eligibility. A payment from a previous
+    // year stays in `history` but no longer counts as paid.
+    const currentYear = academicYear.getAcademicYearLabel();
+    const currentPaid = annualPayments.find((p) => p.status === 'verified'
+      && academicYear.academicYearMatches(p, currentYear, ['verifiedAt', 'createdAt']));
+    const annualFeePaid = Boolean(currentPaid);
 
     return res.json({
       branchId,
@@ -113,7 +121,8 @@ const getStudentProfile = async (req, res, next) => {
       },
       annualFee: {
         paid: annualFeePaid,
-        current: annualPayments[0] || null,
+        academicYear: currentYear,
+        current: currentPaid || annualPayments[0] || null,
         history: annualPayments,
       },
       registrations: {

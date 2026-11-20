@@ -21,11 +21,14 @@ import {
   GraduationCap,
   Pencil,
   UploadCloud,
+  KeyRound,
 } from 'lucide-react';
 import Breadcrumb from '../components/Breadcrumb';
 import FileViewerModal from '../components/FileViewerModal';
 import AdminCreateStudentModal from '../components/AdminCreateStudentModal';
 import BulkImportStudentsModal from '../components/BulkImportStudentsModal';
+import StudentCredentialsModal, { credentialActionFor } from '../components/StudentCredentialsModal';
+import { getYearById } from '../../data/studyLevels';
 import EditStudentAverageModal from '../components/EditStudentAverageModal';
 import AdminConfirmDialog from '../components/AdminConfirmDialog';
 import { classificationFromProfile, classificationBadge } from '../../utils/supportClassification';
@@ -84,6 +87,31 @@ const getStatusConfig = (user) => {
   return STATUS_CONFIG[key] || { label: key, color: 'bg-gray-100 text-gray-700', icon: Clock };
 };
 
+/** Saved educational level + the academic year it refers to, e.g. "ثانية ثانوي · 2026-2027". */
+const levelText = (user) => {
+  const label = getYearById(user?.studyYear)?.nameShort || '';
+  if (!label) return '';
+  return user?.academicYear ? `${label} · ${user.academicYear}` : label;
+};
+
+/**
+ * Login-account state of a student. Profiles written before account tracking
+ * existed have no `authAccountStatus` — every one of them was created WITH a
+ * login, so they count as active.
+ */
+export const accountStateOf = (user) => {
+  if (user?.authAccountStatus === 'none') return 'none';
+  if (user?.authAccountStatus === 'failed') return 'failed';
+  if (user?.createdByAdmin === true && user?.mustChangePassword === true) return 'temporary';
+  return 'active';
+};
+
+const ACCOUNT_BADGE = {
+  none:      { label: 'بدون حساب دخول',                   cls: 'border-gray-200 bg-gray-50 text-gray-600' },
+  failed:    { label: 'فشل إنشاء حساب الدخول',            cls: 'border-danger-200 bg-danger-50 text-danger-700' },
+  temporary: { label: 'كلمة مرور مؤقتة لم تُغيَّر بعد', cls: 'border-warning-200 bg-warning-50 text-warning-800' },
+};
+
 // ─── Field row inside card ───────────────────────────────────────────────────
 
 const Field = ({ icon: Icon, label, value }) => (
@@ -98,7 +126,7 @@ const Field = ({ icon: Icon, label, value }) => (
 
 // ─── Single user card ────────────────────────────────────────────────────────
 
-const UserCard = ({ user, onDecision, onDelete, onEditAverage, processing, onViewImage }) => {
+const UserCard = ({ user, onDecision, onDelete, onEditAverage, onCredentials, processing, onViewImage }) => {
   const photoUrl   = getImageUrl(user.photoUrl);
   const idCardUrl  = getImageUrl(user.idCardUrl);
   const busy       = processing[`decision-${user.id}`];
@@ -156,7 +184,33 @@ const UserCard = ({ user, onDecision, onDelete, onEditAverage, processing, onVie
         <Field icon={MapPin}    label="العنوان"           value={user.address} />
         <Field icon={Building2} label="الفرع"             value={branchLabel(user.branchId)} />
         <Field icon={Calendar}  label="تاريخ التسجيل"    value={formatDate(user.createdAt)} />
+        <Field icon={GraduationCap} label="المستوى الدراسي" value={levelText(user)} />
       </div>
+
+      {/* Login account — shown only when it needs the admin's attention. */}
+      {(() => {
+        const badge = ACCOUNT_BADGE[accountStateOf(user)];
+        const action = credentialActionFor(user);
+        if (!badge && !action) return null;
+        return (
+          <div className="px-4 pb-3">
+            <div className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 ${badge ? badge.cls : 'border-gray-100 bg-gray-50'}`}>
+              <span className="flex items-center gap-1.5 text-xs font-semibold">
+                <KeyRound className="h-3.5 w-3.5" /> {badge ? badge.label : 'حساب الدخول'}
+              </span>
+              {action && (
+                <button
+                  type="button"
+                  onClick={() => onCredentials(user)}
+                  className="rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+                >
+                  {action.label}
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Accountability — who enrolled / last edited this student (admin-created only). */}
       {((user.createdBy && typeof user.createdBy === 'object') ||
@@ -281,6 +335,15 @@ const CLASS_FILTERS = [
   { value: 'unclassified',  label: 'غير محدد' },
 ];
 
+// Login-account filter — finds students imported without an email, failed account
+// creations, and temporary passwords not yet replaced.
+const ACCOUNT_FILTERS = [
+  { value: 'all',       label: 'كل الحسابات' },
+  { value: 'none',      label: 'بدون حساب' },
+  { value: 'failed',    label: 'فشل الحساب' },
+  { value: 'temporary', label: 'كلمة مرور مؤقتة' },
+];
+
 const UsersPage = () => {
   const [users,               setUsers]               = useState([]);
   const [loading,             setLoading]             = useState(true);
@@ -288,6 +351,8 @@ const UsersPage = () => {
   const [searchQuery,         setSearchQuery]         = useState('');
   const [statusFilter,        setStatusFilter]        = useState('all');
   const [classFilter,         setClassFilter]         = useState('all');
+  const [accountFilter,       setAccountFilter]       = useState('all');
+  const [credentialsFor,      setCredentialsFor]      = useState(null);
   const [averageModal,        setAverageModal]        = useState({ open: false, student: null });
   const [processing,          setProcessing]          = useState({});
   const [imageModal,          setImageModal]          = useState({ open: false, url: null, title: '' });
@@ -380,6 +445,11 @@ const UsersPage = () => {
       });
     }
 
+    // Login-account filter
+    if (accountFilter !== 'all') {
+      list = list.filter((u) => accountStateOf(u) === accountFilter);
+    }
+
     // Search
     const q = searchQuery.trim().toLowerCase();
     if (q) {
@@ -405,7 +475,25 @@ const UsersPage = () => {
       if (aPending !== bPending) return aPending - bPending;
       return msOf(b.createdAt) - msOf(a.createdAt);
     });
-  }, [users, searchQuery, statusFilter, classFilter]);
+  }, [users, searchQuery, statusFilter, classFilter, accountFilter]);
+
+  // Counts per login-account state for the account filter pills.
+  const accountCounts = useMemo(() => {
+    const c = { all: users.length, none: 0, failed: 0, temporary: 0, active: 0 };
+    users.forEach((u) => { c[accountStateOf(u)] += 1; });
+    return c;
+  }, [users]);
+
+  // After an account was created / a temporary password issued from the modal,
+  // reflect it immediately (the background refresh then confirms it).
+  const handleCredentialsIssued = ({ email }) => {
+    const target = credentialsFor;
+    if (!target) return;
+    setUsers((prev) => prev.map((u) => (u.id === target.id
+      ? { ...u, email: email || u.email, authAccountStatus: 'active', authAccountError: null, mustChangePassword: true }
+      : u)));
+    loadUsers({ background: true });
+  };
 
   // Counts per classification for the support filter pills.
   const classCounts = useMemo(() => {
@@ -682,6 +770,29 @@ const UsersPage = () => {
         ))}
       </div>
 
+      {/* Login-account filter */}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs font-medium text-gray-500">حساب الدخول:</span>
+        {ACCOUNT_FILTERS.map((f) => (
+          <button
+            key={f.value}
+            onClick={() => setAccountFilter(f.value)}
+            className={`px-3.5 py-1.5 rounded-full text-sm font-medium transition-colors ${
+              accountFilter === f.value
+                ? 'bg-primary text-white shadow-sm'
+                : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            {f.label}
+            <span className={`ms-1.5 text-xs px-1.5 py-0.5 rounded-full ${
+              accountFilter === f.value ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-600'
+            }`}>
+              {accountCounts[f.value] ?? 0}
+            </span>
+          </button>
+        ))}
+      </div>
+
       {/* Results count */}
       <div className="flex items-center gap-2 text-sm text-gray-500">
         <Users className="w-4 h-4" />
@@ -709,6 +820,7 @@ const UsersPage = () => {
               onDecision={handleDecision}
               onDelete={handleDeleteStudent}
               onEditAverage={handleEditAverage}
+              onCredentials={setCredentialsFor}
               processing={processing}
               onViewImage={openImage}
             />
@@ -742,6 +854,14 @@ const UsersPage = () => {
             // spinner right after a successful create, hiding the new student.
             loadUsers({ background: true });
           }}
+        />
+      )}
+
+      {credentialsFor && (
+        <StudentCredentialsModal
+          student={{ ...credentialsFor, branchId: credentialsFor.branchId || selectedBranchId }}
+          onClose={() => setCredentialsFor(null)}
+          onDone={handleCredentialsIssued}
         />
       )}
 

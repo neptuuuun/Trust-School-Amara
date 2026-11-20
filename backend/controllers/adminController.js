@@ -3,15 +3,14 @@ const ledger = require('../services/ledgerService');
 const { writeAudit, resolveActor } = require('../services/auditService');
 const academicYear = require('../services/academicYear');
 const supportEligibility = require('../services/supportEligibility');
-const financeSettings = require('../services/financeSettings');
-const { recordManualPaymentOrder } = require('../services/paymentOrderLog');
-const { buildAnnualFeePaymentDoc } = require('../services/annualFeeRecord');
-const { normalizeSchool, isValidSchool } = require('../constants');
+const { isValidSchool } = require('../constants');
 // Support seats are recounted live (verified AND not expired) — reuse the single
 // implementation instead of duplicating the expiry rule here.
 const { recomputeSupportClassEnrollment } = require('./registrationController');
 const { deleteUserFiles } = require('../services/supabaseStorage');
 const { provisionStudent } = require('../services/studentProvisioning');
+const { recordAnnualFeeForStudent } = require('../services/annualFeeService');
+const fields = require('../services/studentFields');
 
 const VALID_BRANCHES = ['boumerdes', 'bordj_menaiel'];
 
@@ -26,8 +25,13 @@ const BRANCH_NAMES = {
  * Creates a Firebase Auth user and a pre-verified Firestore student profile.
  * Only reachable by admins (verifyToken + requireAdmin middleware).
  *
- * Body: { branchId, fullName, email, phone?, password, adminUid? }
- * Response 201: { userId }
+ * Body: { branchId, fullName, email, phone?, school, password, adminUid?,
+ *         birthDate?, birthPlace?, address?, studyYear? }
+ * The optional profile/academic fields are validated by the SAME parsers the
+ * bulk importer uses (services/studentFields.js), so both paths accept and store
+ * identical values. The educational level is saved on the profile at creation —
+ * whether or not the annual fee is paid — so no later workflow asks for it again.
+ * Response 201: { userId, academicYear, studyYear }
  */
 const createStudent = async (req, res, next) => {
   try {
@@ -57,17 +61,40 @@ const createStudent = async (req, res, next) => {
         message: 'password must be at least 6 characters.',
       });
 
+    // Optional profile + academic fields — shared validators (see studentFields.js).
+    const phoneR      = fields.parsePhone(phone);
+    const birthDateR  = fields.parseBirthDate(req.body.birthDate);
+    const birthPlaceR = fields.parseOptionalText(req.body.birthPlace, { max: 120, label: 'مكان الازدياد' });
+    const addressR    = fields.parseOptionalText(req.body.address, { max: 250, label: 'العنوان' });
+    const levelR      = fields.parseLevel(req.body.studyYear);
+    const fieldError  = [phoneR, birthDateR, birthPlaceR, addressR, levelR].find((r) => r.error);
+    if (fieldError)
+      return res.status(400).json({ code: 'invalid-argument', message: fieldError.error });
+
     const callerUid = adminUid || req.user.uid;
     // Canonical actor {uid,name,email,role} so the student's createdBy carries the
     // enrolling admin's real NAME (OwnershipBadge / "Registered by …").
     const callerActor = await resolveActor(callerUid);
+    // A student registered now belongs to the current academic year.
+    const currentYear = academicYear.getAcademicYearLabel();
 
     // Creation goes through the shared provisioning service — the SINGLE source of
     // truth for the student schema, reused by the bulk importer so imported and
     // manually created students are identical.
     let provisioned;
     try {
-      provisioned = await provisionStudent({ branchId, fullName, email, phone, school, password, callerActor });
+      provisioned = await provisionStudent({
+        branchId, fullName, email, password, callerActor,
+        profile: {
+          phone:        phoneR.value,
+          school,
+          birthDate:    birthDateR.value,
+          birthPlace:   birthPlaceR.value,
+          address:      addressR.value,
+          studyYear:    levelR.value,
+          academicYear: currentYear,
+        },
+      });
     } catch (err) {
       if (err.code === 'auth/email-already-exists') {
         return res.status(409).json({
@@ -83,10 +110,13 @@ const createStudent = async (req, res, next) => {
     await writeAudit({
       branchId, actor: { uid: callerUid, email: req.user?.email || '', role: 'admin' },
       action: 'student.create', targetType: 'user', targetId: uid,
-      after: { name: trimmedName, email: normalizedEmail, branchId, school: normalizedSchool },
+      after: {
+        name: trimmedName, email: normalizedEmail, branchId, school: normalizedSchool,
+        studyYear: levelR.value, academicYear: currentYear,
+      },
     });
 
-    return res.status(201).json({ userId: uid });
+    return res.status(201).json({ userId: uid, academicYear: currentYear, studyYear: levelR.value });
   } catch (err) {
     next(err);
   }
@@ -118,8 +148,6 @@ const createStudent = async (req, res, next) => {
  */
 const recordAnnualFee = async (req, res, next) => {
   try {
-    const adminUid   = req.user.uid;
-    const adminEmail = req.user.email || '';
     const { branchId, userId, studyYear, paidAt, notes } = req.body;
 
     if (!branchId)
@@ -129,136 +157,15 @@ const recordAnnualFee = async (req, res, next) => {
     if (!userId)
       return res.status(400).json({ code: 'missing-user', message: 'userId is required.' });
 
-    // Load the student profile — existence + branch guard + denormalization source.
-    const userRef  = db.collection('branches').doc(branchId).collection('users').doc(userId);
-    const userSnap = await userRef.get();
-    if (!userSnap.exists)
-      return res.status(404).json({ code: 'not-found', message: 'Student not found.' });
-
-    const userData      = userSnap.data() || {};
-    const studentBranch = userData.branchId || userData.branch;
-    if (studentBranch && studentBranch !== branchId)
-      return res.status(403).json({ code: 'permission-denied', message: 'Student does not belong to your branch.' });
-
-    // Academic-year context. paidAt may be a backdated ISO date; default to now.
-    const paidDate  = paidAt ? new Date(paidAt) : new Date();
-    const validPaid = Number.isNaN(paidDate.getTime()) ? new Date() : paidDate;
-    const ay        = academicYear.getAcademicYear(validPaid);
-    const label     = ay.label;
-
-    // Grade/level: explicit param wins, else the stored profile value.
-    const grade       = String(studyYear || userData.studyYear || '').trim() || null;
-    const schoolLevel = grade
-      ? (grade.startsWith('mid') ? 'middle' : grade.startsWith('sec') ? 'high' : (userData.schoolLevel || null))
-      : (userData.schoolLevel || null);
-
-    // ── Duplicate guard — one verified annual fee per student per academic year.
-    // Single-field query (no composite index) + in-memory academic-year check.
-    const paymentsRef  = db.collection('branches').doc(branchId).collection('annualPayments');
-    const existingSnap = await paymentsRef.where('userId', '==', userId).get();
-    const dupe = existingSnap.docs.map((d) => d.data() || {}).some((p) => {
-      if (String(p.status || '').toLowerCase() !== 'verified') return false;
-      if (p.year === label || p.academicYear === label) return true;
-      const d = academicYear.toJsDate(p.verifiedAt || p.createdAt);
-      return Boolean(d && d.getTime() >= ay.startMs && d.getTime() <= ay.endMs);
+    // The whole financial write lives in the shared service (also used by the bulk
+    // importer) — see services/annualFeeService.js. Same rules, same records.
+    const out = await recordAnnualFeeForStudent({
+      branchId, userId, studyYear, paidAt, notes,
+      actor: { uid: req.user.uid, email: req.user.email || '' },
     });
-    if (dupe)
-      return res.status(409).json({ code: 'already-paid', message: 'هذا الطالب دفع الرسوم السنوية لهذه السنة الدراسية بالفعل.' });
-
-    // ── Snapshot the configured amount (never trust a client-supplied amount) ──
-    const amount = await financeSettings.getAnnualFeeAmount();
-
-    const studentName  = userData.name || userData.fullName || '';
-    const studentEmail = userData.email || '';
-    const studentPhone = userData.phoneNumber || userData.phone || '';
-    const school       = normalizeSchool(userData.school);
-    const nowTs        = admin.firestore.FieldValue.serverTimestamp();
-    const paidTs       = admin.firestore.Timestamp.fromDate(validPaid);
-
-    // ── Canonical annualPayments doc (mirrors the Chargily/cash schema) ───────
-    // `academicYear` MUST be the "YYYY-YYYY" label — it is the field every reader
-    // filters on (admin list/overview, student dashboard, eligibility). The grade
-    // goes to studyYear/level. See services/annualFeeRecord.js for the full why.
-    const payRef = paymentsRef.doc();
-    await payRef.set({
-      ...buildAnnualFeePaymentDoc({
-        userId,
-        studentName,
-        studentEmail,
-        studentPhone,
-        amount,
-        label,
-        grade,
-        school,
-        notes,
-        source: 'admin_manual',
-      }),
-      createdAt:  paidTs,
-      verifiedAt: nowTs,
-      verifiedBy: { uid: adminUid, email: adminEmail, name: '' },
-      recordedBy: { uid: adminUid, email: adminEmail, role: 'admin' },
-    });
-
-    // ── Student profile: union of every flag readers depend on ────────────────
-    const userPatch = {
-      yearlyFeePaid:      true,
-      paymentVerified:    true,
-      annualFeePaid:      true,
-      annualFeeYear:      label,
-      annualFeePaymentId: payRef.id,
-      updatedAt:          nowTs,
-      'registrations.annualFee': label,
-      'registrations.annualFeeHistory': admin.firestore.FieldValue.arrayUnion({
-        registrationId: payRef.id,
-        year:           label,   // "YYYY-YYYY" — what the UI renders
-        academicYear:   label,   // same canonical label (never a grade)
-        studyYear:      grade || null,
-        registeredAt:   Date.now(),
-        source:         'admin_manual',
-      }),
-    };
-    if (grade)       userPatch.studyYear   = grade;
-    if (schoolLevel) userPatch.schoolLevel = schoolLevel;
-    await userRef.update(userPatch);
-
-    // ── Ledger + audit (best-effort; never fail the request on a log error) ───
-    try {
-      await ledger.recordPayment({
-        branchId,
-        studentId:   userId,
-        studentName,
-        serviceType: 'annualFee',
-        amount,
-        period:      label,
-        sourceCollection: 'annualPayments',
-        sourceDocId: payRef.id,
-        recordedBy:  { uid: adminUid, email: adminEmail, role: 'admin' },
-        paidAt:      validPaid,
-      });
-      await writeAudit({
-        branchId,
-        actor: { uid: adminUid, email: adminEmail, role: 'admin' },
-        action: 'payment.record',
-        targetType: 'annualPayment',
-        targetId: payRef.id,
-        after: { status: 'verified', amount, userId, academicYear: label },
-      });
-      // Operational receipt in the branch payment log (the ledger above stays the
-      // single revenue record — this is only so an admin can find/reconcile the
-      // cash they took at the desk in سجل المدفوعات).
-      await recordManualPaymentOrder({
-        branchId, serviceType: 'annualFee',
-        sourceCollection: 'annualPayments', sourceDocId: payRef.id,
-        regData: { userId, studentName, subjectName: `الرسوم السنوية ${label}` },
-        amount,
-        actor: { uid: adminUid, email: adminEmail },
-      });
-    } catch (logErr) {
-      console.error('[recordAnnualFee] ledger/audit error:', logErr.message);
-    }
-
-    return res.status(201).json({ paymentId: payRef.id, amount, academicYear: label, studyYear: grade });
+    return res.status(201).json(out);
   } catch (err) {
+    if (err.isAnnualFeeError) return res.status(err.status).json({ code: err.code, message: err.message });
     next(err);
   }
 };

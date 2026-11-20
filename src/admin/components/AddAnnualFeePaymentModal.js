@@ -54,6 +54,9 @@ const AddAnnualFeePaymentModal = ({ branchId, onClose, onSuccess }) => {
   const [studentPhone, setStudentPhone] = useState('');
   const [studentSchool, setStudentSchool] = useState('');
   const [studyYear, setStudyYear] = useState('');
+  // The level already saved on the profile is reused as-is; the selector only
+  // appears when the admin explicitly chooses to change it (or none is saved).
+  const [editLevel, setEditLevel] = useState(false);
 
   // Duplicate guard (mirrors the server check for instant feedback).
   const [checkingPayment, setCheckingPayment] = useState(false);
@@ -146,6 +149,7 @@ const AddAnnualFeePaymentModal = ({ branchId, onClose, onSuccess }) => {
     setStudentPhone(u.guardianPhone || u.phoneNumber || u.phone || u.studentPhone || '');
     setStudentSchool(u.school || '');
     setStudyYear(u.studyYear || '');
+    setEditLevel(false);
     setShowDropdown(false);
     setError('');
     setSuccess('');
@@ -177,6 +181,7 @@ const AddAnnualFeePaymentModal = ({ branchId, onClose, onSuccess }) => {
     setStudentPhone('');
     setStudentSchool('');
     setStudyYear('');
+    setEditLevel(false);
     setAlreadyPaid(false);
     setShowDropdown(true);
   };
@@ -422,7 +427,32 @@ const AddAnnualFeePaymentModal = ({ branchId, onClose, onSuccess }) => {
               <span className="font-semibold text-secondary-900">{academicYearLabel}</span>
             </div>
 
-            {/* Grade level */}
+            {/* Grade level — the saved level is reused; never asked for again. */}
+            {selectedUser.studyYear && !editLevel ? (
+              <div>
+                <div className="flex items-center justify-between gap-3 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
+                  <div className="min-w-0">
+                    <p className="text-xs text-gray-500">المستوى الدراسي (محفوظ في ملف الطالب)</p>
+                    <p className="text-sm font-semibold text-gray-900">
+                      {ACADEMIC_YEARS.find((y) => y.id === selectedUser.studyYear)?.label || selectedUser.studyYear}
+                      {selectedUser.academicYear && <span className="ms-1.5 text-xs font-normal text-gray-500">· {selectedUser.academicYear}</span>}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setEditLevel(true)}
+                    className="flex-shrink-0 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-100"
+                  >
+                    تغيير
+                  </button>
+                </div>
+                {selectedUser.academicYear && selectedUser.academicYear !== academicYearLabel && (
+                  <p className="mt-1.5 rounded border border-warning-200 bg-warning-50 px-2 py-1 text-xs text-warning-800">
+                    هذا المستوى مسجّل للسنة الدراسية {selectedUser.academicYear}. تأكد أنه ما زال صحيحاً للسنة {academicYearLabel}، أو غيّره.
+                  </p>
+                )}
+              </div>
+            ) : (
             <div>
               <label className="mb-1.5 block text-sm font-medium text-gray-700">المستوى الدراسي للطالب</label>
               <select
@@ -442,8 +472,9 @@ const AddAnnualFeePaymentModal = ({ branchId, onClose, onSuccess }) => {
                   ))}
                 </optgroup>
               </select>
-              <p className="mt-1 text-xs text-gray-500">يُستخدم لتفعيل دروس الدعم للمستوى المختار.</p>
+              <p className="mt-1 text-xs text-gray-500">يُستخدم لتفعيل دروس الدعم للمستوى المختار، ويُحفظ في ملف الطالب.</p>
             </div>
+            )}
 
             {/* Amount — read-only, owner-configured */}
             <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">

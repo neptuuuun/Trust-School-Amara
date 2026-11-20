@@ -33,6 +33,10 @@ import {
   DATE_RANGES, inDateRange, isThisMonth, fmtDate, fmtDateTime, formatMoney,
 } from '../components/archive/ArchiveKit';
 import { getAcademicYearLabel } from '../../utils/academicYear';
+import { getYearById } from '../../data/studyLevels';
+
+// Payments store the canonical grade id ("sec2"); show its Arabic name.
+const levelName = (grade) => (grade ? (getYearById(grade)?.nameShort || grade) : '');
 
 const amountOf = (f) => Number(f.amount ?? f.totalAmount ?? 0) || 0;
 
@@ -197,7 +201,7 @@ const AnnualFees = () => {
       _email:        f.userEmail || f.studentEmail || p?.email || '',
       studentPhone:  f.studentPhone || '',
       guardianPhone: f.userPhone || f.guardianPhone || p?.phoneNumber || p?.phone || '',
-      level:         f.level || '',
+      level:         levelName(f.level || f.studyYear || p?.studyYear),
       year:          f.year || '',
       stream:        f.stream || '',
       school:        f.school || '',

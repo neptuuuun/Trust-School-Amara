@@ -11,6 +11,7 @@ const { getOverview, resolveStuckOrder } = require('../controllers/adminOverview
 const { search } = require('../controllers/adminSearchController');
 const { getStudentProfile } = require('../controllers/adminStudentController');
 const { bulkImportStudents } = require('../controllers/adminBulkImportController');
+const { issueCredentials } = require('../controllers/adminStudentAccountController');
 
 // GET /api/admin/search?q=...
 // Global branch-scoped search across students and all payment types.
@@ -38,7 +39,16 @@ router.post('/create-student', verifyToken, requireAdmin, createStudent);
 // POST /api/admin/bulk-import-students
 // Create many students from an uploaded CSV/Excel (validate + dedupe + audit).
 // Same creation rules as manual add; supports dryRun for the preview step.
+// NOTE: in this app the route is matched first by the dedicated mount in
+// server.js (own rate-limit bucket, see bulkImportLimiter); this entry keeps the
+// router valid if it is ever mounted standalone.
 router.post('/bulk-import-students', verifyToken, requireAdmin, bulkImportStudents);
+
+// POST /api/admin/students/:userId/credentials
+// Create the missing login account (imported without email / failed creation)
+// or issue a new temporary password while the admin-issued one is unchanged.
+// The password is returned once (no-store) and never stored.
+router.post('/students/:userId/credentials', verifyToken, requireAdmin, issueCredentials);
 
 // POST /api/admin/record-annual-fee
 // Records a verified annual fee for ANY student (standalone financial record).

@@ -91,12 +91,7 @@ export const convertToCsv = (data, columns, options = {}) => {
   }
   
   const lines = [];
-  
-  // Add UTF-8 BOM for Excel compatibility (especially for Arabic text)
-  if (includeBOM) {
-    lines.push('\uFEFF');
-  }
-  
+
   // Header row
   const headers = columns.map(col => {
     const header = typeof col === 'string' ? col : (col.header || col.key || '');
@@ -127,8 +122,11 @@ export const convertToCsv = (data, columns, options = {}) => {
     
     lines.push(values.join(','));
   });
-  
-  return lines.join('\n');
+
+  // UTF-8 BOM for Excel (Arabic text). It must PREFIX the header line — pushed as
+  // its own line it left row 1 empty and put the headers on row 2 in Excel.
+  const body = lines.join('\n');
+  return includeBOM ? `﻿${body}` : body;
 };
 
 /**

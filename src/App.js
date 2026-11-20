@@ -1,4 +1,5 @@
 import React, { useEffect, lazy, Suspense } from 'react';
+import ForcePasswordChange from './components/ForcePasswordChange';
 import { BrowserRouter as Router, Routes, Route, Outlet, useLocation, Navigate, useNavigate } from 'react-router-dom';
 import { BranchProvider, useBranch } from './contexts/BranchContext';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -242,7 +243,7 @@ function EmailVerificationScreen({ resendVerificationEmail }) {
 
 // Student route guard - only allows authenticated student users
 function RequireStudent() {
-  const { user, role, verificationStatus, loading, branch, authEmailVerified, emailVerificationSyncing, resendVerificationEmail, completedProfile } = useAuth();
+  const { user, role, verificationStatus, loading, branch, authEmailVerified, emailVerificationSyncing, resendVerificationEmail, completedProfile, profileDoc } = useAuth();
   const { selectedBranchId } = useBranch();
   const location = useLocation();
 
@@ -290,6 +291,12 @@ function RequireStudent() {
         <p className="text-gray-600">يرجى الانتظار لحظات.</p>
       </BlockedScreen>
     );
+  }
+
+  // Admin-created accounts (individual or bulk) start with a TEMPORARY password:
+  // the student must choose their own before reaching any student page.
+  if (profileDoc?.mustChangePassword === true) {
+    return <ForcePasswordChange />;
   }
 
   return <Outlet />;

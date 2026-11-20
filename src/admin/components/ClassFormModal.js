@@ -10,16 +10,17 @@
  * CEFR level field for languages.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Loader2, Users, Plus, Trash2, Clock, UserPlus, X, DoorOpen, Calendar } from 'lucide-react';
 import AdminModal from './AdminModal';
 import ScheduleConflictPanel from './ScheduleConflictPanel';
 import { useToast } from './ToastNotifications';
 import { useAuth } from '../../contexts/AuthContext';
-import { createClass, updateClass, streamTeachers, createTeacher } from '../../services/firestoreService';
+import { createClass, updateClass, streamTeachers, streamClasses, createTeacher } from '../../services/firestoreService';
 import { validateClass, validateSchedules, DAYS_OF_WEEK } from '../../utils/classValidation';
 import { numberInputGuards } from '../../utils/numberInputGuards';
 import { GROUP_TYPE_OPTIONS, normalizeGroupType } from '../../utils/supportClassification';
+import { deriveTeacherCategories, teacherTeachesCategory, SERVICE_TYPE_LABELS } from '../../utils/teacherGroups';
 
 const emptyRow = () => ({ day: '', start: '', end: '' });
 
@@ -76,22 +77,42 @@ const ClassFormModal = ({
 
   // Teacher dropdown (managed teachers collection) + inline add.
   const [teachers, setTeachers] = useState([]);
+  const [allClasses, setAllClasses] = useState([]); // every class — to derive teacher categories
   const [addingTeacher, setAddingTeacher] = useState(false);
   const [newTeacher, setNewTeacher] = useState('');
   const [teacherBusy, setTeacherBusy] = useState(false);
 
   useEffect(() => {
     if (!branchId) return undefined;
-    const unsub = streamTeachers(branchId, setTeachers);
-    return () => unsub?.();
+    const unsubT = streamTeachers(branchId, setTeachers);
+    // All classes (every service) so a teacher's categories can be derived from
+    // the groups that already reference them — no schema migration required.
+    const unsubC = streamClasses(branchId, {}, setAllClasses);
+    return () => { unsubT?.(); unsubC?.(); };
   }, [branchId]);
+
+  // Category separation: only offer teachers relevant to the category being
+  // created. A teacher is relevant when they have an explicit assignment OR an
+  // existing class in this category; brand-new/unassigned teachers stay visible.
+  const derivedTeacherCategories = useMemo(() => deriveTeacherCategories(allClasses), [allClasses]);
+  const visibleTeachers = useMemo(
+    () => teachers.filter((t) => teacherTeachesCategory(t, serviceType, derivedTeacherCategories)),
+    [teachers, serviceType, derivedTeacherCategories],
+  );
+  const serviceLabel = SERVICE_TYPE_LABELS[serviceType] || '';
 
   const handleAddTeacher = async () => {
     const n = newTeacher.trim();
     if (!n) return;
     try {
       setTeacherBusy(true);
-      const t = await createTeacher(branchId, n, { uid: user?.uid, name: adminData?.name || '', email: user?.email });
+      // Stamp the new teacher with THIS category so they appear in its dropdown
+      // immediately (and, if they already exist, this category is merged in).
+      const t = await createTeacher(
+        branchId, n,
+        { uid: user?.uid, name: adminData?.name || '', email: user?.email },
+        { serviceTypes: [serviceType] },
+      );
       setTeacherName(t.name);
       setNewTeacher('');
       setAddingTeacher(false);
@@ -231,9 +252,9 @@ const ClassFormModal = ({
                   className={inputCls(fieldErrors.teacherName)}
                 >
                   <option value="">— اختر الأستاذ —</option>
-                  {teachers.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
-                  {/* keep a legacy/manual value selectable even if not in the list */}
-                  {teacherName && !teachers.some((t) => t.name === teacherName) && (
+                  {visibleTeachers.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
+                  {/* keep the current value selectable even if it's scoped to another category */}
+                  {teacherName && !visibleTeachers.some((t) => t.name === teacherName) && (
                     <option value={teacherName}>{teacherName}</option>
                   )}
                 </select>
@@ -275,7 +296,9 @@ const ClassFormModal = ({
                 </button>
               </div>
             )}
-            {fieldErrors.teacherName && <p className="mt-1 text-xs text-danger-600">{fieldErrors.teacherName}</p>}
+            {fieldErrors.teacherName
+              ? <p className="mt-1 text-xs text-danger-600">{fieldErrors.teacherName}</p>
+              : (!addingTeacher && serviceLabel && <p className="mt-1 text-xs text-gray-500">يتم عرض أساتذة قسم «{serviceLabel}» فقط.</p>)}
           </div>
           <div>
             <label className="mb-1.5 block text-sm font-semibold text-gray-800">

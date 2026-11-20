@@ -7,6 +7,7 @@ import { db } from '../firebase';
 import apiCall from '../utils/apiClient';
 import { logAdminAction } from './auditService';
 import { getCurrentAcademicYear, isAnnualPaymentForCurrentYear, toDate as toDateValue, ANNUAL_FEE_DZD } from '../utils/registrationUtils';
+import { SERVICE_TYPES } from '../utils/teacherGroups';
 import {
   collection,
   collectionGroup,
@@ -480,24 +481,78 @@ export const streamTeachers = (branchId, callback) => {
   );
 };
 
-/** Create a teacher; enforces name-uniqueness within the branch. */
-export const createTeacher = async (branchId, name, adminInfo = {}) => {
+/** Keep only valid, de-duplicated lesson categories (class serviceType values). */
+const cleanServiceTypes = (arr) =>
+  Array.from(new Set((Array.isArray(arr) ? arr : []).filter((s) => SERVICE_TYPES.includes(s))));
+
+/**
+ * Create a teacher; enforces name-uniqueness within the branch.
+ *
+ * `options.serviceTypes` optionally scopes the teacher to one or more lesson
+ * categories (language | training | support). When the teacher already exists,
+ * any requested categories are MERGED into their record (union, never removed) —
+ * so e.g. inline-adding an existing language teacher while building a support
+ * class simply also marks them as a support teacher.
+ */
+export const createTeacher = async (branchId, name, adminInfo = {}, options = {}) => {
   if (!branchId) throw new Error('branchId is required');
   const n = String(name || '').trim();
   if (!n) throw new Error('teacher name is required');
+  const actor = { uid: adminInfo.uid || '', name: adminInfo.name || '', email: adminInfo.email || '' };
+  const requested = cleanServiceTypes(options.serviceTypes);
   const existing = await getTeachers(branchId);
   const dup = existing.find((t) => String(t.name || '').trim().toLowerCase() === n.toLowerCase());
-  if (dup) return dup; // idempotent — return the existing teacher instead of erroring
+  if (dup) {
+    // Idempotent — but fold any newly-requested categories into the existing record.
+    if (requested.length) {
+      const current = Array.isArray(dup.serviceTypes) ? dup.serviceTypes : [];
+      const merged = Array.from(new Set([...current, ...requested]));
+      if (merged.length !== current.length) {
+        await updateDoc(getBranchDoc(branchId, TEACHERS_COLLECTION, dup.id), {
+          serviceTypes: merged, updatedAt: serverTimestamp(), updatedBy: actor,
+        });
+        await logAdminAction({ action: 'teacher.update', branchId, targetType: 'teacher', targetId: dup.id, before: { serviceTypes: current }, after: { serviceTypes: merged } });
+        return { ...dup, serviceTypes: merged };
+      }
+    }
+    return dup;
+  }
   const payload = {
     name: n,
     branchId,
     createdAt: serverTimestamp(),
     // Canonical actor shape {uid,name,email} — standardized across all writes.
-    createdBy: { uid: adminInfo.uid || '', name: adminInfo.name || '', email: adminInfo.email || '' },
+    createdBy: actor,
+    ...(requested.length ? { serviceTypes: requested } : {}),
   };
   const ref = await addDoc(getBranchCollection(branchId, TEACHERS_COLLECTION), payload);
-  await logAdminAction({ action: 'teacher.create', branchId, targetType: 'teacher', targetId: ref.id, after: { name: n } });
+  await logAdminAction({ action: 'teacher.create', branchId, targetType: 'teacher', targetId: ref.id, after: { name: n, ...(requested.length ? { serviceTypes: requested } : {}) } });
   return { id: ref.id, ...payload };
+};
+
+/**
+ * Update a teacher's editable fields (currently: category assignment
+ * `serviceTypes`, and optionally `name`). Used by the teacher manager to assign
+ * a teacher to lesson categories without having to first create a class.
+ */
+export const updateTeacher = async (branchId, teacherId, updates = {}, adminInfo = {}) => {
+  if (!branchId || !teacherId) throw new Error('branchId and teacherId are required');
+  const ref = getBranchDoc(branchId, TEACHERS_COLLECTION, teacherId);
+  const beforeSnap = await getDoc(ref);
+  const before = beforeSnap.exists() ? beforeSnap.data() : {};
+  const patch = {
+    updatedAt: serverTimestamp(),
+    updatedBy: { uid: adminInfo.uid || '', name: adminInfo.name || '', email: adminInfo.email || '' },
+  };
+  if ('serviceTypes' in updates) patch.serviceTypes = cleanServiceTypes(updates.serviceTypes);
+  if (typeof updates.name === 'string' && updates.name.trim()) patch.name = updates.name.trim();
+  await updateDoc(ref, patch);
+  await logAdminAction({
+    action: 'teacher.update', branchId, targetType: 'teacher', targetId: teacherId,
+    before: { serviceTypes: before.serviceTypes || [], name: before.name || '' },
+    after: { serviceTypes: patch.serviceTypes ?? (before.serviceTypes || []), name: patch.name ?? (before.name || '') },
+  });
+  return { id: teacherId, ...before, ...patch };
 };
 
 

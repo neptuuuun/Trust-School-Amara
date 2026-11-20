@@ -15,6 +15,7 @@ import {
   visibleClassesFor,
 } from '../../utils/supportClassification';
 import AdminModal from './AdminModal';
+import TeacherGroupPicker from './TeacherGroupPicker';
 
 const AddSupportStudentModal = ({ branchId, onClose, onSuccess }) => {
   const { user: adminUser } = useAuth();
@@ -328,6 +329,18 @@ const AddSupportStudentModal = ({ branchId, onClose, onSuccess }) => {
   const availableLessons = useMemo(
     () => eligibleLessons.filter((l) => !registeredLessonIds.has(l.id)),
     [eligibleLessons, registeredLessonIds]
+  );
+
+  // Teacher-first selection: group the eligible support classes under their
+  // teacher so the admin picks the teacher first, then the subject/group.
+  const supportLessonItems = useMemo(
+    () => availableLessons.map((l) => ({
+      id: l.id,
+      teacherName: l.teacherName || l.teacher || '',
+      groupLabel: l.subjectName || l.name || l.subject || 'درس',
+      subLabel: l.groupName || '',
+    })),
+    [availableLessons]
   );
 
   const selectedLesson = lessons.find((l) => l.id === lessonId) ?? null;
@@ -669,22 +682,16 @@ const AddSupportStudentModal = ({ branchId, onClose, onSuccess }) => {
               </div>
             ) : (
               <>
-                <select
+                <TeacherGroupPicker
+                  key={selectedUser?.id || 'none'}
+                  items={supportLessonItems}
                   value={lessonId}
-                  onChange={(e) => setLessonId(e.target.value)}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-primary focus:ring-2 focus:ring-primary/30"
-                  required
-                >
-                  <option value="">-- اختر درس --</option>
-                  {availableLessons.map((l) => (
-                    <option key={l.id} value={l.id}>
-                      {l.subjectName || l.name || l.subject || 'درس بدون اسم'}
-                      {l.groupName ? ` — ${l.groupName}` : ''}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(id) => setLessonId(id || '')}
+                  groupQuestion="ما هي المجموعة التي تريد تسجيل الطالب فيها؟"
+                  emptyLabel="لا يوجد أساتذة متاحون لدروس هذه السنة."
+                />
                 {registeredLessonIds.size > 0 && (
-                  <p className="mt-1 text-xs text-gray-500">
+                  <p className="mt-2 text-xs text-gray-500">
                     {registeredLessonIds.size} درس مخفي — الطالب مسجل فيه مسبقاً.
                   </p>
                 )}

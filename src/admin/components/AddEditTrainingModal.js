@@ -9,6 +9,7 @@ import {
 import { getUsersByBranch } from '../../services/userService';
 import { getAcademicYearLabel } from '../../utils/academicYear';
 import AdminModal from './AdminModal';
+import TeacherGroupPicker from './TeacherGroupPicker';
 
 /**
  * Add a training registration (admin).
@@ -83,6 +84,23 @@ const AddEditTrainingModal = ({ branchId, registration, onClose, onSuccess }) =>
   const isTrainingRegistered = (trainingId) =>
     existingRegs.some((r) => r.trainingId === trainingId);
 
+  // Teacher-first selection: group every training (class) under its teacher, so
+  // the admin picks the teacher first and then the course/group only when needed.
+  const trainingItems = useMemo(
+    () => allTrainings.map((t) => ({
+      id: t.id,
+      teacherName: t.teacherName || '',
+      groupLabel: t.subjectName || t.title || t.name || 'دورة',
+      subLabel: t.groupName || '',
+      disabled: existingRegs.some((r) => r.trainingId === t.id),
+      disabledReason: 'مسجل',
+    })),
+    [allTrainings, existingRegs],
+  );
+
+  const handlePickTraining = (id) =>
+    setSelectedTraining(id ? allTrainings.find((t) => t.id === id) || null : null);
+
   const handleSelectUser = async (u) => {
     setSelectedUser(u);
     setSearchQuery(u.fullName || u.name || u.email || '');
@@ -127,10 +145,6 @@ const AddEditTrainingModal = ({ branchId, registration, onClose, onSuccess }) =>
     } else if (e.key === 'Tab') {
       setShowDropdown(false);
     }
-  };
-
-  const handleSelectTraining = (t) => {
-    if (!isTrainingRegistered(t.id)) setSelectedTraining(t);
   };
 
   // ── Submit ───────────────────────────────────────────────────────────────────
@@ -333,31 +347,14 @@ const AddEditTrainingModal = ({ branchId, registration, onClose, onSuccess }) =>
                 لا توجد دورات مضافة في هذا الفرع. أضف الدورات أولاً من قسم الإدارة.
               </p>
             ) : (
-              <div className="flex flex-wrap gap-2">
-                {allTrainings.map((t) => {
-                  const alreadyReg = isTrainingRegistered(t.id);
-                  return (
-                    <button
-                      key={t.id}
-                      type="button"
-                      onClick={() => handleSelectTraining(t)}
-                      disabled={alreadyReg}
-                      title={alreadyReg ? 'الطالب مسجل مسبقاً في هذه الدورة' : undefined}
-                      className={`rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors ${
-                        alreadyReg
-                          ? 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400 line-through'
-                          : selectedTraining?.id === t.id
-                          ? 'border-primary bg-primary text-white'
-                          : 'border-gray-300 bg-white text-gray-700 hover:border-primary hover:text-primary'
-                      }`}
-                    >
-                      {t.subjectName || t.title || t.name || t.id}
-                      {t.groupName ? ` — ${t.groupName}` : ''}
-                      {alreadyReg && <span className="ms-1 text-xs">(مسجل)</span>}
-                    </button>
-                  );
-                })}
-              </div>
+              <TeacherGroupPicker
+                key={selectedUser?.id || 'none'}
+                items={trainingItems}
+                value={selectedTraining?.id || ''}
+                onChange={handlePickTraining}
+                groupQuestion="ما هي الدورة التي تريد تسجيل الطالب فيها؟"
+                emptyLabel="لا يوجد أساتذة متاحون لهذه الدورات."
+              />
             )}
           </section>
 

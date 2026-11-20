@@ -10,6 +10,7 @@ import {
 import { getUsersByBranch } from '../../services/userService';
 import { getAcademicYearLabel } from '../../utils/academicYear';
 import AdminModal from './AdminModal';
+import TeacherGroupPicker from './TeacherGroupPicker';
 
 /**
  * Add a language registration (admin).
@@ -164,8 +165,24 @@ const AddEditLanguageModal = ({ branchId, registration, onClose, onSuccess }) =>
     setSelectedLevel(null);
   };
 
-  const handleSelectLevel = (lv) => {
-    if (!isLevelRegistered(selectedLanguage?.id, lv.id)) setSelectedLevel(lv);
+  // Teacher-first group selection within the chosen language: group the
+  // language's classes by teacher, then pick the group only when ambiguous.
+  const levelItems = useMemo(() => {
+    if (!selectedLanguage) return [];
+    return selectedLanguage._levels.map((lv) => ({
+      id: lv.id,
+      teacherName: lv.teacherName || '',
+      groupLabel: lv.name || lv.groupName || 'مجموعة',
+      subLabel: lv.level && lv.level !== lv.name ? lv.level : '',
+      disabled: isLevelRegistered(selectedLanguage.id, lv.id),
+      disabledReason: 'مسجل',
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedLanguage, existingRegs]);
+
+  const handlePickLevel = (id) => {
+    if (!selectedLanguage) return;
+    setSelectedLevel(id ? selectedLanguage._levels.find((lv) => lv.id === id) || null : null);
   };
 
   // ── Submit ───────────────────────────────────────────────────────────────────
@@ -395,34 +412,17 @@ const AddEditLanguageModal = ({ branchId, registration, onClose, onSuccess }) =>
               </div>
             )}
 
-            {/* Level picker — shown when language has levels */}
+            {/* Group picker — teacher-first; shown when the language has groups */}
             {selectedLanguage && selectedLanguage._levels.length > 0 && (
               <div className="mt-3">
-                <p className="mb-1.5 text-xs font-medium text-gray-600">اختر المجموعة</p>
-                <div className="flex flex-wrap gap-2">
-                  {selectedLanguage._levels.map((lv) => {
-                    const alreadyReg = isLevelRegistered(selectedLanguage.id, lv.id);
-                    return (
-                      <button
-                        key={lv.id}
-                        type="button"
-                        onClick={() => handleSelectLevel(lv)}
-                        disabled={alreadyReg}
-                        title={alreadyReg ? 'الطالب مسجل مسبقاً في هذا المستوى' : undefined}
-                        className={`rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors ${
-                          alreadyReg
-                            ? 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400 line-through'
-                            : selectedLevel?.id === lv.id
-                            ? 'border-primary bg-primary text-white'
-                            : 'border-gray-300 bg-white text-gray-700 hover:border-primary hover:text-primary'
-                        }`}
-                      >
-                        {lv.name}
-                        {alreadyReg && <span className="ms-1 text-xs">(مسجل)</span>}
-                      </button>
-                    );
-                  })}
-                </div>
+                <TeacherGroupPicker
+                  key={selectedLanguage.id}
+                  items={levelItems}
+                  value={selectedLevel?.id || ''}
+                  onChange={handlePickLevel}
+                  groupQuestion="ما هي المجموعة التي تريد تسجيل الطالب فيها؟"
+                  emptyLabel="لا يوجد أساتذة متاحون لهذه اللغة."
+                />
                 {selectedLanguage._levels.every((lv) => isLevelRegistered(selectedLanguage.id, lv.id)) && (
                   <p className="mt-2 rounded-lg border border-warning-200 bg-warning-50 px-3 py-2 text-xs text-warning-700">
                     الطالب مسجل في جميع مستويات هذه اللغة.
